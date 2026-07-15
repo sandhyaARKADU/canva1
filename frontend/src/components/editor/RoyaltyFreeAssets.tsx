@@ -1,0 +1,1210 @@
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import {
+  Search,
+  Image,
+  Download,
+  Loader2,
+  Grid3x3,
+  LayoutGrid,
+  Heart,
+  Layers,
+  Palette,
+} from 'lucide-react';
+import { useEditorStore } from '../../store/useEditorStore';
+import { fabric } from 'fabric';
+import { apiFetch, apiUrl } from '../../services/apiClient';
+
+interface BackendAsset {
+  id: string;
+  name: string;
+  title?: string | null;
+  description?: string | null;
+  category?: string | null;
+  tags?: string | null;
+  file_data?: string | null;
+  file_type: string;
+  image_url?: string | null;
+  thumbnail_url?: string | null;
+  local_storage_path?: string | null;
+  mime_type?: string | null;
+  orientation?: string | null;
+  source?: string | null;
+  source_asset_id?: string | null;
+  source_url?: string | null;
+  source_page_url?: string | null;
+  author_name?: string | null;
+  author_url?: string | null;
+  license?: string | null;
+  license_name?: string | null;
+  license_url?: string | null;
+  attribution_required?: boolean | null;
+  attribution?: string | null;
+  attribution_text?: string | null;
+  commercial_use_allowed?: boolean | null;
+  modification_allowed?: boolean | null;
+  provider?: string | null;
+  width?: number | null;
+  height?: number | null;
+}
+
+interface BackendAssetList {
+  assets: BackendAsset[];
+  total: number;
+}
+
+interface AssetSearchItem {
+  id: string;
+  title: string;
+  category: string;
+  description?: string | null;
+  imageUrl: string;
+  thumbnailUrl: string;
+  localStoragePath?: string | null;
+  width: number;
+  height: number;
+  orientation: string;
+  mimeType: string;
+  tags: string[];
+  source?: string | null;
+  sourceAssetId?: string | null;
+  sourcePageUrl?: string | null;
+  authorName?: string | null;
+  authorUrl?: string | null;
+  licenseName?: string | null;
+  attributionRequired: boolean;
+  attributionText?: string | null;
+  commercialUseAllowed: boolean;
+  modificationAllowed: boolean;
+}
+
+interface AssetSearchResponse {
+  success: boolean;
+  category?: string | null;
+  items: AssetSearchItem[];
+  page: number;
+  perPage: number;
+  total: number;
+  hasMore: boolean;
+}
+
+interface ImageResult {
+  id: string;
+  src: string;
+  thumbnail: string;
+  photographer: string;
+  alt: string;
+  source?: string | null;
+  license?: string | null;
+  attribution?: string | null;
+  metadata: BackendAsset | AssetSearchItem;
+}
+
+const resolveAssetUrl = (value?: string | null) => {
+  if (!value) return '';
+  if (value.startsWith('/media/')) return apiUrl(value);
+  return value;
+};
+
+const shouldInlineForCanvas = (value: string) => {
+  if (!value || value.startsWith('data:')) return false;
+  try {
+    const url = new URL(value, window.location.origin);
+    return url.pathname.startsWith('/media/');
+  } catch {
+    return false;
+  }
+};
+
+const blobToDataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => {
+    if (typeof reader.result === 'string') {
+      resolve(reader.result);
+      return;
+    }
+    reject(new Error('Unable to read image asset data.'));
+  };
+  reader.onerror = () => reject(new Error('Unable to read image asset data.'));
+  reader.readAsDataURL(blob);
+});
+
+const prepareCanvasImageSource = async (
+  value: string,
+  metadata?: BackendAsset | AssetSearchItem | ImageResult
+) => {
+  const resolved = resolveAssetUrl(value);
+  if (!shouldInlineForCanvas(resolved)) return resolved;
+
+  if (metadata?.id) {
+    const response = await apiFetch(`/api/assets/${encodeURIComponent(metadata.id)}/data-url`, { auth: false });
+    const data = await response.json().catch(() => null);
+    if (!response.ok || !data?.dataUrl) {
+      throw new Error(data?.detail || data?.error || `Unable to load asset image (${response.status}).`);
+    }
+    return String(data.dataUrl);
+  }
+
+  const response = await fetch(resolved, { mode: 'cors' });
+  if (!response.ok) {
+    throw new Error(`Unable to load asset image (${response.status}).`);
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.startsWith('image/')) {
+    throw new Error(`Asset URL returned ${contentType || 'unknown content type'}.`);
+  }
+
+  const blob = await response.blob();
+  if (!blob.size) {
+    throw new Error('Asset image is empty.');
+  }
+  return blobToDataUrl(blob);
+};
+
+const IMAGE_PAGE_SIZE = 30;
+
+type ImageCategory = {
+  id: string;
+  name: string;
+  emoji: string;
+  query: string;
+};
+
+const IMAGE_CATEGORIES: ImageCategory[] = [
+  { id: 'nature', name: 'Nature', emoji: '🌿', query: 'nature landscape mountains forest river flowers' },
+  { id: 'business', name: 'Business', emoji: '💼', query: 'business office meeting professional laptop teamwork' },
+  { id: 'food-drink', name: 'Food & Drink', emoji: '🍔', query: 'food drink restaurant coffee meals ingredients dessert' },
+  { id: 'technology', name: 'Technology', emoji: '💻', query: 'technology AI coding laptop robotics digital devices' },
+  { id: 'fashion', name: 'Fashion', emoji: '👗', query: 'fashion clothing model accessories runway style' },
+  { id: 'fitness', name: 'Fitness', emoji: '💪', query: 'fitness gym workout running yoga sports' },
+  { id: 'travel', name: 'Travel', emoji: '✈️', query: 'travel destination airplane beach landmark hotel' },
+  { id: 'abstract', name: 'Abstract', emoji: '🎨', query: 'abstract gradient geometric pattern texture art' },
+  { id: 'architecture', name: 'Architecture', emoji: '🏛️', query: 'architecture building interior bridge cityscape' },
+  { id: 'animals', name: 'Animals', emoji: '🐾', query: 'animals wildlife pets birds nature' },
+  { id: 'people', name: 'People', emoji: '👥', query: 'people portrait team lifestyle professional' },
+  { id: 'minimal', name: 'Minimal', emoji: '⬜', query: 'minimal clean simple neutral isolated whitespace' },
+];
+
+// Free SVG elements/illustrations (inline SVGs for instant use)
+const SVG_ELEMENTS = [
+  // Shapes
+  {
+    id: 'star-burst',
+    name: 'Star Burst',
+    category: 'shapes',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><polygon points="50,5 61,35 95,35 68,57 79,91 50,70 21,91 32,57 5,35 39,35" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'speech-bubble',
+    name: 'Speech Bubble',
+    category: 'shapes',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M10,10 H90 Q90,10 90,10 V60 Q90,70 80,70 H40 L20,90 V70 H10 Q10,70 10,60 V10 Q10,10 10,10 Z" fill="currentColor" rx="10"/></svg>`,
+  },
+  {
+    id: 'heart',
+    name: 'Heart',
+    category: 'shapes',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M50,88 C25,65 5,50 5,30 C5,15 15,5 30,5 C38,5 45,10 50,18 C55,10 62,5 70,5 C85,5 95,15 95,30 C95,50 75,65 50,88 Z" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'diamond',
+    name: 'Diamond',
+    category: 'shapes',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><polygon points="50,5 95,50 50,95 5,50" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'hexagon',
+    name: 'Hexagon',
+    category: 'shapes',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><polygon points="50,5 93,27.5 93,72.5 50,95 7,72.5 7,27.5" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'octagon',
+    name: 'Octagon',
+    category: 'shapes',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><polygon points="29,0 71,0 100,29 100,71 71,100 29,100 0,71 0,29" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'pentagon',
+    name: 'Pentagon',
+    category: 'shapes',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><polygon points="50,0 100,38 81,100 19,100 0,38" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'cross',
+    name: 'Cross',
+    category: 'shapes',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M35,0 L65,0 L65,35 L100,35 L100,65 L65,65 L65,100 L35,100 L35,65 L0,65 L0,35 L35,35 Z" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'cloud',
+    name: 'Cloud',
+    category: 'shapes',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M25,70 A20,20 0 0,1 25,30 A25,25 0 0,1 75,30 A20,20 0 0,1 75,70 Z" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'shield',
+    name: 'Shield',
+    category: 'shapes',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M50,0 L100,15 L100,55 Q100,85 50,100 Q0,85 0,55 L0,15 Z" fill="currentColor"/></svg>`,
+  },
+  // Arrows
+  {
+    id: 'arrow-right',
+    name: 'Arrow Right',
+    category: 'arrows',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M10,50 H80 M60,30 L85,50 L60,70" stroke="currentColor" stroke-width="8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  },
+  {
+    id: 'arrow-left',
+    name: 'Arrow Left',
+    category: 'arrows',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M90,50 H20 M40,30 L15,50 L40,70" stroke="currentColor" stroke-width="8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  },
+  {
+    id: 'arrow-up',
+    name: 'Arrow Up',
+    category: 'arrows',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M50,90 V10 M30,30 L50,10 L70,30" stroke="currentColor" stroke-width="8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  },
+  {
+    id: 'arrow-down',
+    name: 'Arrow Down',
+    category: 'arrows',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M50,10 V90 M30,70 L50,90 L70,70" stroke="currentColor" stroke-width="8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  },
+  {
+    id: 'double-arrow',
+    name: 'Double Arrow',
+    category: 'arrows',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M5,50 L25,50 M20,35 L35,50 L20,65 M95,50 L75,50 M80,35 L65,50 L80,65" stroke="currentColor" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  },
+  // Icons
+  {
+    id: 'check-circle',
+    name: 'Check Circle',
+    category: 'icons',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="40" fill="currentColor" opacity="0.2"/><circle cx="50" cy="50" r="40" stroke="currentColor" stroke-width="4" fill="none"/><path d="M30,50 L45,65 L70,35" stroke="currentColor" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  },
+  {
+    id: 'x-circle',
+    name: 'X Circle',
+    category: 'icons',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="40" fill="currentColor" opacity="0.2"/><circle cx="50" cy="50" r="40" stroke="currentColor" stroke-width="4" fill="none"/><path d="M35,35 L65,65 M65,35 L35,65" stroke="currentColor" stroke-width="6" fill="none" stroke-linecap="round"/></svg>`,
+  },
+  {
+    id: 'info-circle',
+    name: 'Info Circle',
+    category: 'icons',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="40" fill="currentColor" opacity="0.2"/><circle cx="50" cy="50" r="40" stroke="currentColor" stroke-width="4" fill="none"/><circle cx="50" cy="30" r="4" fill="currentColor"/><rect x="46" y="42" width="8" height="28" rx="4" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'lightning',
+    name: 'Lightning',
+    category: 'icons',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><polygon points="55,5 20,55 45,55 40,95 80,40 55,40" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'crown',
+    name: 'Crown',
+    category: 'icons',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><polygon points="10,70 20,30 35,50 50,15 65,50 80,30 90,70" fill="currentColor"/><rect x="10" y="70" width="80" height="15" rx="5" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'bell',
+    name: 'Bell',
+    category: 'icons',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M50,0 Q65,0 75,15 Q85,30 85,50 L85,65 L95,80 L5,80 L15,65 L15,50 Q15,30 25,15 Q35,0 50,0 Z M40,85 Q40,100 50,100 Q60,100 60,85" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'camera',
+    name: 'Camera',
+    category: 'icons',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M30,20 L70,20 L80,35 L100,35 Q100,100 0,100 Q0,100 0,35 L20,35 Z M50,75 m-20,0 a20,20 0,1,0 40,0 a20,20 0,1,0 -40,0" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'lock',
+    name: 'Lock',
+    category: 'icons',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M25,45 L25,35 Q25,15 50,15 Q75,15 75,35 L75,45 L85,45 Q95,45 95,55 L95,90 Q95,100 85,100 L15,100 Q5,100 5,90 L5,55 Q5,45 15,45 Z" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'eye',
+    name: 'Eye',
+    category: 'icons',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M0,50 Q50,0 100,50 Q50,100 0,50 Z M50,50 m-15,0 a15,15 0,1,0 30,0 a15,15 0,1,0 -30,0" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'flame',
+    name: 'Flame',
+    category: 'icons',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M50,0 Q70,25 80,40 Q100,30 100,60 Q100,90 50,100 Q0,90 0,60 Q0,30 20,40 Q30,25 50,0 Z" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'bookmark',
+    name: 'Bookmark',
+    category: 'icons',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M0,0 L100,0 L100,100 L50,80 L0,100 Z" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'flag',
+    name: 'Flag',
+    category: 'icons',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M10,0 L10,100 M10,0 L90,0 Q100,0 95,25 Q90,50 100,50 L10,50" stroke="currentColor" stroke-width="6" fill="none" stroke-linecap="round"/></svg>`,
+  },
+  {
+    id: 'globe',
+    name: 'Globe',
+    category: 'icons',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" stroke-width="4"/><ellipse cx="50" cy="50" rx="20" ry="45" fill="none" stroke="currentColor" stroke-width="4"/><path d="M5,50 H95 M10,30 H90 M10,70 H90" stroke="currentColor" stroke-width="3"/></svg>`,
+  },
+  {
+    id: 'sun',
+    name: 'Sun',
+    category: 'icons',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="20" fill="currentColor"/><g stroke="currentColor" stroke-width="6" stroke-linecap="round"><line x1="50" y1="5" x2="50" y2="20"/><line x1="50" y1="80" x2="50" y2="95"/><line x1="5" y1="50" x2="20" y2="50"/><line x1="80" y1="50" x2="95" y2="50"/><line x1="18" y1="18" x2="29" y2="29"/><line x1="71" y1="71" x2="82" y2="82"/><line x1="82" y1="18" x2="71" y2="29"/><line x1="29" y1="71" x2="18" y2="82"/></g></svg>`,
+  },
+  {
+    id: 'moon',
+    name: 'Moon',
+    category: 'icons',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M60,10 Q20,20 20,50 Q20,80 60,90 Q30,70 30,50 Q30,30 60,10 Z" fill="currentColor"/></svg>`,
+  },
+  // Decorative
+  {
+    id: 'ribbon',
+    name: 'Ribbon',
+    category: 'decorative',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M5,25 H95 L85,50 L95,75 H5 L15,50 Z" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'badge',
+    name: 'Badge',
+    category: 'decorative',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="42" r="35" fill="currentColor"/><path d="M35,72 L50,95 L65,72" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'laurel',
+    name: 'Laurel',
+    category: 'decorative',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M20,80 Q10,60 20,40 Q30,30 40,35 Q30,40 25,55 Q25,65 30,75 Z" fill="currentColor"/><path d="M80,80 Q90,60 80,40 Q70,30 60,35 Q70,40 75,55 Q75,65 70,75 Z" fill="currentColor"/><circle cx="50" cy="50" r="8" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'wave',
+    name: 'Wave',
+    category: 'decorative',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M0,50 Q25,20 50,50 Q75,80 100,50" stroke="currentColor" stroke-width="8" fill="none" stroke-linecap="round"/></svg>`,
+  },
+  {
+    id: 'dots-pattern',
+    name: 'Dots Pattern',
+    category: 'decorative',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="20" cy="20" r="8" fill="currentColor"/><circle cx="50" cy="20" r="8" fill="currentColor"/><circle cx="80" cy="20" r="8" fill="currentColor"/><circle cx="20" cy="50" r="8" fill="currentColor"/><circle cx="50" cy="50" r="8" fill="currentColor"/><circle cx="80" cy="50" r="8" fill="currentColor"/><circle cx="20" cy="80" r="8" fill="currentColor"/><circle cx="50" cy="80" r="8" fill="currentColor"/><circle cx="80" cy="80" r="8" fill="currentColor"/></svg>`,
+  },
+  {
+    id: 'zigzag',
+    name: 'Zigzag',
+    category: 'decorative',
+    svg: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M0,50 L20,20 L40,50 L60,20 L80,50 L100,20" stroke="currentColor" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  },
+];
+
+// Gradient overlays
+const GRADIENT_OVERLAYS = [
+  { id: 'sunset', name: 'Sunset', colors: ['#ff6b35', '#f7931e', '#ffd700'], css: 'linear-gradient(135deg, #ff6b35 0%, #f7931e 50%, #ffd700 100%)' },
+  { id: 'ocean', name: 'Ocean', colors: ['#0077b6', '#00b4d8', '#90e0ef'], css: 'linear-gradient(135deg, #0077b6 0%, #00b4d8 50%, #90e0ef 100%)' },
+  { id: 'forest', name: 'Forest', colors: ['#2d5016', '#4a7c28', '#8fbc8f'], css: 'linear-gradient(135deg, #2d5016 0%, #4a7c28 50%, #8fbc8f 100%)' },
+  { id: 'berry', name: 'Berry', colors: ['#6b2fa0', '#9b59b6', '#e74c3c'], css: 'linear-gradient(135deg, #6b2fa0 0%, #9b59b6 50%, #e74c3c 100%)' },
+  { id: 'midnight', name: 'Midnight', colors: ['#0f0c29', '#302b63', '#24243e'], css: 'linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%)' },
+  { id: 'peach', name: 'Peach', colors: ['#ff9a9e', '#fecfef', '#fdfcfb'], css: 'linear-gradient(135deg, #ff9a9e 0%, #fecfef 50%, #fdfcfb 100%)' },
+  { id: 'emerald', name: 'Emerald', colors: ['#11998e', '#38ef7d'], css: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
+  { id: 'royal', name: 'Royal', colors: ['#141e30', '#243b55'], css: 'linear-gradient(135deg, #141e30 0%, #243b55 100%)' },
+  { id: 'coral', name: 'Coral', colors: ['#ff6b6b', '#ee5a24'], css: 'linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%)' },
+  { id: 'lavender', name: 'Lavender', colors: ['#a18cd1', '#fbc2eb'], css: 'linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%)' },
+];
+
+type AssetTab = 'images' | 'elements' | 'gradients';
+
+type GradientAssetPayload = {
+  id?: string;
+  name?: string;
+  colors: string[];
+  css: string;
+};
+
+export const RoyaltyFreeAssets: React.FC = () => {
+  const { canvas, saveHistory } = useEditorStore();
+  const [activeTab, setActiveTab] = useState<AssetTab>('images');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [images, setImages] = useState<ImageResult[]>([]);
+  const [imagePage, setImagePage] = useState(1);
+  const [imageTotal, setImageTotal] = useState(0);
+  const [loading, loadingSet] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [favorites, setFavorites] = useState<Set<string>>(new Set());
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [elementAssets, setElementAssets] = useState<BackendAsset[]>([]);
+  const [gradientAssets, setGradientAssets] = useState<BackendAsset[]>([]);
+  const [assetError, setAssetError] = useState('');
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout>>(null);
+
+  const fetchBackendAssets = useCallback(async (
+    category: AssetTab,
+    search?: string,
+    theme?: string | null,
+    limit = 120,
+    offset = 0
+  ): Promise<BackendAssetList> => {
+    const params = new URLSearchParams({ category, limit: String(limit), offset: String(offset) });
+    if (search?.trim()) params.set('search', search.trim());
+    if (theme?.trim()) params.set('theme', theme.trim());
+    const response = await apiFetch(`/api/assets?${params.toString()}`, { auth: false });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.detail || data?.error || `Failed to load assets (${response.status})`);
+    }
+    return {
+      assets: (data?.assets || []) as BackendAsset[],
+      total: Number(data?.total || 0),
+    };
+  }, []);
+
+  const fetchBackendImageAssets = useCallback(async (
+    category?: string | null,
+    query?: string,
+    page = 1,
+    perPage = IMAGE_PAGE_SIZE
+  ): Promise<AssetSearchResponse> => {
+    const params = new URLSearchParams({ page: String(page), per_page: String(perPage) });
+    if (category?.trim()) params.set('category', category.trim());
+    if (query?.trim()) params.set('q', query.trim());
+    const response = await apiFetch(`/api/assets/search?${params.toString()}`, { auth: false });
+    const data = await response.json().catch(() => null);
+    if (!response.ok || !data?.success) {
+      throw new Error(data?.detail || data?.error || `Failed to load image assets (${response.status})`);
+    }
+    return data as AssetSearchResponse;
+  }, []);
+
+  const fetchImages = useCallback(async (query: string, page = 1, theme?: string | null) => {
+    if (page === 1) {
+      loadingSet(true);
+    } else {
+      setLoadingMore(true);
+    }
+    setAssetError('');
+    try {
+      const data = await fetchBackendImageAssets(theme, query, page, IMAGE_PAGE_SIZE);
+      const results = data.items.map((asset) => ({
+        id: asset.id,
+        src: resolveAssetUrl(asset.imageUrl),
+        thumbnail: resolveAssetUrl(asset.thumbnailUrl || asset.imageUrl),
+        photographer: 'TECKSTUDIO Assets',
+        alt: asset.title,
+        source: asset.source,
+        license: asset.licenseName,
+        attribution: asset.attributionText,
+        metadata: asset,
+      })).filter((asset) => Boolean(asset.src));
+      setImageTotal(data.total);
+      setImagePage(page);
+      setImages((current) => {
+        if (page === 1) return results;
+        const seen = new Set(current.map((asset) => asset.id));
+        return [...current, ...results.filter((asset) => !seen.has(asset.id))];
+      });
+    } catch (err) {
+      if (page === 1) {
+        setImages([]);
+        setImageTotal(0);
+      }
+      setAssetError(err instanceof Error ? err.message : 'Error fetching images.');
+    } finally {
+      loadingSet(false);
+      setLoadingMore(false);
+    }
+  }, [fetchBackendImageAssets]);
+
+  const fetchLibraryAssets = useCallback(async () => {
+    loadingSet(true);
+    setAssetError('');
+    try {
+      const [elements, gradients] = await Promise.all([
+        fetchBackendAssets('elements', undefined, null, 120),
+        fetchBackendAssets('gradients', undefined, null, 120),
+      ]);
+      setElementAssets(elements.assets);
+      setGradientAssets(gradients.assets);
+    } catch (err) {
+      setElementAssets([]);
+      setGradientAssets([]);
+      setAssetError(err instanceof Error ? err.message : 'Error fetching assets.');
+    } finally {
+      loadingSet(false);
+    }
+  }, [fetchBackendAssets]);
+
+  useEffect(() => {
+    fetchLibraryAssets();
+  }, [fetchLibraryAssets]);
+
+  // Handle search
+  useEffect(() => {
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+
+    if (!selectedCategory && !searchQuery.trim()) {
+      setImages([]);
+      setAssetError('');
+      loadingSet(false);
+      return undefined;
+    }
+
+    searchTimeoutRef.current = setTimeout(() => {
+      fetchImages(searchQuery, 1, selectedCategory);
+    }, 350);
+
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+    };
+  }, [searchQuery, selectedCategory, fetchImages]);
+
+  // Handle category click
+  const handleCategoryClick = (category: typeof IMAGE_CATEGORIES[0]) => {
+    setSelectedCategory(category.id);
+    setSearchQuery('');
+    setImagePage(1);
+    setImageTotal(0);
+  };
+
+  const handleBackToCategories = () => {
+    setSelectedCategory(null);
+    setSearchQuery('');
+    setImages([]);
+    setImagePage(1);
+    setImageTotal(0);
+    setAssetError('');
+  };
+
+  const addBackendAssetToCanvas = (asset: BackendAsset) => {
+    if (!asset.file_data) return;
+    if (asset.file_type === 'gradient') {
+      try {
+        const gradient = JSON.parse(asset.file_data) as typeof GRADIENT_OVERLAYS[0];
+        addGradientOverlay({
+          id: asset.id,
+          name: asset.name,
+          colors: gradient.colors,
+          css: gradient.css,
+        });
+      } catch {
+        setAssetError('Invalid gradient asset payload.');
+      }
+      return;
+    }
+
+    if (asset.file_type === 'svg') {
+      addSvgElement(asset.file_data);
+      return;
+    }
+
+    addImageToCanvas(asset.file_data, asset);
+  };
+
+  const getVisibleCanvasCenter = (targetCanvas: fabric.Canvas) => {
+    const fabricCanvas = targetCanvas as fabric.Canvas & {
+      upperCanvasEl?: HTMLCanvasElement;
+      lowerCanvasEl?: HTMLCanvasElement;
+    };
+    const canvasElement = fabricCanvas.upperCanvasEl || fabricCanvas.lowerCanvasEl;
+    if (!canvasElement) {
+      return { x: targetCanvas.getWidth() / 2, y: targetCanvas.getHeight() / 2 };
+    }
+
+    const canvasRect = canvasElement.getBoundingClientRect();
+    const scrollViewport = canvasElement.closest('.canvas-container')?.parentElement;
+    const viewportRect = scrollViewport?.getBoundingClientRect();
+    const visibleLeft = Math.max(canvasRect.left, viewportRect?.left ?? 0, 0);
+    const visibleTop = Math.max(canvasRect.top, viewportRect?.top ?? 0, 0);
+    const visibleRight = Math.min(canvasRect.right, viewportRect?.right ?? window.innerWidth, window.innerWidth);
+    const visibleBottom = Math.min(canvasRect.bottom, viewportRect?.bottom ?? window.innerHeight, window.innerHeight);
+
+    if (visibleRight <= visibleLeft || visibleBottom <= visibleTop || canvasRect.width <= 0 || canvasRect.height <= 0) {
+      return { x: targetCanvas.getWidth() / 2, y: targetCanvas.getHeight() / 2 };
+    }
+
+    return {
+      x: ((visibleLeft + visibleRight) / 2 - canvasRect.left) * (targetCanvas.getWidth() / canvasRect.width),
+      y: ((visibleTop + visibleBottom) / 2 - canvasRect.top) * (targetCanvas.getHeight() / canvasRect.height),
+    };
+  };
+
+  const getEditorCanvas = () => {
+    if (canvas) return canvas;
+    const canvasElement = document.querySelector('[data-fabric-canvas="lower"], [data-fabric-canvas="upper"]') as
+      | (HTMLCanvasElement & { __fabric?: fabric.Canvas })
+      | null;
+    if (canvasElement?.__fabric) {
+      useEditorStore.setState({ canvas: canvasElement.__fabric });
+      return canvasElement.__fabric;
+    }
+    return null;
+  };
+
+  // Add image to canvas
+  const addImageToCanvas = async (src: string, metadata?: BackendAsset | AssetSearchItem | ImageResult) => {
+    const targetCanvas = getEditorCanvas();
+    if (!targetCanvas) {
+      setAssetError('Canvas is not ready. Please wait a moment and try again.');
+      return;
+    }
+    if (!src) {
+      setAssetError('Asset image source is missing.');
+      return;
+    }
+
+    setAssetError('');
+
+    try {
+      const imageSource = await prepareCanvasImageSource(src, metadata);
+
+      await new Promise<void>((resolve, reject) => {
+        fabric.Image.fromURL(
+          imageSource,
+          (img) => {
+            if (!img || !img.width || !img.height) {
+              reject(new Error('Unable to load a valid image asset.'));
+              return;
+            }
+
+            // Scale to fit canvas
+            const canvasWidth = targetCanvas.getWidth();
+            const canvasHeight = targetCanvas.getHeight();
+            const maxWidth = canvasWidth * 0.6;
+            const maxHeight = canvasHeight * 0.6;
+
+            const scale = Math.min(maxWidth / (img.width || 1), maxHeight / (img.height || 1), 1);
+            const visibleCenter = getVisibleCanvasCenter(targetCanvas);
+
+            img.set({
+              left: visibleCenter.x,
+              top: visibleCenter.y,
+              originX: 'center',
+              originY: 'center',
+              scaleX: scale,
+              scaleY: scale,
+              opacity: 1,
+              visible: true,
+            });
+            (img as fabric.Image & { assetMetadata?: BackendAsset | AssetSearchItem | ImageResult }).assetMetadata = metadata;
+
+            targetCanvas.add(img);
+            img.setCoords();
+            targetCanvas.bringToFront(img);
+            targetCanvas.setActiveObject(img);
+            targetCanvas.renderAll();
+            targetCanvas.requestRenderAll();
+            saveHistory();
+            resolve();
+          },
+          imageSource.startsWith('data:') ? undefined : { crossOrigin: 'anonymous' }
+        );
+      });
+    } catch (error) {
+      setAssetError(error instanceof Error ? error.message : 'Unable to add image asset to canvas.');
+    }
+  };
+
+  // Add SVG element to canvas
+  const addSvgElement = (svgData: string, color: string = '#8b5cf6') => {
+    if (!canvas) return;
+
+    const svgString = svgData.replace('currentColor', color);
+    fabric.loadSVGFromString(svgString, (objects, options) => {
+      const group = fabric.util.groupSVGElements(objects, options);
+
+      const canvasWidth = canvas.getWidth();
+      const canvasHeight = canvas.getHeight();
+
+      // Scale to reasonable size
+      const maxSize = 150;
+      const scale = Math.min(maxSize / (group.width || 1), maxSize / (group.height || 1));
+
+      group.set({
+        left: canvasWidth / 2 - ((group.width || 0) * scale) / 2,
+        top: canvasHeight / 2 - ((group.height || 0) * scale) / 2,
+        scaleX: scale,
+        scaleY: scale,
+      });
+
+      canvas.add(group);
+      canvas.setActiveObject(group);
+      canvas.renderAll();
+      saveHistory();
+    });
+  };
+
+  // Add gradient overlay to canvas
+  const addGradientOverlay = (gradient: typeof GRADIENT_OVERLAYS[0]) => {
+    if (!canvas) return;
+
+    const canvasWidth = canvas.getWidth();
+    const canvasHeight = canvas.getHeight();
+
+    // Create gradient rect with actual Fabric.js linear gradient
+    const rect = new fabric.Rect({
+      left: 0,
+      top: 0,
+      width: canvasWidth,
+      height: canvasHeight,
+      selectable: true,
+      opacity: 0.7,
+    });
+
+    // Apply actual gradient fill
+    const colorStops = gradient.colors.map((color, i) => ({
+      offset: i / (gradient.colors.length - 1),
+      color: color,
+    }));
+
+    (rect as any).set('fill', new fabric.Gradient({
+      type: 'linear',
+      coords: { x1: 0, y1: 0, x2: canvasWidth, y2: canvasHeight },
+      colorStops,
+    }));
+
+    canvas.add(rect);
+    canvas.setActiveObject(rect);
+    canvas.renderAll();
+    saveHistory();
+  };
+
+  // Toggle favorite
+  const toggleFavorite = (id: string) => {
+    setFavorites((prev) => {
+      const newFavorites = new Set(prev);
+      if (newFavorites.has(id)) {
+        newFavorites.delete(id);
+      } else {
+        newFavorites.add(id);
+      }
+      return newFavorites;
+    });
+  };
+
+  const backendGradientAssets = gradientAssets
+    .map((asset) => {
+      if (!asset.file_data) return null;
+      try {
+        const parsed = JSON.parse(asset.file_data) as GradientAssetPayload;
+        if (!Array.isArray(parsed.colors) || !parsed.css) return null;
+        return {
+          id: asset.id,
+          name: asset.name,
+          colors: parsed.colors,
+          css: parsed.css,
+        };
+      } catch {
+        return null;
+      }
+    })
+    .filter((asset): asset is typeof GRADIENT_OVERLAYS[0] => Boolean(asset));
+  const selectedImageCategory = IMAGE_CATEGORIES.find((category) => category.id === selectedCategory);
+  const showImageResults = Boolean(selectedCategory || searchQuery.trim());
+  const hasMoreImages = showImageResults && images.length < imageTotal;
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Tab Selector */}
+      <div className="flex border-b border-zinc-800 shrink-0">
+        {[
+          { id: 'images' as AssetTab, label: 'Images', icon: Image },
+          { id: 'elements' as AssetTab, label: 'Elements', icon: Layers },
+          { id: 'gradients' as AssetTab, label: 'Gradients', icon: Palette },
+        ].map((tab) => {
+          const Icon = tab.icon;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-3 text-xs font-semibold transition-colors cursor-pointer ${
+                activeTab === tab.id
+                  ? 'text-violet-400 border-b-2 border-violet-400'
+                  : 'text-zinc-500 hover:text-zinc-300'
+              }`}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto p-4">
+        {assetError && (
+          <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+            {assetError}
+          </div>
+        )}
+
+        {/* Images Tab */}
+        {activeTab === 'images' && (
+          <div className="flex flex-col gap-4">
+            {/* Search */}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
+              <input
+                type="text"
+                placeholder={selectedImageCategory ? `Search ${selectedImageCategory.name} images...` : 'Search free images...'}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-zinc-900 border border-zinc-800 focus:border-violet-500 rounded-lg py-2.5 pl-10 pr-4 text-sm text-zinc-200 outline-none transition-colors placeholder:text-zinc-600"
+              />
+            </div>
+
+            {/* Categories */}
+            {!showImageResults && (
+              <div>
+                <h4 className="text-xs font-bold text-zinc-400 mb-3 uppercase tracking-wider">Browse Categories</h4>
+                <div className="grid grid-cols-3 gap-2">
+                  {IMAGE_CATEGORIES.map((cat) => (
+                    <button
+                      key={cat.id}
+                      onClick={() => handleCategoryClick(cat)}
+                      className="flex flex-col items-center gap-1.5 p-3 bg-zinc-900/50 border border-zinc-800 hover:border-violet-500/40 rounded-xl transition-all cursor-pointer"
+                    >
+                      <span className="text-xl">{cat.emoji}</span>
+                      <span className="text-[10px] font-semibold text-zinc-300">{cat.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* View Mode Toggle */}
+            {showImageResults && (
+              <div className="flex items-center justify-between gap-3">
+                <button
+                  onClick={handleBackToCategories}
+                  className="text-xs text-violet-400 hover:text-violet-300 cursor-pointer"
+                >
+                  ← Back to categories
+                </button>
+                <div className="min-w-0 flex-1 text-center">
+                  <p className="truncate text-xs font-bold text-zinc-200">
+                    {selectedImageCategory?.name || 'Image Search'}
+                  </p>
+                  <p className="text-[10px] text-zinc-500">
+                    {loading ? 'Loading assets...' : `${images.length}/${imageTotal} assets`}
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-1 bg-zinc-900 rounded-lg p-0.5">
+                  <button
+                    onClick={() => setViewMode('grid')}
+                    aria-label="Grid view"
+                    className={`p-1.5 rounded ${viewMode === 'grid' ? 'bg-zinc-700 text-white' : 'text-zinc-500'}`}
+                  >
+                    <Grid3x3 className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setViewMode('list')}
+                    aria-label="List view"
+                    className={`p-1.5 rounded ${viewMode === 'list' ? 'bg-zinc-700 text-white' : 'text-zinc-500'}`}
+                  >
+                    <LayoutGrid className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Loading */}
+            {loading && showImageResults && (
+              <div className="columns-2 gap-2 space-y-2">
+                {Array.from({ length: 8 }).map((_, index) => (
+                  <div
+                    key={index}
+                    className={`mb-2 break-inside-avoid animate-pulse rounded-xl bg-zinc-900 ${
+                      index % 3 === 0 ? 'h-28' : index % 3 === 1 ? 'h-20' : 'h-24'
+                    }`}
+                  />
+                ))}
+              </div>
+            )}
+
+            {/* Image Grid */}
+            {!loading && showImageResults && images.length > 0 && (
+              <div className={viewMode === 'grid' ? 'columns-2 gap-2 space-y-2' : 'flex flex-col gap-2'}>
+                {images.map((img) => (
+                  <div
+                    key={img.id}
+                    className={`group relative rounded-xl overflow-hidden border border-zinc-800 hover:border-violet-500/50 transition-all cursor-pointer ${
+                      viewMode === 'list' ? 'flex gap-3 p-2' : 'mb-2 break-inside-avoid'
+                    }`}
+                    onClick={() => addImageToCanvas(img.src, img.metadata)}
+                  >
+	                    <img
+	                      src={img.thumbnail}
+	                      alt={img.alt}
+	                      title={`${img.alt}${img.license ? ` • ${img.license}` : ''}`}
+	                      className={viewMode === 'list' ? 'h-16 w-16 rounded-lg object-cover' : 'h-auto w-full'}
+	                      loading="lazy"
+	                      onClick={(event) => {
+	                        event.stopPropagation();
+	                        addImageToCanvas(img.src, img.metadata);
+	                      }}
+	                    />
+                    {/* Overlay */}
+	                    <div className="pointer-events-none absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+	                      <button
+	                        type="button"
+	                        title="Add image to canvas"
+	                        onClick={(e) => {
+	                          e.stopPropagation();
+                          addImageToCanvas(img.src, img.metadata);
+                        }}
+	                        className="pointer-events-auto p-2 bg-white/20 rounded-full hover:bg-white/30"
+                      >
+                        <Image className="w-4 h-4 text-white" />
+	                      </button>
+	                      <button
+	                        type="button"
+	                        title="Download asset"
+	                        onClick={(e) => e.stopPropagation()}
+	                        className="pointer-events-auto p-2 bg-white/20 rounded-full hover:bg-white/30"
+	                      >
+	                        <Download className="w-4 h-4 text-white" />
+	                      </button>
+	                      <button
+	                        type="button"
+	                        title="Favorite asset"
+	                        onClick={(e) => {
+	                          e.stopPropagation();
+	                          toggleFavorite(img.id);
+	                        }}
+	                        className="pointer-events-auto p-2 bg-white/20 rounded-full hover:bg-white/30"
+	                      >
+                        <Heart
+                          className={`w-4 h-4 ${favorites.has(img.id) ? 'fill-red-400 text-red-400' : 'text-white'}`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {!loading && hasMoreImages && (
+              <button
+                onClick={() => fetchImages(searchQuery, imagePage + 1, selectedCategory)}
+                disabled={loadingMore}
+                className="flex items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/70 px-3 py-2 text-xs font-semibold text-zinc-300 transition-colors hover:border-violet-500/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {loadingMore ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Loading more...
+                  </>
+                ) : (
+                  `Load more (${images.length}/${imageTotal})`
+                )}
+              </button>
+            )}
+
+            {/* Empty State */}
+            {!loading && showImageResults && images.length === 0 && (
+              <div className="text-center py-12 text-zinc-500">
+                <Image className="w-12 h-12 mx-auto mb-3 opacity-40" />
+                <p className="text-sm font-semibold">No backend images found</p>
+                <p className="text-xs mt-1">
+                  Try a different search or category.
+                </p>
+                <button
+                  onClick={() => fetchImages(searchQuery, 1, selectedCategory)}
+                  className="mt-4 rounded-lg border border-zinc-800 px-3 py-2 text-xs font-semibold text-zinc-300 hover:border-violet-500/50 hover:text-white"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Elements Tab */}
+        {activeTab === 'elements' && (
+          <div className="flex flex-col gap-4">
+            <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wider">
+              {elementAssets.length > 0 ? 'Backend SVG Elements' : 'SVG Elements'}
+            </h4>
+            <div className="grid grid-cols-3 gap-2">
+              {elementAssets.length > 0
+                ? elementAssets.filter((asset) => Boolean(asset.file_data)).map((asset) => (
+                    <button
+                      key={asset.id}
+                      onClick={() => addBackendAssetToCanvas(asset)}
+                      className="flex flex-col items-center gap-2 p-4 bg-zinc-900/50 border border-zinc-800 hover:border-violet-500/40 rounded-xl transition-all cursor-pointer group"
+                    >
+                      <div
+                        className="w-10 h-10 text-zinc-400 group-hover:text-violet-400 transition-colors"
+                        dangerouslySetInnerHTML={{ __html: asset.file_data || '' }}
+                      />
+                      <span className="text-[9px] font-semibold text-zinc-500">{asset.name}</span>
+                    </button>
+                  ))
+                : SVG_ELEMENTS.map((element) => (
+                    <button
+                      key={element.id}
+                      onClick={() => addSvgElement(element.svg)}
+                      className="flex flex-col items-center gap-2 p-4 bg-zinc-900/50 border border-zinc-800 hover:border-violet-500/40 rounded-xl transition-all cursor-pointer group"
+                    >
+                      <div
+                        className="w-10 h-10 text-zinc-400 group-hover:text-violet-400 transition-colors"
+                        dangerouslySetInnerHTML={{ __html: element.svg }}
+                      />
+                      <span className="text-[9px] font-semibold text-zinc-500">{element.name}</span>
+                    </button>
+                  ))}
+            </div>
+
+            <div className="mt-4">
+              <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3">Quick Shapes</h4>
+              <div className="grid grid-cols-4 gap-2">
+                {[
+                  { shape: 'circle', label: 'Circle', color: '#8b5cf6' },
+                  { shape: 'rect', label: 'Square', color: '#ec4899' },
+                  { shape: 'triangle', label: 'Triangle', color: '#f97316' },
+                  { shape: 'star', label: 'Star', color: '#eab308' },
+                  { shape: 'pentagon', label: 'Pentagon', color: '#22c55e' },
+                  { shape: 'hexagon', label: 'Hexagon', color: '#06b6d4' },
+                  { shape: 'octagon', label: 'Octagon', color: '#3b82f6' },
+                  { shape: 'diamond', label: 'Diamond', color: '#a855f7' },
+                ].map((item) => (
+                  <button
+                    key={item.shape}
+                    onClick={() => {
+                      if (!canvas) return;
+                      let shape: fabric.Object;
+                      const center = { x: canvas.getWidth() / 2, y: canvas.getHeight() / 2 };
+
+                      switch (item.shape) {
+                        case 'circle':
+                          shape = new fabric.Circle({ left: center.x - 50, top: center.y - 50, radius: 50, fill: item.color });
+                          break;
+                        case 'rect':
+                          shape = new fabric.Rect({ left: center.x - 50, top: center.y - 50, width: 100, height: 100, fill: item.color });
+                          break;
+                        case 'triangle':
+                          shape = new fabric.Triangle({ left: center.x - 50, top: center.y - 50, width: 100, height: 100, fill: item.color });
+                          break;
+                        case 'star':
+                          shape = new fabric.Path('M 50 0 L 65 35 L 100 35 L 72 57 L 83 91 L 50 70 L 17 91 L 28 57 L 0 35 L 35 35 Z', { left: center.x - 50, top: center.y - 50, width: 100, height: 100, fill: item.color });
+                          break;
+                        case 'pentagon':
+                          shape = new fabric.Polygon([
+                            { x: 50, y: 0 }, { x: 100, y: 38 }, { x: 81, y: 100 }, { x: 19, y: 100 }, { x: 0, y: 38 }
+                          ], { left: center.x - 50, top: center.y - 50, width: 100, height: 100, fill: item.color });
+                          break;
+                        case 'hexagon':
+                          shape = new fabric.Polygon([
+                            { x: 50, y: 0 }, { x: 100, y: 25 }, { x: 100, y: 75 }, { x: 50, y: 100 }, { x: 0, y: 75 }, { x: 0, y: 25 }
+                          ], { left: center.x - 50, top: center.y - 50, width: 100, height: 100, fill: item.color });
+                          break;
+                        case 'octagon':
+                          shape = new fabric.Polygon([
+                            { x: 29, y: 0 }, { x: 71, y: 0 }, { x: 100, y: 29 }, { x: 100, y: 71 },
+                            { x: 71, y: 100 }, { x: 29, y: 100 }, { x: 0, y: 71 }, { x: 0, y: 29 }
+                          ], { left: center.x - 50, top: center.y - 50, width: 100, height: 100, fill: item.color });
+                          break;
+                        case 'diamond':
+                          shape = new fabric.Polygon([
+                            { x: 50, y: 0 }, { x: 100, y: 50 }, { x: 50, y: 100 }, { x: 0, y: 50 }
+                          ], { left: center.x - 50, top: center.y - 50, width: 100, height: 100, fill: item.color });
+                          break;
+                        default:
+                          shape = new fabric.Circle({ left: center.x - 50, top: center.y - 50, radius: 50, fill: item.color });
+                      }
+
+                      canvas.add(shape);
+                      canvas.setActiveObject(shape);
+                      canvas.renderAll();
+                      saveHistory();
+                    }}
+                    className="flex flex-col items-center gap-1 p-3 bg-zinc-900/50 border border-zinc-800 hover:border-violet-500/40 rounded-xl transition-all cursor-pointer"
+                  >
+                    <div className="w-6 h-6 rounded" style={{ backgroundColor: item.color }} />
+                    <span className="text-[8px] font-semibold text-zinc-500">{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Gradients Tab */}
+        {activeTab === 'gradients' && (
+          <div className="flex flex-col gap-4">
+            <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wider">
+              {backendGradientAssets.length > 0 ? 'Backend Gradient Overlays' : 'Gradient Overlays'}
+            </h4>
+            <p className="text-[10px] text-zinc-500 -mt-2">Click to add as a background overlay</p>
+            <div className="grid grid-cols-2 gap-3">
+              {(backendGradientAssets.length > 0 ? backendGradientAssets : GRADIENT_OVERLAYS).map((gradient) => (
+                <button
+                  key={gradient.id}
+                  onClick={() => addGradientOverlay(gradient)}
+                  className="group relative rounded-xl overflow-hidden border border-zinc-800 hover:border-violet-500/50 transition-all cursor-pointer"
+                >
+                  <div
+                    className="w-full aspect-square"
+                    style={{ background: gradient.css }}
+                  />
+                  <div className="absolute bottom-0 left-0 right-0 p-2 bg-black/60">
+                    <span className="text-[10px] font-semibold text-white">{gradient.name}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-4">
+              <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3">Solid Colors</h4>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  '#8b5cf6', '#ec4899', '#f97316', '#eab308', '#22c55e',
+                  '#06b6d4', '#3b82f6', '#a855f7', '#ef4444', '#10b981',
+                  '#f59e0b', '#6366f1', '#14b8a6', '#e11d48', '#7c3aed',
+                  '#0891b2', '#059669', '#d97706', '#2563eb', '#9333ea',
+                ].map((color) => (
+                  <button
+                    key={color}
+                    onClick={() => {
+                      if (!canvas) return;
+                      const rect = new fabric.Rect({
+                        left: 0,
+                        top: 0,
+                        width: canvas.getWidth(),
+                        height: canvas.getHeight(),
+                        fill: color,
+                        selectable: true,
+                        opacity: 0.8,
+                      });
+                      canvas.add(rect);
+                      canvas.setActiveObject(rect);
+                      canvas.renderAll();
+                      saveHistory();
+                    }}
+                    className="w-8 h-8 rounded-lg border-2 border-transparent hover:border-white/60 transition-all cursor-pointer shadow-md hover:scale-110"
+                    style={{ backgroundColor: color }}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};

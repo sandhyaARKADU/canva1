@@ -1,0 +1,798 @@
+import React from 'react';
+import {
+  Bold,
+  Italic,
+  Underline,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  Group,
+  Ungroup,
+  Copy,
+  Trash2,
+  Move,
+  Type,
+  Palette,
+  Layers,
+  ChevronDown,
+  ChevronRight,
+  Square,
+  Minus,
+  Plus,
+} from 'lucide-react';
+import { fabric } from 'fabric';
+import { useEditorStore } from '../../store/useEditorStore';
+import { ImageFilters } from './ImageFilters';
+import { GradientPicker } from './GradientPicker';
+import { AnimationPanel } from './AnimationPanel';
+import { GridOverlay } from './GridOverlay';
+import { AlignmentTools } from './AlignmentTools';
+import { DevModeInspector } from './DevModeInspector';
+import { ImageCropper } from './ImageCropper';
+import { TextOnPath } from './TextOnPath';
+
+const PRESET_COLORS = [
+  '#ffffff', '#000000', '#f4f4f5', '#71717a',
+  '#ef4444', '#f97316', '#f59e0b', '#10b981',
+  '#06b6d4', '#3b82f6', '#6366f1', '#8b5cf6',
+  '#d946ef', '#ec4899'
+];
+
+const FONT_FAMILIES = [
+  'Outfit', 'Inter', 'system-ui', 'Arial', 'Georgia',
+  'Courier New', 'Times New Roman', 'Verdana', 'Helvetica',
+  'Roboto', 'Montserrat', 'Poppins', 'Playfair Display',
+  'Pacifico', 'Lobster', 'Oswald', 'Raleway', 'Lato',
+  'Merriweather', 'Source Sans Pro'
+];
+
+export const PropertiesPanel: React.FC = () => {
+  const {
+    canvas,
+    selectedObject,
+    fillColor,
+    strokeColor,
+    strokeWidth,
+    fontFamily,
+    fontSize,
+    fontWeight,
+    fontStyle,
+    underline,
+    textAlign,
+    opacity,
+    setFillColor,
+    setStrokeColor,
+    setStrokeWidth,
+    setFontFamily,
+    setFontSize,
+    setFontWeight,
+    setFontStyle,
+    setUnderline,
+    setTextAlign,
+    setOpacity,
+    groupSelected,
+    ungroupSelected,
+    saveHistory,
+    duplicateSelected,
+    deleteSelected,
+    editorMode
+  } = useEditorStore();
+
+  const [openSections, setOpenSections] = React.useState<Record<string, boolean>>({
+    transform: true,
+    fill: true,
+    stroke: true,
+    text: true,
+    effects: true,
+    spacing: false,
+  });
+
+  const toggleSection = (section: string) => {
+    setOpenSections(prev => ({ ...prev, [section]: !prev[section] }));
+  };
+
+  const isText = selectedObject && (
+    selectedObject.type === 'text' ||
+    selectedObject.type === 'i-text' ||
+    selectedObject.type === 'textbox'
+  );
+
+  const isLine = selectedObject && selectedObject.type === 'line';
+
+  // Canvas background state helper
+  const [canvasBg, setCanvasBg] = React.useState('#ffffff');
+
+  // Object shadow state
+  const [shadowColor, setShadowColor] = React.useState('#000000');
+  const [shadowBlur, setShadowBlur] = React.useState(0);
+  const [shadowOffsetX, setShadowOffsetX] = React.useState(0);
+  const [shadowOffsetY, setShadowOffsetY] = React.useState(0);
+
+  // Text spacing state
+  const [letterSpacing, setLetterSpacing] = React.useState(0);
+  const [lineHeight, setLineHeight] = React.useState(1.4);
+
+  // Border radius state
+  const [borderRadius, setBorderRadius] = React.useState(0);
+
+  React.useEffect(() => {
+    if (canvas && !selectedObject) {
+      const currentBg = canvas.backgroundColor;
+      if (typeof currentBg === 'string') {
+        setCanvasBg(currentBg);
+      }
+    }
+  }, [canvas, selectedObject]);
+
+  React.useEffect(() => {
+    if (selectedObject) {
+      const shadow = selectedObject.shadow as fabric.Shadow;
+      if (shadow) {
+        setShadowColor(shadow.color || '#000000');
+        setShadowBlur(shadow.blur || 0);
+        setShadowOffsetX(shadow.offsetX || 0);
+        setShadowOffsetY(shadow.offsetY || 0);
+      } else {
+        setShadowBlur(0);
+        setShadowOffsetX(0);
+        setShadowOffsetY(0);
+      }
+
+      if (isText) {
+        setLetterSpacing((selectedObject as any).charSpacing || 0);
+        setLineHeight((selectedObject as any).lineHeight || 1.4);
+      }
+
+      if (selectedObject.type === 'rect') {
+        setBorderRadius((selectedObject as any).rx || 0);
+      }
+    }
+  }, [selectedObject, isText]);
+
+  const handleCanvasBgChange = (color: string) => {
+    if (!canvas) return;
+    setCanvasBg(color);
+    canvas.setBackgroundColor(color, () => canvas.renderAll());
+    saveHistory();
+  };
+
+  const handleShadowChange = (blur: number, offsetX: number, offsetY: number, color: string) => {
+    if (!selectedObject || !canvas) return;
+    setShadowBlur(blur);
+    setShadowOffsetX(offsetX);
+    setShadowOffsetY(offsetY);
+    setShadowColor(color);
+    if (blur > 0 || offsetX !== 0 || offsetY !== 0) {
+      selectedObject.set('shadow', new fabric.Shadow({
+        color,
+        blur,
+        offsetX,
+        offsetY,
+      }));
+    } else {
+      selectedObject.set('shadow', undefined);
+    }
+    canvas.renderAll();
+    saveHistory();
+  };
+
+  const handleLetterSpacingChange = (spacing: number) => {
+    if (!selectedObject || !canvas) return;
+    setLetterSpacing(spacing);
+    (selectedObject as any).set('charSpacing', spacing);
+    canvas.renderAll();
+    saveHistory();
+  };
+
+  const handleLineHeightChange = (height: number) => {
+    if (!selectedObject || !canvas) return;
+    setLineHeight(height);
+    (selectedObject as any).set('lineHeight', height);
+    canvas.renderAll();
+    saveHistory();
+  };
+
+  const handleBorderRadiusChange = (radius: number) => {
+    if (!selectedObject || !canvas) return;
+    setBorderRadius(radius);
+    if (selectedObject.type === 'rect') {
+      (selectedObject as any).set({ rx: radius, ry: radius });
+      canvas.renderAll();
+      saveHistory();
+    }
+  };
+
+  // Render Dev Mode Inspector panel instead if Dev Mode is enabled
+  if (editorMode === 'dev') {
+    return <DevModeInspector />;
+  }
+
+  // Section header component
+  const SectionHeader: React.FC<{
+    title: string;
+    sectionKey: string;
+    icon?: React.ReactNode;
+  }> = ({ title, sectionKey, icon }) => (
+    <button
+      onClick={() => toggleSection(sectionKey)}
+      className="flex items-center justify-between w-full py-2 px-1 hover:bg-zinc-800/50 rounded-lg transition-colors cursor-pointer"
+    >
+      <div className="flex items-center gap-2">
+        {icon}
+        <span className="text-xs font-semibold text-zinc-300">{title}</span>
+      </div>
+      {openSections[sectionKey] ?
+        <ChevronDown className="w-3.5 h-3.5 text-zinc-500" /> :
+        <ChevronRight className="w-3.5 h-3.5 text-zinc-500" />
+      }
+    </button>
+  );
+
+  // If no object selected, show Page properties
+  if (!selectedObject) {
+    return (
+      <aside className="w-72 border-l border-zinc-800 bg-[#121214] p-4 flex flex-col gap-4 select-none shrink-0 overflow-y-auto">
+        <div>
+          <h3 className="text-sm font-bold text-zinc-100 mb-1">Page Settings</h3>
+          <p className="text-[10px] text-zinc-500">Configure global canvas options</p>
+        </div>
+
+        <TextOnPath />
+
+        <div className="h-[1px] bg-zinc-800" />
+
+        {/* Canvas Background Color */}
+        <div className="flex flex-col gap-3">
+          <SectionHeader title="Background Color" sectionKey="fill" icon={<Palette className="w-4 h-4 text-violet-400" />} />
+          {openSections.fill && (
+            <>
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={canvasBg}
+                  onChange={(e) => handleCanvasBgChange(e.target.value)}
+                  className="w-10 h-10 rounded-lg border border-zinc-700 bg-transparent cursor-pointer"
+                />
+                <input
+                  type="text"
+                  value={canvasBg.toUpperCase()}
+                  onChange={(e) => handleCanvasBgChange(e.target.value)}
+                  className="flex-1 bg-zinc-900 border border-zinc-850 focus:border-violet-500 rounded-lg px-3 py-1.5 text-xs text-zinc-200 outline-none text-center font-mono"
+                />
+              </div>
+
+              <div className="grid grid-cols-7 gap-1.5">
+                {PRESET_COLORS.map((color) => (
+                  <button
+                    key={color}
+                    onClick={() => handleCanvasBgChange(color)}
+                    style={{ backgroundColor: color }}
+                    className={`w-6 h-6 rounded-md border ${
+                      canvasBg.toLowerCase() === color.toLowerCase()
+                        ? 'border-violet-500 scale-110 shadow-md ring-2 ring-violet-500/20'
+                        : 'border-zinc-800 hover:scale-105'
+                    } cursor-pointer transition-all`}
+                    title={color}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="h-[1px] bg-zinc-800" />
+        <GradientPicker />
+        <div className="h-[1px] bg-zinc-800" />
+        <GridOverlay />
+      </aside>
+    );
+  }
+
+  return (
+    <aside className="w-72 border-l border-zinc-800 bg-[#121214] p-4 flex flex-col gap-3 select-none shrink-0 overflow-y-auto z-10">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-bold text-zinc-100 mb-0.5">Properties</h3>
+          <p className="text-[10px] text-zinc-500 capitalize">
+            {selectedObject.type} element
+          </p>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={duplicateSelected}
+            className="p-1.5 hover:bg-zinc-800 rounded-lg text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer"
+            title="Duplicate"
+          >
+            <Copy className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={deleteSelected}
+            className="p-1.5 hover:bg-zinc-850 hover:text-rose-400 rounded-lg text-zinc-600 transition-colors cursor-pointer"
+            title="Delete"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      <div className="h-[1px] bg-zinc-800" />
+
+      {/* Group / Ungroup controls */}
+      {selectedObject.type === 'activeSelection' && (
+        <button
+          onClick={groupSelected}
+          className="flex items-center justify-center gap-2 w-full py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+        >
+          <Group className="w-4 h-4" />
+          Group Selected
+        </button>
+      )}
+
+      {selectedObject.type === 'group' && (
+        <button
+          onClick={ungroupSelected}
+          className="flex items-center justify-center gap-2 w-full py-2 bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-700 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+        >
+          <Ungroup className="w-4 h-4" />
+          Ungroup Elements
+        </button>
+      )}
+
+      {/* Transform Section */}
+      <div className="flex flex-col gap-2">
+        <SectionHeader title="Transform" sectionKey="transform" icon={<Move className="w-4 h-4 text-cyan-400" />} />
+        {openSections.transform && (
+          <div className="grid grid-cols-2 gap-2 px-1">
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] text-zinc-500">X Position</label>
+              <input
+                type="number"
+                value={Math.round(selectedObject.left || 0)}
+                onChange={(e) => {
+                  if (!canvas) return;
+                  selectedObject.set('left', parseInt(e.target.value) || 0);
+                  canvas.renderAll();
+                  saveHistory();
+                }}
+                className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-xs text-zinc-200 outline-none focus:border-violet-500 font-mono"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] text-zinc-500">Y Position</label>
+              <input
+                type="number"
+                value={Math.round(selectedObject.top || 0)}
+                onChange={(e) => {
+                  if (!canvas) return;
+                  selectedObject.set('top', parseInt(e.target.value) || 0);
+                  canvas.renderAll();
+                  saveHistory();
+                }}
+                className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-xs text-zinc-200 outline-none focus:border-violet-500 font-mono"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] text-zinc-500">Width</label>
+              <input
+                type="number"
+                value={Math.round((selectedObject.width || 0) * (selectedObject.scaleX || 1))}
+                onChange={(e) => {
+                  if (!canvas) return;
+                  const newWidth = parseInt(e.target.value) || 100;
+                  selectedObject.set('scaleX', newWidth / (selectedObject.width || 1));
+                  canvas.renderAll();
+                  saveHistory();
+                }}
+                className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-xs text-zinc-200 outline-none focus:border-violet-500 font-mono"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] text-zinc-500">Height</label>
+              <input
+                type="number"
+                value={Math.round((selectedObject.height || 0) * (selectedObject.scaleY || 1))}
+                onChange={(e) => {
+                  if (!canvas) return;
+                  const newHeight = parseInt(e.target.value) || 100;
+                  selectedObject.set('scaleY', newHeight / (selectedObject.height || 1));
+                  canvas.renderAll();
+                  saveHistory();
+                }}
+                className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-xs text-zinc-200 outline-none focus:border-violet-500 font-mono"
+              />
+            </div>
+            <div className="flex flex-col gap-1 col-span-2">
+              <div className="flex justify-between items-center">
+                <label className="text-[10px] text-zinc-500">Rotation</label>
+                <span className="text-[10px] text-zinc-400 font-mono">{Math.round(selectedObject.angle || 0)}°</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="360"
+                value={selectedObject.angle || 0}
+                onChange={(e) => {
+                  if (!canvas) return;
+                  selectedObject.set('angle', parseInt(e.target.value));
+                  canvas.renderAll();
+                  saveHistory();
+                }}
+                className="w-full accent-violet-500 h-1 rounded-full cursor-pointer bg-zinc-800"
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="h-[1px] bg-zinc-800" />
+
+      {/* Fill Color Section */}
+      {!isLine && (
+        <div className="flex flex-col gap-2">
+          <SectionHeader title={isText ? 'Text Color' : 'Fill Color'} sectionKey="fill" icon={<Palette className="w-4 h-4 text-violet-400" />} />
+          {openSections.fill && (
+            <div className="flex flex-col gap-2 px-1">
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={fillColor}
+                  onChange={(e) => setFillColor(e.target.value)}
+                  className="w-10 h-10 rounded-lg border border-zinc-700 bg-transparent cursor-pointer"
+                />
+                <input
+                  type="text"
+                  value={fillColor.toUpperCase()}
+                  onChange={(e) => setFillColor(e.target.value)}
+                  className="flex-1 bg-zinc-900 border border-zinc-800 focus:border-violet-500 rounded-lg px-3 py-1.5 text-xs text-zinc-200 outline-none text-center font-mono"
+                />
+              </div>
+
+              <div className="grid grid-cols-7 gap-1.5">
+                {PRESET_COLORS.map((color) => (
+                  <button
+                    key={color}
+                    onClick={() => setFillColor(color)}
+                    style={{ backgroundColor: color }}
+                    className={`w-6 h-6 rounded-md border ${
+                      fillColor.toLowerCase() === color.toLowerCase()
+                        ? 'border-violet-500 scale-110 shadow-md ring-2 ring-violet-500/20'
+                        : 'border-zinc-850 hover:scale-105'
+                    } cursor-pointer transition-all`}
+                    title={color}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Text Settings Area */}
+      {isText && (
+        <>
+          <div className="h-[1px] bg-zinc-800" />
+
+          <div className="flex flex-col gap-2">
+            <SectionHeader title="Text Properties" sectionKey="text" icon={<Type className="w-4 h-4 text-emerald-400" />} />
+            {openSections.text && (
+              <div className="flex flex-col gap-3 px-1">
+                {/* Font Family */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] text-zinc-500">Font Family</label>
+                  <select
+                    value={fontFamily}
+                    onChange={(e) => setFontFamily(e.target.value)}
+                    className="w-full bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-violet-500 cursor-pointer"
+                  >
+                    {FONT_FAMILIES.map((family) => (
+                      <option key={family} value={family}>{family}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Font Size */}
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[10px] text-zinc-500">Font Size</label>
+                    <span className="text-[10px] text-zinc-400 font-mono">{fontSize}px</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setFontSize(Math.max(fontSize - 2, 4))}
+                      className="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 flex items-center justify-center text-zinc-300 font-bold text-xs cursor-pointer"
+                    >
+                      <Minus className="w-3 h-3" />
+                    </button>
+                    <input
+                      type="range"
+                      min="6"
+                      max="200"
+                      value={fontSize}
+                      onChange={(e) => setFontSize(parseInt(e.target.value))}
+                      className="flex-1 accent-violet-500 h-1 rounded-full cursor-pointer bg-zinc-800"
+                    />
+                    <button
+                      onClick={() => setFontSize(fontSize + 2)}
+                      className="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 flex items-center justify-center text-zinc-300 font-bold text-xs cursor-pointer"
+                    >
+                      <Plus className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Formatting & Alignment */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] text-zinc-500">Formatting</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {/* Text Style toggles */}
+                    <div className="flex border border-zinc-800 rounded-lg bg-zinc-900 p-0.5">
+                      <button
+                        onClick={() => setFontWeight(fontWeight === 'bold' ? 'normal' : 'bold')}
+                        className={`flex-1 py-1.5 rounded-md flex items-center justify-center cursor-pointer transition-colors ${
+                          fontWeight === 'bold' ? 'bg-violet-600/20 text-violet-400' : 'text-zinc-400 hover:text-white'
+                        }`}
+                        title="Bold"
+                      >
+                        <Bold className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setFontStyle(fontStyle === 'italic' ? 'normal' : 'italic')}
+                        className={`flex-1 py-1.5 rounded-md flex items-center justify-center cursor-pointer transition-colors ${
+                          fontStyle === 'italic' ? 'bg-violet-600/20 text-violet-400' : 'text-zinc-400 hover:text-white'
+                        }`}
+                        title="Italic"
+                      >
+                        <Italic className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setUnderline(!underline)}
+                        className={`flex-1 py-1.5 rounded-md flex items-center justify-center cursor-pointer transition-colors ${
+                          underline ? 'bg-violet-600/20 text-violet-400' : 'text-zinc-400 hover:text-white'
+                        }`}
+                        title="Underline"
+                      >
+                        <Underline className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    {/* Text Alignments */}
+                    <div className="flex border border-zinc-800 rounded-lg bg-zinc-900 p-0.5">
+                      <button
+                        onClick={() => setTextAlign('left')}
+                        className={`flex-1 py-1.5 rounded-md flex items-center justify-center cursor-pointer transition-colors ${
+                          textAlign === 'left' ? 'bg-violet-600/20 text-violet-400' : 'text-zinc-400 hover:text-white'
+                        }`}
+                        title="Align Left"
+                      >
+                        <AlignLeft className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setTextAlign('center')}
+                        className={`flex-1 py-1.5 rounded-md flex items-center justify-center cursor-pointer transition-colors ${
+                          textAlign === 'center' ? 'bg-violet-600/20 text-violet-400' : 'text-zinc-400 hover:text-white'
+                        }`}
+                        title="Align Center"
+                      >
+                        <AlignCenter className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setTextAlign('right')}
+                        className={`flex-1 py-1.5 rounded-md flex items-center justify-center cursor-pointer transition-colors ${
+                          textAlign === 'right' ? 'bg-violet-600/20 text-violet-400' : 'text-zinc-400 hover:text-white'
+                        }`}
+                        title="Align Right"
+                      >
+                        <AlignRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Letter Spacing */}
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[10px] text-zinc-500">Letter Spacing</label>
+                    <span className="text-[10px] text-zinc-400 font-mono">{letterSpacing}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="-200"
+                    max="500"
+                    value={letterSpacing}
+                    onChange={(e) => handleLetterSpacingChange(parseInt(e.target.value))}
+                    className="w-full accent-violet-500 h-1 rounded-full cursor-pointer bg-zinc-800"
+                  />
+                </div>
+
+                {/* Line Height */}
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[10px] text-zinc-500">Line Height</label>
+                    <span className="text-[10px] text-zinc-400 font-mono">{lineHeight.toFixed(1)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="3"
+                    step="0.1"
+                    value={lineHeight}
+                    onChange={(e) => handleLineHeightChange(parseFloat(e.target.value))}
+                    className="w-full accent-violet-500 h-1 rounded-full cursor-pointer bg-zinc-800"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* Stroke Settings Area - Hidden for text and line */}
+      {!isText && (
+        <>
+          <div className="h-[1px] bg-zinc-800" />
+
+          <div className="flex flex-col gap-2">
+            <SectionHeader title="Border" sectionKey="stroke" icon={<Square className="w-4 h-4 text-amber-400" />} />
+            {openSections.stroke && (
+              <div className="flex flex-col gap-3 px-1">
+                {/* Stroke Color */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] text-zinc-500">Border Color</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={strokeColor}
+                      onChange={(e) => setStrokeColor(e.target.value)}
+                      className="w-10 h-10 rounded-lg border border-zinc-700 bg-transparent cursor-pointer"
+                    />
+                    <input
+                      type="text"
+                      value={strokeColor.toUpperCase()}
+                      onChange={(e) => setStrokeColor(e.target.value)}
+                      className="flex-1 bg-zinc-900 border border-zinc-800 focus:border-violet-500 rounded-lg px-3 py-1.5 text-xs text-zinc-200 outline-none text-center font-mono"
+                    />
+                  </div>
+                </div>
+
+                {/* Stroke Width */}
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[10px] text-zinc-500">Border Width</label>
+                    <span className="text-[10px] text-zinc-400 font-mono">{strokeWidth}px</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="30"
+                    value={strokeWidth}
+                    onChange={(e) => setStrokeWidth(parseInt(e.target.value))}
+                    className="w-full accent-violet-500 h-1 rounded-full cursor-pointer bg-zinc-800"
+                  />
+                </div>
+
+                {/* Border Radius (for rectangles) */}
+                {selectedObject.type === 'rect' && (
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex justify-between items-center">
+                      <label className="text-[10px] text-zinc-500">Border Radius</label>
+                      <span className="text-[10px] text-zinc-400 font-mono">{borderRadius}px</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={borderRadius}
+                      onChange={(e) => handleBorderRadiusChange(parseInt(e.target.value))}
+                      className="w-full accent-violet-500 h-1 rounded-full cursor-pointer bg-zinc-800"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      <div className="h-[1px] bg-zinc-800" />
+
+      {/* Effects Section */}
+      <div className="flex flex-col gap-2">
+        <SectionHeader title="Effects" sectionKey="effects" icon={<Layers className="w-4 h-4 text-fuchsia-400" />} />
+        {openSections.effects && (
+          <div className="flex flex-col gap-3 px-1">
+            {/* Opacity slider */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex justify-between items-center">
+                <label className="text-[10px] text-zinc-500">Opacity</label>
+                <span className="text-[10px] text-zinc-400 font-mono">
+                  {Math.round(opacity * 100)}%
+                </span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={opacity}
+                onChange={(e) => setOpacity(parseFloat(e.target.value))}
+                className="w-full accent-violet-500 h-1 rounded-full cursor-pointer bg-zinc-800"
+              />
+            </div>
+
+            {/* Shadow */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[10px] text-zinc-500">Shadow</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={shadowColor}
+                  onChange={(e) => handleShadowChange(shadowBlur, shadowOffsetX, shadowOffsetY, e.target.value)}
+                  className="w-8 h-8 rounded-lg border border-zinc-700 bg-transparent cursor-pointer"
+                />
+                <input
+                  type="text"
+                  value={shadowColor.toUpperCase()}
+                  onChange={(e) => handleShadowChange(shadowBlur, shadowOffsetX, shadowOffsetY, e.target.value)}
+                  className="flex-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-[10px] text-zinc-200 outline-none font-mono"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <div className="flex justify-between items-center">
+                  <label className="text-[10px] text-zinc-500">Blur</label>
+                  <span className="text-[10px] text-zinc-400 font-mono">{shadowBlur}px</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="50"
+                  value={shadowBlur}
+                  onChange={(e) => handleShadowChange(parseInt(e.target.value), shadowOffsetX, shadowOffsetY, shadowColor)}
+                  className="w-full accent-violet-500 h-1 rounded-full cursor-pointer bg-zinc-800"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] text-zinc-500">Offset X</label>
+                  <input
+                    type="number"
+                    value={shadowOffsetX}
+                    onChange={(e) => handleShadowChange(shadowBlur, parseInt(e.target.value) || 0, shadowOffsetY, shadowColor)}
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-[10px] text-zinc-200 outline-none font-mono"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] text-zinc-500">Offset Y</label>
+                  <input
+                    type="number"
+                    value={shadowOffsetY}
+                    onChange={(e) => handleShadowChange(shadowBlur, shadowOffsetX, parseInt(e.target.value) || 0, shadowColor)}
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-[10px] text-zinc-200 outline-none font-mono"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {selectedObject?.type === 'image' && (
+        <>
+          <div className="h-[1px] bg-zinc-800" />
+          <ImageFilters />
+          <div className="h-[1px] bg-zinc-800" />
+          <ImageCropper />
+        </>
+      )}
+
+      <div className="h-[1px] bg-zinc-800" />
+      <div>
+        <h3 className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2 px-1">Alignment & Flip</h3>
+        <AlignmentTools />
+      </div>
+
+      <div className="h-[1px] bg-zinc-800" />
+      <AnimationPanel />
+    </aside>
+  );
+};
