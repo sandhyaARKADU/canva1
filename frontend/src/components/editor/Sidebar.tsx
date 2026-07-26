@@ -1,60 +1,33 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Square,
   Type,
   Layers,
   Upload,
   LayoutTemplate,
-  Lock,
-  Unlock,
-  Eye,
-  EyeOff,
-  ChevronUp,
-  ChevronDown,
-  Trash2,
-  Circle,
-  Triangle,
-  Minus,
-  ArrowRight,
-  Star,
   PenTool,
-  Hexagon,
-  Heart,
-  MessageSquare,
   Sparkles,
   Search,
   FileText,
   History,
-  Diamond,
-  Pentagon,
-  Plus,
+  Heart,
   X,
-  Check,
-  Bookmark,
-  Flame,
-  Lock as LockIcon,
-  Camera,
-  Bell,
-  Flag,
-  Cloud,
-  Eye as EyeIcon,
-  Zap,
-  Shield,
-  Award,
-  Quote,
-  ArrowUp,
-  ArrowDown,
-  Pill
+  Loader2,
 } from 'lucide-react';
 import { useEditorStore } from '../../store/useEditorStore';
-import { useCanvasTools } from '../../hooks/useCanvasTools';
 import { fabric } from 'fabric';
 import { PagesPanel } from './PagesPanel';
 import { HistoryPanel } from './HistoryPanel';
+import { ElementsPanel } from './ElementsPanel';
+import { TextToolsPanel } from './TextToolsPanel';
+import { LayerItem } from './LayerItem';
+import { getLayerDisplayName as getDisplayName } from './layerUtils';
 import { SECTOR_TEMPLATES } from '../../data/templates';
 import { apiFetch } from '../../services/apiClient';
+import { applyTemplateToProject } from '../../services/templatesApi';
+import { isTemplateCompatible, getTemplateOrientation } from '../../utils/templateCompatibility';
+import { TEMPLATE_TYPE_OPTIONS } from '../templates/templateConstants';
 
-type Tab = 'templates' | 'elements' | 'shapes' | 'text' | 'draw' | 'uploads' | 'layers' | 'pages' | 'history';
+type Tab = 'templates' | 'elements' | 'text' | 'draw' | 'uploads' | 'layers' | 'pages' | 'history';
 
 interface BackendTemplate {
   id: string;
@@ -68,55 +41,21 @@ interface BackendTemplate {
 }
 
 export const Sidebar: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<Tab>('shapes');
+  const [activeTab, setActiveTab] = useState<Tab>('elements');
   const { canvas, selectedObject, setSelectedObject, saveHistory, updateObjectName, isPenMode, setPenMode } = useEditorStore();
-  const {
-    addRectangle,
-    addRoundedRect,
-    addPillShape,
-    addCircle,
-    addTriangle,
-    addDiamond,
-    addPentagon,
-    addPolygon,
-    addOctagon,
-    addLine,
-    addCross,
-    addArrow,
-    addArrowUp,
-    addArrowDown,
-    addStar,
-    addHeart,
-    addBadge,
-    addShield,
-    addSpeechBubble,
-    addCloud,
-    addLightning,
-    addQuote,
-    addBookmark,
-    addFlame,
-    addCheckmark,
-    addXMark,
-    addPlusMark,
-    addMinusMark,
-    addEye,
-    addLock,
-    addCamera,
-    addBell,
-    addFlag,
-    addText
-  } = useCanvasTools();
 
   // Local state for layers list
   const [layers, setLayers] = useState<fabric.Object[]>([]);
   const [uploadedImages, setUploadedImages] = useState<Array<{ id: string; src: string; name: string }>>([]);
-  const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState('');
   const [layerSearchQuery, setLayerSearchQuery] = useState('');
   const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
   const [backendTemplates, setBackendTemplates] = useState<BackendTemplate[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [templatesError, setTemplatesError] = useState('');
+  const [templateSearch, setTemplateSearch] = useState('');
+  const [templateTypeFilter, setTemplateTypeFilter] = useState('all');
+  const [applyingTemplateId, setApplyingTemplateId] = useState<string | null>(null);
+  const [templateFavourites, setTemplateFavourites] = useState<Set<string>>(new Set());
 
   const getStableLayerId = useCallback((obj: fabric.Object) => {
     let id = obj.get('id' as any) as string | undefined;
@@ -133,7 +72,9 @@ export const Sidebar: React.FC = () => {
       return;
     }
     canvas.getObjects().forEach((obj) => getStableLayerId(obj));
-    setLayers([...canvas.getObjects()].reverse());
+    setLayers([
+      ...canvas.getObjects().filter((object) => object.get('generatedEffectLayer' as keyof fabric.Object) !== true),
+    ].reverse());
   }, [canvas, getStableLayerId]);
 
   // Update layers list on canvas changes
@@ -164,7 +105,20 @@ export const Sidebar: React.FC = () => {
     setTemplatesLoading(true);
     setTemplatesError('');
     try {
-      const response = await apiFetch('/api/templates?limit=48', { auth: false });
+      const params = new URLSearchParams({ limit: '48' });
+      if (canvas) {
+        const cw = canvas.getWidth();
+        const ch = canvas.getHeight();
+        if (cw > 0 && ch > 0) {
+          params.set('min_width', String(Math.round(cw * 0.5)));
+          params.set('max_width', String(Math.round(cw * 2)));
+          params.set('min_height', String(Math.round(ch * 0.5)));
+          params.set('max_height', String(Math.round(ch * 2)));
+        }
+      }
+      if (templateSearch.trim()) params.set('search', templateSearch.trim());
+      if (templateTypeFilter !== 'all') params.set('type', templateTypeFilter);
+      const response = await apiFetch(`/api/templates?${params.toString()}`, { auth: false });
       const data = await response.json().catch(() => null);
       if (!response.ok) {
         throw new Error(data?.detail || data?.error || `Failed to load templates (${response.status})`);
@@ -176,13 +130,13 @@ export const Sidebar: React.FC = () => {
     } finally {
       setTemplatesLoading(false);
     }
-  }, []);
+  }, [canvas, templateSearch, templateTypeFilter]);
 
   useEffect(() => {
-    if (activeTab === 'templates' && backendTemplates.length === 0 && !templatesLoading) {
+    if (activeTab === 'templates') {
       fetchBackendTemplates();
     }
-  }, [activeTab, backendTemplates.length, fetchBackendTemplates, templatesLoading]);
+  }, [activeTab, fetchBackendTemplates]);
 
   // Manage Drawing Mode
   const [brushColor, setBrushColor] = useState('#8b5cf6');
@@ -264,43 +218,43 @@ export const Sidebar: React.FC = () => {
   };
 
   // Layer Ordering Operations
-  const moveLayerUp = (obj: fabric.Object) => {
+  const moveLayerUp = useCallback((obj: fabric.Object) => {
     if (!canvas) return;
     canvas.bringForward(obj);
     canvas.setActiveObject(obj);
     canvas.renderAll();
     refreshLayers();
     saveHistory();
-  };
+  }, [canvas, refreshLayers, saveHistory]);
 
-  const moveLayerDown = (obj: fabric.Object) => {
+  const moveLayerDown = useCallback((obj: fabric.Object) => {
     if (!canvas) return;
     canvas.sendBackwards(obj);
     canvas.setActiveObject(obj);
     canvas.renderAll();
     refreshLayers();
     saveHistory();
-  };
+  }, [canvas, refreshLayers, saveHistory]);
 
-  const moveLayerToFront = (obj: fabric.Object) => {
+  const moveLayerToFront = useCallback((obj: fabric.Object) => {
     if (!canvas) return;
     canvas.bringToFront(obj);
     canvas.setActiveObject(obj);
     canvas.renderAll();
     refreshLayers();
     saveHistory();
-  };
+  }, [canvas, refreshLayers, saveHistory]);
 
-  const moveLayerToBack = (obj: fabric.Object) => {
+  const moveLayerToBack = useCallback((obj: fabric.Object) => {
     if (!canvas) return;
     canvas.sendToBack(obj);
     canvas.setActiveObject(obj);
     canvas.renderAll();
     refreshLayers();
     saveHistory();
-  };
+  }, [canvas, refreshLayers, saveHistory]);
 
-  const moveLayerToDisplayIndex = (obj: fabric.Object, displayIndex: number) => {
+  const moveLayerToDisplayIndex = useCallback((obj: fabric.Object, displayIndex: number) => {
     if (!canvas) return;
     const objects = canvas.getObjects();
     const targetCanvasIndex = Math.max(0, Math.min(objects.length - 1, objects.length - 1 - displayIndex));
@@ -309,9 +263,9 @@ export const Sidebar: React.FC = () => {
     canvas.renderAll();
     refreshLayers();
     saveHistory();
-  };
+  }, [canvas, refreshLayers, saveHistory]);
 
-  const toggleLayerLock = (obj: fabric.Object) => {
+  const toggleLayerLock = useCallback((obj: fabric.Object) => {
     if (!canvas) return;
     const isLocked = !obj.lockMovementX;
     
@@ -332,9 +286,9 @@ export const Sidebar: React.FC = () => {
     canvas.renderAll();
     refreshLayers();
     saveHistory();
-  };
+  }, [canvas, refreshLayers, saveHistory]);
 
-  const toggleLayerVisibility = (obj: fabric.Object) => {
+  const toggleLayerVisibility = useCallback((obj: fabric.Object) => {
     if (!canvas) return;
     obj.set('visible', !obj.visible);
     
@@ -345,16 +299,16 @@ export const Sidebar: React.FC = () => {
     canvas.renderAll();
     refreshLayers();
     saveHistory();
-  };
+  }, [canvas, refreshLayers, saveHistory]);
 
-  const deleteLayer = (obj: fabric.Object) => {
+  const deleteLayer = useCallback((obj: fabric.Object) => {
     if (!canvas) return;
     canvas.remove(obj);
     canvas.discardActiveObject();
     canvas.renderAll();
     refreshLayers();
     saveHistory();
-  };
+  }, [canvas, refreshLayers, saveHistory]);
 
   // Bulk layer operations
   const lockAllLayers = () => {
@@ -371,6 +325,7 @@ export const Sidebar: React.FC = () => {
     });
     canvas.discardActiveObject();
     canvas.renderAll();
+    refreshLayers();
     saveHistory();
   };
 
@@ -387,51 +342,8 @@ export const Sidebar: React.FC = () => {
       } as any);
     });
     canvas.renderAll();
+    refreshLayers();
     saveHistory();
-  };
-
-  const getLayerName = (obj: fabric.Object, index: number) => {
-    const customName = (obj as any).get('name');
-    if (customName) return customName;
-
-    if (obj.type === 'textbox' || obj.type === 'text') {
-      const textObj = obj as fabric.Textbox;
-      return `Text: "${textObj.text?.substring(0, 15) || '...'}"`;
-    }
-    if (obj.type === 'image') return `Image ${index + 1}`;
-    if (obj.type === 'path') return `Path Shape ${index + 1}`;
-    const typeStr = obj.type || 'layer';
-    return typeStr.charAt(0).toUpperCase() + typeStr.slice(1) + ` ${index + 1}`;
-  };
-
-  const finishRenaming = (layerId: string) => {
-    if (renameValue.trim()) {
-      updateObjectName(layerId, renameValue.trim());
-    }
-    setEditingLayerId(null);
-  };
-
-  const getLayerIcon = (type: string) => {
-    switch (type) {
-      case 'text':
-      case 'textbox':
-      case 'i-text':
-        return Type;
-      case 'image':
-        return Upload;
-      case 'rect':
-        return Square;
-      case 'circle':
-        return Circle;
-      case 'triangle':
-        return Triangle;
-      case 'line':
-        return Minus;
-      case 'path':
-        return PenTool;
-      default:
-        return Hexagon;
-    }
   };
 
   // Load a sector template from templates.ts
@@ -496,6 +408,35 @@ export const Sidebar: React.FC = () => {
       refreshLayers();
       apiFetch(`/api/templates/${template.id}/use`, { method: 'POST', auth: false }).catch(() => undefined);
     });
+  };
+
+  const handleApplyTemplate = async (template: BackendTemplate) => {
+    if (!canvas || !template.data || applyingTemplateId) return;
+    const projectId = useEditorStore.getState().projectId;
+    if (!projectId || projectId.startsWith('local_')) {
+      // For local projects, load directly onto canvas
+      loadBackendTemplate(template);
+      return;
+    }
+    setApplyingTemplateId(template.id);
+    try {
+      await applyTemplateToProject(template.id, projectId);
+      // Reload the canvas with the new template data
+      canvas.loadFromJSON(template.data, () => {
+        canvas.setWidth(template.width || 800);
+        canvas.setHeight(template.height || 800);
+        canvas.renderAll();
+        saveHistory();
+        refreshLayers();
+        useEditorStore.getState().setCanvasDimensions(template.width || 800, template.height || 800);
+      });
+    } catch (error) {
+      console.error('Failed to apply template:', error);
+      // Fallback: load directly onto canvas
+      loadBackendTemplate(template);
+    } finally {
+      setApplyingTemplateId(null);
+    }
   };
 
   // Preset Template loader (legacy)
@@ -660,13 +601,12 @@ export const Sidebar: React.FC = () => {
   };
 
   return (
-    <aside className="w-80 h-full border-r border-zinc-800 bg-[#121214] flex select-none shrink-0 z-10">
+    <aside className="w-80 h-full border-r border-white/[0.08] bg-[#101018] flex select-none shrink-0 z-10">
       {/* Icon Tab Strip */}
-      <div className="w-16 h-full border-r border-zinc-800 bg-[#121214] flex flex-col items-center py-4 gap-4 shrink-0">
+      <div className="w-16 h-full border-r border-white/[0.08] bg-[#101018] flex flex-col items-center py-4 gap-4 shrink-0">
         {[
           { id: 'templates', icon: LayoutTemplate, label: 'Templates' },
           { id: 'elements', icon: Sparkles, label: 'Elements' },
-          { id: 'shapes', icon: Square, label: 'Shapes' },
           { id: 'text', icon: Type, label: 'Text' },
           { id: 'draw', icon: PenTool, label: 'Draw' },
           { id: 'uploads', icon: Upload, label: 'Uploads' },
@@ -702,432 +642,155 @@ export const Sidebar: React.FC = () => {
 
         {/* Templates Tab */}
         {activeTab === 'templates' && (
-          <div className="flex flex-col gap-4">
-            <p className="text-[10px] text-zinc-500">Click a template to load it onto the canvas</p>
+          <div className="flex flex-col gap-3">
+            {/* Search */}
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
+              <input
+                type="text"
+                placeholder="Search templates..."
+                value={templateSearch}
+                onChange={(e) => setTemplateSearch(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') fetchBackendTemplates(); }}
+                className="w-full bg-zinc-950 border border-white/[0.08] focus:border-violet-500 rounded-lg py-1.5 pl-8 pr-8 text-xs text-zinc-200 outline-none transition-colors placeholder:text-zinc-600"
+              />
+              {templateSearch && (
+                <button onClick={() => { setTemplateSearch(''); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300">
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
 
-            {templatesLoading && (
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3 text-[10px] text-zinc-400">
-                Loading backend templates...
+            {/* Type filter tabs */}
+            <div className="flex gap-1 overflow-x-auto pb-1 -mx-1 px-1">
+              {TEMPLATE_TYPE_OPTIONS.slice(0, 6).map((type) => (
+                <button
+                  key={type.id}
+                  onClick={() => setTemplateTypeFilter(type.id)}
+                  className={`shrink-0 rounded-full border px-2.5 py-1 text-[9px] font-semibold transition-colors ${
+                    templateTypeFilter === type.id
+                      ? 'border-violet-400/60 bg-violet-500/15 text-violet-200'
+                      : 'border-white/[0.08] bg-zinc-950/70 text-zinc-500 hover:text-zinc-300'
+                  }`}
+                >
+                  {type.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Canvas dimensions info */}
+            {canvas && (
+              <div className="flex items-center justify-between rounded-lg border border-white/[0.08] bg-[#12121B]/40 px-2.5 py-1.5">
+                <span className="text-[9px] text-zinc-500">Canvas: {Math.round(canvas.getWidth())} × {Math.round(canvas.getHeight())}</span>
+                <button onClick={fetchBackendTemplates} className="text-[9px] font-semibold text-violet-300 hover:text-violet-200">
+                  Refresh
+                </button>
               </div>
             )}
 
+            {/* Loading */}
+            {templatesLoading && (
+              <div className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-[#12121B]/40 p-3 text-[10px] text-zinc-400">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Loading templates...
+              </div>
+            )}
+
+            {/* Error */}
             {templatesError && (
               <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-[10px] text-red-200">
                 {templatesError}
               </div>
             )}
 
+            {/* Backend Templates Grid */}
             {backendTemplates.length > 0 && (
-              <div>
-                <div className="mb-2 flex items-center justify-between">
-                  <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Backend Templates</h4>
-                  <button onClick={fetchBackendTemplates} className="text-[10px] font-semibold text-violet-300 hover:text-violet-200">
-                    Refresh
-                  </button>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  {backendTemplates.map((template) => (
-                    <button
+              <div className="grid grid-cols-2 gap-2">
+                {backendTemplates.map((template) => {
+                  const orientation = getTemplateOrientation(template.width, template.height);
+                  const isCompatible = canvas ? isTemplateCompatible(template.width, template.height, canvas.getWidth(), canvas.getHeight()) : true;
+                  const isApplying = applyingTemplateId === template.id;
+                  return (
+                    <div
                       key={template.id}
-                      onClick={() => loadBackendTemplate(template)}
-                      className="group text-left border border-zinc-800 hover:border-violet-500 rounded-xl overflow-hidden bg-zinc-900/40 p-2 transition-colors cursor-pointer"
+                      className={`group relative flex flex-col overflow-hidden rounded-xl border transition-all cursor-pointer ${
+                        isCompatible
+                          ? 'border-white/[0.08] hover:border-violet-500 bg-[#12121B]/40'
+                          : 'border-white/[0.08]/50 bg-[#12121B]/20 opacity-60'
+                      }`}
                     >
-                      <div className="h-16 bg-violet-950/60 rounded-lg flex items-center justify-center overflow-hidden">
-                        {template.thumbnail ? (
-                          <img src={template.thumbnail} alt="" className="h-full w-full object-cover" />
-                        ) : (
-                          <LayoutTemplate className="h-5 w-5 text-violet-300" />
-                        )}
+                      <button
+                        onClick={() => handleApplyTemplate(template)}
+                        disabled={isApplying}
+                        className="text-left"
+                      >
+                        <div className={`overflow-hidden rounded-t-xl ${
+                          orientation === 'landscape' ? 'h-14' : orientation === 'square' ? 'h-16' : 'h-20'
+                        }`}>
+                          {template.thumbnail ? (
+                            <img src={template.thumbnail} alt="" className="h-full w-full object-cover transition-transform group-hover:scale-105" />
+                          ) : (
+                            <div className="h-full w-full bg-gradient-to-br from-violet-600/20 to-fuchsia-600/10 flex items-center justify-center">
+                              <LayoutTemplate className="h-5 w-5 text-violet-300/70" />
+                            </div>
+                          )}
+                        </div>
+                      </button>
+                      <div className="p-2">
+                        <p className="text-[9px] font-semibold text-zinc-300 truncate">{template.name}</p>
+                        <div className="flex items-center justify-between mt-1">
+                          <p className="text-[8px] text-zinc-600">{template.width}×{template.height}</p>
+                          {isCompatible && (
+                            <span className="text-[8px] text-emerald-400 font-medium">Match</span>
+                          )}
+                        </div>
+                        <div className="flex gap-1 mt-1.5">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleApplyTemplate(template); }}
+                            disabled={isApplying}
+                            className="flex-1 h-6 rounded-md bg-violet-600 text-[8px] font-bold text-white hover:bg-violet-500 disabled:opacity-50 flex items-center justify-center"
+                          >
+                            {isApplying ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : 'Apply'}
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); loadBackendTemplate(template); }}
+                            className="h-6 rounded-md border border-zinc-700 text-[8px] font-semibold text-zinc-400 hover:text-white hover:border-zinc-500 px-2"
+                          >
+                            Load
+                          </button>
+                        </div>
                       </div>
-                      <p className="text-[9px] text-zinc-300 mt-1 truncate">{template.name}</p>
-                      <p className="text-[8px] text-zinc-600 truncate">{template.width}×{template.height}</p>
-                    </button>
-                  ))}
-                </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
 
-            {!templatesLoading && backendTemplates.length === 0 && (
-              <>
-
-            {/* Sector Templates */}
-            {Object.entries(SECTOR_TEMPLATES).map(([sectorKey, templates]) => (
-              <div key={sectorKey}>
-                <h4 className="text-[10px] font-bold text-zinc-400 mb-2 uppercase tracking-wider capitalize">
-                  {sectorKey.replace(/-/g, ' ')}
-                </h4>
-                <div className="grid grid-cols-2 gap-2">
-                  {templates.map((template: any, idx: number) => (
-                    <button
-                      key={template.id}
-                      onClick={() => loadSectorTemplate(sectorKey, idx)}
-                      className="group text-left border border-zinc-800 hover:border-violet-500 rounded-xl overflow-hidden bg-zinc-900/40 p-2 transition-colors cursor-pointer"
-                    >
-                      <div className="h-16 bg-zinc-800 rounded-lg flex items-center justify-center overflow-hidden">
-                        <span className="text-[9px] font-bold text-zinc-400 group-hover:text-violet-400 transition-colors text-center px-1">
-                          {template.name}
-                        </span>
-                      </div>
-                      <p className="text-[9px] text-zinc-500 mt-1 truncate">{template.name}</p>
-                    </button>
-                  ))}
-                </div>
+            {/* Empty state */}
+            {!templatesLoading && backendTemplates.length === 0 && !templatesError && (
+              <div className="text-center py-6">
+                <LayoutTemplate className="h-8 w-8 text-zinc-700 mx-auto mb-2" />
+                <p className="text-[10px] text-zinc-500">No templates found for current canvas size.</p>
+                <p className="text-[9px] text-zinc-600 mt-1">Try adjusting filters or refresh.</p>
               </div>
-            ))}
-
-            {/* Legacy Templates */}
-            <div>
-              <h4 className="text-[10px] font-bold text-zinc-400 mb-2 uppercase tracking-wider">Quick Templates</h4>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => loadTemplate('instagram')}
-                  className="group text-left border border-zinc-800 hover:border-violet-500 rounded-xl overflow-hidden bg-zinc-900/40 p-2 transition-colors cursor-pointer"
-                >
-                  <div className="h-16 bg-violet-600 rounded-lg flex items-center justify-center">
-                    <span className="text-[9px] font-bold text-white">Instagram</span>
-                  </div>
-                  <p className="text-[9px] text-zinc-500 mt-1">Creative Post</p>
-                </button>
-                <button
-                  onClick={() => loadTemplate('thumbnail')}
-                  className="group text-left border border-zinc-800 hover:border-violet-500 rounded-xl overflow-hidden bg-zinc-900/40 p-2 transition-colors cursor-pointer"
-                >
-                  <div className="h-16 bg-zinc-800 rounded-lg flex items-center justify-center">
-                    <span className="text-[9px] font-bold text-pink-400">YouTube</span>
-                  </div>
-                  <p className="text-[9px] text-zinc-500 mt-1">Thumbnail</p>
-                </button>
-                <button
-                  onClick={() => loadTemplate('card')}
-                  className="group text-left border border-zinc-800 hover:border-violet-500 rounded-xl overflow-hidden bg-zinc-900/40 p-2 transition-colors cursor-pointer"
-                >
-                  <div className="h-16 bg-white rounded-lg flex items-center justify-center">
-                    <span className="text-[9px] font-bold text-zinc-800">Business Card</span>
-                  </div>
-                  <p className="text-[9px] text-zinc-500 mt-1">Card</p>
-                </button>
-              </div>
-            </div>
-              </>
             )}
           </div>
         )}
-
-        {/* Elements Tab */}
+        {/* Elements Tab - includes shapes, stickers, frames, grids, charts, etc. */}
         {activeTab === 'elements' && (
-          <div className="flex flex-col gap-4">
-            {/* Quick Elements */}
-            <div>
-              <h4 className="text-[10px] font-bold text-zinc-400 mb-2 uppercase tracking-wider">Quick Elements</h4>
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  { label: 'Star', desc: '5-point star', onClick: addStar, icon: Star },
-                  { label: 'Heart', desc: 'Classic heart', onClick: addHeart, icon: Heart },
-                  { label: 'Speech Bubble', desc: 'Text callout', onClick: addSpeechBubble, icon: MessageSquare },
-                  { label: 'Arrow', desc: 'Directional', onClick: addArrow, icon: ArrowRight },
-                  { label: 'Badge', desc: 'Hexagonal', onClick: addPolygon, icon: Hexagon },
-                  { label: 'Cloud', desc: 'Cloud shape', onClick: addCloud, icon: Cloud },
-                ].map((item, idx) => {
-                  const Icon = item.icon;
-                  return (
-                    <button
-                      key={idx}
-                      onClick={item.onClick}
-                      className="flex items-center gap-2 p-3 bg-zinc-900/40 border border-zinc-800 hover:border-violet-500/50 hover:bg-zinc-800 rounded-xl transition-all cursor-pointer text-left group"
-                    >
-                      <div className="w-10 h-10 rounded-xl bg-violet-500/10 text-violet-300 flex items-center justify-center group-hover:bg-violet-500/20 transition-colors">
-                        <Icon className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0">
-                        <h4 className="text-xs font-semibold text-zinc-200 truncate">{item.label}</h4>
-                        <p className="text-[9px] text-zinc-500">{item.desc}</p>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Symbols */}
-            <div>
-              <h4 className="text-[10px] font-bold text-zinc-400 mb-2 uppercase tracking-wider">Symbols</h4>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { onClick: addCheckmark, label: 'Check', icon: Check },
-                  { onClick: addXMark, label: 'X Mark', icon: X },
-                  { onClick: addPlusMark, label: 'Plus', icon: Plus },
-                  { onClick: addMinusMark, label: 'Minus', icon: Minus },
-                  { onClick: addEye, label: 'Eye', icon: EyeIcon },
-                  { onClick: addLock, label: 'Lock', icon: LockIcon },
-                  { onClick: addFlame, label: 'Flame', icon: Flame },
-                  { onClick: addShield, label: 'Shield', icon: Shield },
-                  { onClick: addBookmark, label: 'Bookmark', icon: Bookmark },
-                  { onClick: addQuote, label: 'Quote', icon: Quote },
-                  { onClick: addCamera, label: 'Camera', icon: Camera },
-                  { onClick: addBell, label: 'Bell', icon: Bell },
-                ].map((shape, idx) => {
-                  const Icon = shape.icon;
-                  return (
-                    <button
-                      key={idx}
-                      onClick={shape.onClick}
-                      className="flex flex-col items-center justify-center p-3 bg-zinc-900/40 border border-zinc-800 hover:border-violet-500/50 hover:bg-zinc-800 rounded-xl transition-all cursor-pointer group"
-                    >
-                      <div className="text-zinc-400 group-hover:text-violet-400 transition-colors">
-                        <Icon className="w-5 h-5" />
-                      </div>
-                      <span className="text-[10px] font-semibold text-zinc-300 mt-1">{shape.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Arrows */}
-            <div>
-              <h4 className="text-[10px] font-bold text-zinc-400 mb-2 uppercase tracking-wider">Arrows</h4>
-              <div className="grid grid-cols-4 gap-2">
-                {[
-                  { onClick: addArrow, label: 'Right', icon: ArrowRight },
-                  { onClick: addArrowUp, label: 'Up', icon: ArrowUp },
-                  { onClick: addArrowDown, label: 'Down', icon: ArrowDown },
-                  { onClick: addFlag, label: 'Flag', icon: Flag },
-                ].map((shape, idx) => {
-                  const Icon = shape.icon;
-                  return (
-                    <button
-                      key={idx}
-                      onClick={shape.onClick}
-                      className="flex flex-col items-center justify-center p-3 bg-zinc-900/40 border border-zinc-800 hover:border-violet-500/50 hover:bg-zinc-800 rounded-xl transition-all cursor-pointer group"
-                    >
-                      <div className="text-zinc-400 group-hover:text-violet-400 transition-colors">
-                        <Icon className="w-5 h-5" />
-                      </div>
-                      <span className="text-[9px] font-semibold text-zinc-300 mt-1">{shape.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Shapes Tab */}
-        {activeTab === 'shapes' && (
-          <div className="flex flex-col gap-4">
-            {/* Basic Shapes */}
-            <div>
-              <h4 className="text-[10px] font-bold text-zinc-400 mb-2 uppercase tracking-wider">Basic</h4>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { onClick: addRectangle, label: 'Rectangle', icon: Square },
-                  { onClick: addRoundedRect, label: 'Rounded', icon: Square },
-                  { onClick: addPillShape, label: 'Pill', icon: Pill },
-                  { onClick: addCircle, label: 'Circle', icon: Circle },
-                  { onClick: addTriangle, label: 'Triangle', icon: Triangle },
-                  { onClick: addLine, label: 'Line', icon: Minus },
-                ].map((shape, idx) => {
-                  const Icon = shape.icon;
-                  return (
-                    <button
-                      key={idx}
-                      onClick={shape.onClick}
-                      className="flex flex-col items-center justify-center p-3 bg-zinc-900/40 border border-zinc-800 hover:border-violet-500/50 hover:bg-zinc-800 rounded-xl transition-all cursor-pointer group"
-                    >
-                      <div className="text-zinc-400 group-hover:text-violet-400 transition-colors">
-                        <Icon className="w-5 h-5" />
-                      </div>
-                      <span className="text-[10px] font-semibold text-zinc-300 mt-1">{shape.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Polygons */}
-            <div>
-              <h4 className="text-[10px] font-bold text-zinc-400 mb-2 uppercase tracking-wider">Polygons</h4>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { onClick: addDiamond, label: 'Diamond', icon: Diamond },
-                  { onClick: addPentagon, label: 'Pentagon', icon: Pentagon },
-                  { onClick: addPolygon, label: 'Hexagon', icon: Hexagon },
-                  { onClick: addOctagon, label: 'Octagon', icon: Hexagon },
-                  { onClick: addCross, label: 'Cross', icon: Plus },
-                  { onClick: addBadge, label: 'Badge', icon: Award },
-                ].map((shape, idx) => {
-                  const Icon = shape.icon;
-                  return (
-                    <button
-                      key={idx}
-                      onClick={shape.onClick}
-                      className="flex flex-col items-center justify-center p-3 bg-zinc-900/40 border border-zinc-800 hover:border-violet-500/50 hover:bg-zinc-800 rounded-xl transition-all cursor-pointer group"
-                    >
-                      <div className="text-zinc-400 group-hover:text-violet-400 transition-colors">
-                        <Icon className="w-5 h-5" />
-                      </div>
-                      <span className="text-[10px] font-semibold text-zinc-300 mt-1">{shape.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Arrows & Direction */}
-            <div>
-              <h4 className="text-[10px] font-bold text-zinc-400 mb-2 uppercase tracking-wider">Arrows</h4>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { onClick: addArrow, label: 'Right', icon: ArrowRight },
-                  { onClick: addArrowUp, label: 'Up', icon: ArrowUp },
-                  { onClick: addArrowDown, label: 'Down', icon: ArrowDown },
-                ].map((shape, idx) => {
-                  const Icon = shape.icon;
-                  return (
-                    <button
-                      key={idx}
-                      onClick={shape.onClick}
-                      className="flex flex-col items-center justify-center p-3 bg-zinc-900/40 border border-zinc-800 hover:border-violet-500/50 hover:bg-zinc-800 rounded-xl transition-all cursor-pointer group"
-                    >
-                      <div className="text-zinc-400 group-hover:text-violet-400 transition-colors">
-                        <Icon className="w-5 h-5" />
-                      </div>
-                      <span className="text-[10px] font-semibold text-zinc-300 mt-1">{shape.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Symbols & Icons */}
-            <div>
-              <h4 className="text-[10px] font-bold text-zinc-400 mb-2 uppercase tracking-wider">Symbols</h4>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { onClick: addHeart, label: 'Heart', icon: Heart },
-                  { onClick: addStar, label: 'Star', icon: Star },
-                  { onClick: addFlame, label: 'Flame', icon: Flame },
-                  { onClick: addShield, label: 'Shield', icon: Shield },
-                  { onClick: addBookmark, label: 'Bookmark', icon: Bookmark },
-                  { onClick: addQuote, label: 'Quote', icon: Quote },
-                ].map((shape, idx) => {
-                  const Icon = shape.icon;
-                  return (
-                    <button
-                      key={idx}
-                      onClick={shape.onClick}
-                      className="flex flex-col items-center justify-center p-3 bg-zinc-900/40 border border-zinc-800 hover:border-violet-500/50 hover:bg-zinc-800 rounded-xl transition-all cursor-pointer group"
-                    >
-                      <div className="text-zinc-400 group-hover:text-violet-400 transition-colors">
-                        <Icon className="w-5 h-5" />
-                      </div>
-                      <span className="text-[10px] font-semibold text-zinc-300 mt-1">{shape.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* UI Icons */}
-            <div>
-              <h4 className="text-[10px] font-bold text-zinc-400 mb-2 uppercase tracking-wider">UI Icons</h4>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { onClick: addCheckmark, label: 'Check', icon: Check },
-                  { onClick: addXMark, label: 'X Mark', icon: X },
-                  { onClick: addPlusMark, label: 'Plus', icon: Plus },
-                  { onClick: addMinusMark, label: 'Minus', icon: Minus },
-                  { onClick: addEye, label: 'Eye', icon: EyeIcon },
-                  { onClick: addLock, label: 'Lock', icon: LockIcon },
-                ].map((shape, idx) => {
-                  const Icon = shape.icon;
-                  return (
-                    <button
-                      key={idx}
-                      onClick={shape.onClick}
-                      className="flex flex-col items-center justify-center p-3 bg-zinc-900/40 border border-zinc-800 hover:border-violet-500/50 hover:bg-zinc-800 rounded-xl transition-all cursor-pointer group"
-                    >
-                      <div className="text-zinc-400 group-hover:text-violet-400 transition-colors">
-                        <Icon className="w-5 h-5" />
-                      </div>
-                      <span className="text-[10px] font-semibold text-zinc-300 mt-1">{shape.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Communication */}
-            <div>
-              <h4 className="text-[10px] font-bold text-zinc-400 mb-2 uppercase tracking-wider">Communication</h4>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { onClick: addSpeechBubble, label: 'Bubble', icon: MessageSquare },
-                  { onClick: addCloud, label: 'Cloud', icon: Cloud },
-                  { onClick: addLightning, label: 'Lightning', icon: Zap },
-                  { onClick: addCamera, label: 'Camera', icon: Camera },
-                  { onClick: addBell, label: 'Bell', icon: Bell },
-                  { onClick: addFlag, label: 'Flag', icon: Flag },
-                ].map((shape, idx) => {
-                  const Icon = shape.icon;
-                  return (
-                    <button
-                      key={idx}
-                      onClick={shape.onClick}
-                      className="flex flex-col items-center justify-center p-3 bg-zinc-900/40 border border-zinc-800 hover:border-violet-500/50 hover:bg-zinc-800 rounded-xl transition-all cursor-pointer group"
-                    >
-                      <div className="text-zinc-400 group-hover:text-violet-400 transition-colors">
-                        <Icon className="w-5 h-5" />
-                      </div>
-                      <span className="text-[10px] font-semibold text-zinc-300 mt-1">{shape.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
+          <ElementsPanel />
         )}
 
         {/* Text Tab */}
         {activeTab === 'text' && (
-          <div className="flex flex-col gap-3">
-            <button
-              onClick={() => addText('heading')}
-              className="w-full text-left p-4 bg-zinc-900/40 border border-zinc-800 hover:border-violet-500/50 hover:bg-zinc-800/40 rounded-xl transition-colors cursor-pointer group"
-            >
-              <h1 className="text-xl font-bold text-white leading-none m-0 group-hover:text-violet-400 transition-colors">
-                Add a heading
-              </h1>
-              <span className="text-[10px] text-zinc-500 mt-1 block">54px Outfit Bold</span>
-            </button>
-
-            <button
-              onClick={() => addText('subheading')}
-              className="w-full text-left p-4 bg-zinc-900/40 border border-zinc-800 hover:border-violet-500/50 hover:bg-zinc-800/40 rounded-xl transition-colors cursor-pointer group"
-            >
-              <h2 className="text-sm font-semibold text-zinc-200 leading-none m-0 group-hover:text-violet-400 transition-colors">
-                Add a subheading
-              </h2>
-              <span className="text-[10px] text-zinc-500 mt-1 block">36px Outfit Semi-Bold</span>
-            </button>
-
-            <button
-              onClick={() => addText('body')}
-              className="w-full text-left p-4 bg-zinc-900/40 border border-zinc-800 hover:border-violet-500/50 hover:bg-zinc-800/40 rounded-xl transition-colors cursor-pointer group"
-            >
-              <p className="text-xs text-zinc-400 leading-none m-0 group-hover:text-violet-400 transition-colors">
-                Add body text
-              </p>
-              <span className="text-[10px] text-zinc-500 mt-1 block">28px Outfit Normal</span>
-            </button>
-          </div>
+          <TextToolsPanel />
         )}
 
         {/* Draw Tab */}
         {activeTab === 'draw' && (
           <div className="flex flex-col gap-5">
             {/* Draw mode selector buttons */}
-            <div className="grid grid-cols-2 gap-2 border border-zinc-800 rounded-lg p-0.5 bg-zinc-950">
+            <div className="grid grid-cols-2 gap-2 border border-white/[0.08] rounded-lg p-0.5 bg-zinc-950">
               <button
                 onClick={() => {
                   setPenMode(false);
@@ -1135,7 +798,7 @@ export const Sidebar: React.FC = () => {
                 }}
                 className={`py-1.5 rounded-md text-xs font-semibold flex items-center justify-center gap-1 cursor-pointer transition-all ${
                   (!isPenMode && canvas?.isDrawingMode)
-                    ? 'bg-zinc-850 text-violet-400 border border-zinc-800 shadow-sm'
+                    ? 'bg-zinc-850 text-violet-400 border border-white/[0.08] shadow-sm'
                     : 'text-zinc-500 hover:text-zinc-300'
                 }`}
               >
@@ -1149,7 +812,7 @@ export const Sidebar: React.FC = () => {
                 }}
                 className={`py-1.5 rounded-md text-xs font-semibold flex items-center justify-center gap-1 cursor-pointer transition-all ${
                   isPenMode
-                    ? 'bg-zinc-850 text-violet-400 border border-zinc-800 shadow-sm'
+                    ? 'bg-zinc-850 text-violet-400 border border-white/[0.08] shadow-sm'
                     : 'text-zinc-500 hover:text-zinc-300'
                 }`}
               >
@@ -1187,7 +850,7 @@ export const Sidebar: React.FC = () => {
                   type="text"
                   value={brushColor.toUpperCase()}
                   onChange={(e) => setBrushColor(e.target.value)}
-                  className="flex-1 bg-zinc-900 border border-zinc-800 focus:border-violet-500 rounded-lg px-3 py-1.5 text-sm text-zinc-200 outline-none text-center font-mono"
+                  className="flex-1 bg-[#12121B] border border-white/[0.08] focus:border-violet-500 rounded-lg px-3 py-1.5 text-sm text-zinc-200 outline-none text-center font-mono"
                 />
               </div>
             </div>
@@ -1212,7 +875,7 @@ export const Sidebar: React.FC = () => {
         {/* Uploads Tab */}
         {activeTab === 'uploads' && (
           <div className="flex flex-col gap-4">
-            <label className="border-2 border-dashed border-zinc-800 hover:border-violet-500 hover:bg-violet-500/5 rounded-xl p-6 flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors text-center">
+            <label className="border-2 border-dashed border-white/[0.08] hover:border-violet-500 hover:bg-violet-500/5 rounded-xl p-6 flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors text-center">
               <Upload className="w-6 h-6 text-zinc-400" />
               <span className="text-xs font-semibold text-zinc-300">Upload Files</span>
               <span className="text-[10px] text-zinc-500">Supports PNG, JPG, JPEG</span>
@@ -1259,7 +922,7 @@ export const Sidebar: React.FC = () => {
                         event.dataTransfer.setData('imageName', image.name);
                         event.dataTransfer.effectAllowed = 'copy';
                       }}
-                      className="group overflow-hidden rounded-xl border border-zinc-800 hover:border-violet-500 transition-all"
+                      className="group overflow-hidden rounded-xl border border-white/[0.08] hover:border-violet-500 transition-all"
                       title={`Add ${image.name}`}
                     >
                       <img src={image.src} alt={image.name} className="h-20 w-full object-cover" />
@@ -1287,7 +950,7 @@ export const Sidebar: React.FC = () => {
                 placeholder="Filter layers..."
                 value={layerSearchQuery}
                 onChange={(e) => setLayerSearchQuery(e.target.value)}
-                className="w-full bg-zinc-950 border border-zinc-800 hover:border-zinc-750 focus:border-violet-500 rounded-lg py-1.5 pl-8 pr-3 text-xs text-zinc-205 outline-none transition-colors placeholder:text-zinc-600"
+                className="w-full bg-zinc-950 border border-white/[0.08] hover:border-zinc-750 focus:border-violet-500 rounded-lg py-1.5 pl-8 pr-3 text-xs text-zinc-205 outline-none transition-colors placeholder:text-zinc-600"
               />
             </div>
 
@@ -1298,148 +961,77 @@ export const Sidebar: React.FC = () => {
             ) : (
               <>
                 <div className="flex items-center gap-2">
-                  <button onClick={lockAllLayers} className="text-[10px] font-bold bg-zinc-900/60 border border-zinc-800 px-3 py-1.5 rounded-lg hover:bg-zinc-800 transition-colors">Lock all</button>
-                  <button onClick={unlockAllLayers} className="text-[10px] font-bold bg-zinc-900/60 border border-zinc-800 px-3 py-1.5 rounded-lg hover:bg-zinc-800 transition-colors">Unlock all</button>
+                  <button onClick={lockAllLayers} className="text-[10px] font-bold bg-[#12121B]/60 border border-white/[0.08] px-3 py-1.5 rounded-lg hover:bg-zinc-800 transition-colors">Lock all</button>
+                  <button onClick={unlockAllLayers} className="text-[10px] font-bold bg-[#12121B]/60 border border-white/[0.08] px-3 py-1.5 rounded-lg hover:bg-zinc-800 transition-colors">Unlock all</button>
                 </div>
 
-                <div className="flex flex-col gap-1.5 max-h-[450px] overflow-y-auto pr-1">
+                <div className="layers-panel-container flex min-h-0 max-h-[450px] flex-col gap-2 overflow-y-auto pr-1">
                   {layers
                     .map((layer, index) => ({ layer, index }))
                     .filter(({ layer, index }) => 
-                      getLayerName(layer, index).toLowerCase().includes(layerSearchQuery.toLowerCase())
+                      getDisplayName(layer, index).toLowerCase().includes(layerSearchQuery.toLowerCase())
                     )
                     .map(({ layer, index }) => {
-                      const isSelected = selectedObject === layer;
-                      const isLocked = layer.lockMovementX;
-                      const isVisible = layer.visible !== false;
                       const layerId = getStableLayerId(layer);
-                      const LayerIcon = getLayerIcon(layer.type || 'layer');
-
                       return (
-                        <div
+                        <LayerItem
                           key={layerId}
-                          draggable={!editingLayerId}
-                          onDragStart={(event) => {
-                            event.dataTransfer.setData('layerId', layerId);
+                          layer={layer}
+                          layerId={layerId}
+                          displayIndex={index}
+                          totalLayers={layers.length}
+                          selected={selectedObject === layer}
+                          locked={Boolean(layer.lockMovementX)}
+                          visible={layer.visible !== false}
+                          dragging={draggedLayerId === layerId}
+                          onSelect={(object) => {
+                            if (!canvas || object.visible === false) return;
+                            canvas.setActiveObject(object);
+                            canvas.renderAll();
+                            setSelectedObject(object);
+                          }}
+                          onRename={(id, name) => {
+                            const object = canvas?.getObjects().find((item) => getStableLayerId(item) === id);
+                            if (object) {
+                              updateObjectName(id, name);
+                              object.set('name', name);
+                              canvas?.renderAll();
+                              refreshLayers();
+                              saveHistory();
+                            }
+                          }}
+                          onToggleVisibility={toggleLayerVisibility}
+                          onToggleLock={toggleLayerLock}
+                          onMoveUp={(object, toFront) => toFront ? moveLayerToFront(object) : moveLayerUp(object)}
+                          onMoveDown={(object, toBack) => toBack ? moveLayerToBack(object) : moveLayerDown(object)}
+                          onDelete={deleteLayer}
+                          onNavigate={(object, direction) => {
+                            const currentIndex = layers.indexOf(object);
+                            const next = layers[currentIndex + direction];
+                            if (next && next.visible !== false) {
+                              canvas?.setActiveObject(next);
+                              canvas?.renderAll();
+                              setSelectedObject(next);
+                            }
+                          }}
+                          onDragStart={(id, event) => {
+                            event.dataTransfer.setData('layerId', id);
                             event.dataTransfer.effectAllowed = 'move';
-                            setDraggedLayerId(layerId);
+                            setDraggedLayerId(id);
                           }}
                           onDragOver={(event) => {
                             event.preventDefault();
                             event.dataTransfer.dropEffect = 'move';
                           }}
-                          onDrop={(event) => {
+                          onDrop={(object, targetIndex, event) => {
                             event.preventDefault();
-                            const sourceLayerId = event.dataTransfer.getData('layerId') || draggedLayerId;
-                            if (!canvas || !sourceLayerId || sourceLayerId === layerId) return;
-                            const sourceObject = canvas.getObjects().find((object) => getStableLayerId(object) === sourceLayerId);
-                            if (sourceObject) moveLayerToDisplayIndex(sourceObject, index);
+                            const sourceId = event.dataTransfer.getData('layerId') || draggedLayerId;
+                            const source = canvas?.getObjects().find((item) => getStableLayerId(item) === sourceId);
+                            if (source && source !== object) moveLayerToDisplayIndex(source, targetIndex);
                             setDraggedLayerId(null);
                           }}
                           onDragEnd={() => setDraggedLayerId(null)}
-                          onClick={() => {
-                            if (canvas && isVisible) {
-                              canvas.setActiveObject(layer);
-                              canvas.renderAll();
-                              setSelectedObject(layer);
-                            }
-                          }}
-                          className={`flex items-center justify-between p-2.5 rounded-lg border text-xs cursor-pointer transition-colors ${
-                            isSelected 
-                              ? 'bg-violet-600/10 border-violet-500/40 text-violet-300 shadow-sm' 
-                              : draggedLayerId === layerId
-                                ? 'bg-violet-500/10 border-violet-500/30 text-violet-200'
-                              : 'bg-zinc-900/30 border-zinc-850 hover:bg-zinc-850/30 text-zinc-300'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2 min-w-0 flex-1">
-                            <LayerIcon className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-violet-400' : 'text-zinc-500'}`} />
-                            {editingLayerId === layerId ? (
-                              <input
-                                type="text"
-                                value={renameValue}
-                                onChange={(e) => setRenameValue(e.target.value)}
-                                onBlur={() => finishRenaming(layerId)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') finishRenaming(layerId);
-                                  else if (e.key === 'Escape') setEditingLayerId(null);
-                                }}
-                                className="bg-zinc-950 border border-violet-500 rounded px-1.5 py-0.5 text-xs text-zinc-100 focus:outline-none w-full max-w-[120px]"
-                                autoFocus
-                                onClick={(e) => e.stopPropagation()}
-                              />
-                            ) : (
-                              <span 
-                                onDoubleClick={(e) => {
-                                  e.stopPropagation();
-                                  setEditingLayerId(layerId);
-                                  setRenameValue((layer as any).get('name') || getLayerName(layer, index));
-                                }}
-                                className="font-medium truncate max-w-[110px] select-none" 
-                                title="Double click to rename"
-                              >
-                                {getLayerName(layer, index)}
-                              </span>
-                            )}
-                          </div>
-                          
-                          {/* Layer Controls */}
-                          <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
-                            <button
-                              onClick={() => toggleLayerVisibility(layer)}
-                              className={`p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 cursor-pointer`}
-                              title={isVisible ? 'Hide Layer' : 'Show Layer'}
-                            >
-                              {isVisible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5 text-zinc-600" />}
-                            </button>
-                            
-                            <button
-                              onClick={() => toggleLayerLock(layer)}
-                              className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 cursor-pointer"
-                              title={isLocked ? 'Unlock Layer' : 'Lock Layer'}
-                            >
-                              {isLocked ? <Lock className="w-3.5 h-3.5 text-violet-400" /> : <Unlock className="w-3.5 h-3.5" />}
-                            </button>
-
-                            {/* Depth Ordering */}
-                            <button
-                              onClick={() => moveLayerToFront(layer)}
-                              className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 cursor-pointer"
-                              title="Bring To Front"
-                            >
-                              <ArrowUp className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={() => moveLayerUp(layer)}
-                              className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 cursor-pointer"
-                              title="Bring Forward"
-                            >
-                              <ChevronUp className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={() => moveLayerDown(layer)}
-                              className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 cursor-pointer"
-                              title="Send Backward"
-                            >
-                              <ChevronDown className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={() => moveLayerToBack(layer)}
-                              className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 cursor-pointer"
-                              title="Send To Back"
-                            >
-                              <ArrowDown className="w-3.5 h-3.5" />
-                            </button>
-                            
-                            <button
-                              onClick={() => deleteLayer(layer)}
-                              className="p-1 rounded hover:bg-zinc-850 hover:text-rose-400 text-zinc-650 cursor-pointer"
-                              title="Delete Layer"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </div>
+                        />
                       );
                     })}
                 </div>

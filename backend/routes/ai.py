@@ -1,14 +1,19 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Request
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from typing import Optional, List
-from config import settings
+from config import ENV_LOADED, ENV_OVERRIDE_ENABLED, ENV_PATH, key_fingerprint, settings
 from auth import get_current_user
 from database import ChatMessage, ChatSession, User, get_db
-from persistence import generate_id, persist_generated_asset, persist_generation_job, persist_uploaded_asset
-from routes.ai_poster import generate_poster_artifact
+from persistence import generate_id, persist_generated_asset, persist_generation_job, persist_uploaded_asset, read_image_bytes
+from routes.ai_poster import (
+    generate_poster_artifact,
+    get_provider_health_snapshot as get_poster_provider_health_snapshot,
+)
 import json
+import os
 import base64
 import html
 import io
@@ -17,7 +22,9 @@ import time
 import hashlib
 import urllib.request
 import urllib.parse
+import urllib.error
 import ssl
+import socket
 import uuid
 from textwrap import wrap
 from datetime import datetime, timedelta
@@ -39,9 +46,201 @@ def build_ssl_context() -> ssl.SSLContext:
 
 
 def get_image_provider_order() -> list[str]:
-    configured = getattr(settings, "IMAGE_PROVIDER_ORDER", "openai,gemini,stability,pollinations")
+    configured = (
+        getattr(settings, "AI_PROVIDER_PRIORITY", "")
+        or getattr(settings, "IMAGE_PROVIDER_ORDER", "openai,gemini,pollinations")
+    )
     providers = [provider.strip().lower() for provider in configured.split(",") if provider.strip()]
-    return providers or ["openai", "gemini", "stability", "pollinations"]
+    return providers or ["openai", "gemini", "pollinations"]
+
+
+def get_image_provider_timeout() -> int:
+    try:
+        timeout = int(getattr(settings, "AI_IMAGE_TIMEOUT_SECONDS", 60))
+    except (TypeError, ValueError):
+        timeout = 60
+    return max(10, min(timeout, 180))
+
+
+def get_chat_provider_order() -> list[str]:
+    configured = getattr(settings, "AI_CHAT_PROVIDER_PRIORITY", "gemini,openai,pollinations")
+    providers = [provider.strip().lower() for provider in configured.split(",") if provider.strip()]
+    return providers or ["gemini", "openai", "pollinations"]
+
+
+def get_chat_model(provider: str, requested_model: str | None = None) -> str | None:
+    """Resolve chat model from request/env without exposing provider-specific details to callers."""
+    requested = clean_chat_text(requested_model or "", 120)
+    if requested:
+        return requested
+    normalized = normalize_provider_name(provider.replace(":text", ""))
+    if normalized == "openai":
+        return (
+            getattr(settings, "OPENAI_CHAT_MODEL", "")
+            or getattr(settings, "OPENAI_MODEL", "")
+            or "gpt-4o-mini"
+        )
+    if normalized == "gemini":
+        return getattr(settings, "GEMINI_MODEL", "") or "gemini-2.0-flash"
+    if normalized == "pollinations":
+        return "pollinations-text"
+    return None
+
+
+def normalize_requested_chat_provider(provider: str | None) -> str:
+    requested = (provider or "").strip().lower()
+    if requested in {"", "auto", "default"}:
+        return ""
+    if requested in {"openai", "gemini", "pollinations", "pollinations:text"}:
+        return "pollinations" if requested == "pollinations:text" else requested
+    return ""
+
+
+_provider_health: dict[str, dict[str, object]] = {}
+_chat_provider_health: dict[str, dict[str, object]] = {}
+_chat_provider_last_error: dict[str, str] = {}
+CHAT_RETRYABLE_FAILURES = {
+    "rate_limited",
+    "quota_or_rate_limit",
+    "timeout",
+    "network_error",
+    "network_or_ssl_error",
+    "provider_5xx",
+    "provider_server_error",
+    "provider_unavailable",
+}
+
+
+def normalize_provider_name(provider: str) -> str:
+    provider = provider.lower().strip()
+    if provider.startswith("gemini"):
+        return "gemini"
+    if provider.startswith("openai"):
+        return "openai"
+    if provider.startswith("pollinations"):
+        return "pollinations"
+    return provider
+
+
+def record_provider_health(provider: str, available: bool, reason: str | None = None) -> None:
+    _provider_health[normalize_provider_name(provider)] = {
+        "available": available,
+        "reason": None if available else reason,
+        "checked_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+def record_chat_provider_health(provider: str, available: bool, reason: str | None = None) -> None:
+    _chat_provider_health[normalize_provider_name(provider.replace(":text", ""))] = {
+        "available": available,
+        "reason": None if available else reason,
+        "checked_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+def record_last_chat_provider_error(provider: str, reason: str) -> None:
+    _chat_provider_last_error[normalize_provider_name(provider.replace(":text", ""))] = reason
+
+
+def clear_last_chat_provider_error(provider: str) -> None:
+    _chat_provider_last_error.pop(normalize_provider_name(provider.replace(":text", "")), None)
+
+
+def get_last_chat_provider_error(provider: str) -> str | None:
+    return _chat_provider_last_error.get(normalize_provider_name(provider.replace(":text", "")))
+
+
+def provider_configured(provider: str) -> bool:
+    if provider == "openai":
+        return bool(settings.OPENAI_API_KEY)
+    if provider == "gemini":
+        return bool(settings.GEMINI_API_KEY)
+    if provider == "pollinations":
+        return bool(getattr(settings, "ENABLE_POLLINATIONS_FALLBACK", True))
+    if provider == "stability":
+        return bool(getattr(settings, "STABILITY_API_KEY", ""))
+    return False
+
+
+def provider_key_fingerprint(provider: str) -> str | None:
+    if provider == "openai":
+        return key_fingerprint(settings.OPENAI_API_KEY)
+    if provider == "gemini":
+        return key_fingerprint(settings.GEMINI_API_KEY)
+    return None
+
+
+def merge_provider_health() -> dict[str, dict[str, object]]:
+    merged: dict[str, dict[str, object]] = {}
+    for source in (get_poster_provider_health_snapshot(), _provider_health):
+        for provider, health in source.items():
+            previous = merged.get(provider)
+            if not previous or str(health.get("checked_at") or "") >= str(previous.get("checked_at") or ""):
+                merged[provider] = health
+    return merged
+
+
+def provider_health_payload() -> dict[str, dict[str, object]]:
+    merged = merge_provider_health()
+    providers: dict[str, dict[str, object]] = {}
+    for provider in ["openai", "gemini", "stability", "pollinations"]:
+        configured = provider_configured(provider)
+        health = merged.get(provider)
+        chat_health = _chat_provider_health.get(provider)
+        payload: dict[str, object] = {
+            "configured": configured,
+            "key_fingerprint": provider_key_fingerprint(provider),
+        }
+        if health:
+            payload.update({
+                "available": bool(health.get("available")),
+                "image_available": bool(health.get("available")),
+                "image_reason": health.get("reason"),
+                "reason": health.get("reason"),
+                "checked_at": health.get("checked_at"),
+            })
+        else:
+            payload.update({
+                "available": False,
+                "image_available": False,
+                "image_reason": "not_configured" if not configured else "not_checked",
+                "reason": "not_configured" if not configured else "not_checked",
+                "checked_at": None,
+            })
+        if chat_health:
+            payload.update({
+                "chat_available": bool(chat_health.get("available")),
+                "chat_reason": chat_health.get("reason"),
+                "chat_checked_at": chat_health.get("checked_at"),
+            })
+        else:
+            payload.update({
+                "chat_available": False,
+                "chat_reason": "not_configured" if provider in {"openai", "gemini"} and not configured else "not_checked",
+                "chat_checked_at": None,
+            })
+        providers[provider] = payload
+    return providers
+
+
+def ai_capabilities_payload() -> dict[str, bool]:
+    """Report feature availability from validated provider health, not raw key presence."""
+    providers = provider_health_payload()
+    chat_available = any(
+        bool(providers.get(provider, {}).get("chat_available"))
+        for provider in get_chat_provider_order()
+    )
+    image_available = any(
+        bool(providers.get(provider, {}).get("image_available"))
+        for provider in get_image_provider_order()
+    )
+    return {
+        "chat": chat_available,
+        "promptEnhancement": chat_available,
+        "posterPlanning": chat_available,
+        "imageGeneration": image_available,
+        "thumbnailGeneration": image_available,
+    }
 
 
 def aspect_ratio_for_provider(width: int, height: int) -> str:
@@ -58,6 +257,53 @@ def aspect_ratio_for_provider(width: int, height: int) -> str:
         "2:3": 2 / 3,
     }
     return min(supported, key=lambda value: abs(supported[value] - ratio))
+
+
+def categorize_provider_error(error: BaseException) -> str:
+    """Map provider/network exceptions to user-actionable categories without exposing secrets."""
+    if isinstance(error, urllib.error.HTTPError):
+        detail = ""
+        try:
+            body = error.read().decode("utf-8", errors="replace")
+            payload = json.loads(body)
+            provider_error = payload.get("error", payload)
+            detail = " ".join(
+                str(provider_error.get(field, ""))
+                for field in ("type", "code", "message")
+            ).lower()
+        except Exception:
+            detail = ""
+        if "quota" in detail or "rate_limit" in detail or "too many" in detail:
+            return "quota_or_rate_limit"
+        if "billing" in detail or "payment" in detail or "hard_limit" in detail:
+            return "billing_required"
+        if "model" in detail and ("not found" in detail or "unsupported" in detail or "access" in detail):
+            return "model_access_or_config"
+        if "invalid" in detail or "bad request" in detail:
+            return "invalid_request"
+        if error.code in {401, 403}:
+            return "auth_error"
+        if error.code == 402:
+            return "billing_required"
+        if error.code == 429:
+            return "quota_or_rate_limit"
+        if error.code in {408, 504}:
+            return "timeout"
+        if 500 <= error.code <= 599:
+            return "provider_server_error"
+        return "provider_http_error"
+    if isinstance(error, TimeoutError) or isinstance(error, socket.timeout):
+        return "timeout"
+    if isinstance(error, urllib.error.URLError):
+        reason = str(error.reason).lower()
+        if "timed out" in reason or "timeout" in reason:
+            return "timeout"
+        if "ssl" in reason or "certificate" in reason:
+            return "network_or_ssl_error"
+        return "network_or_ssl_error"
+    if isinstance(error, ssl.SSLError):
+        return "network_or_ssl_error"
+    return "network_or_ssl_error"
 
 
 # ─── Request/Response Models ───────────────────────────────────
@@ -92,9 +338,21 @@ class PosterResponse(BaseModel):
 
 class PosterGenerationResponse(BaseModel):
     success: bool
+    status: Optional[str] = "success"
+    request_id: Optional[str] = None
+    generation_id: Optional[str] = None
+    mode: Optional[str] = "poster"
     asset_id: Optional[str] = None
     image_url: str
     poster_url: Optional[str] = None
+    original_prompt: Optional[str] = None
+    enhanced_prompt: Optional[str] = None
+    mime_type: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    aspect_ratio: Optional[str] = None
+    project_id: Optional[str] = None
+    provider_attempts: Optional[List[dict]] = None
     design: dict
     message: str
     attachment_summary: Optional[str] = None
@@ -150,9 +408,21 @@ class PosterSpecGenerateResponse(BaseModel):
 
 class ThumbnailGenerationResponse(BaseModel):
     success: bool
+    status: Optional[str] = "success"
+    request_id: Optional[str] = None
+    generation_id: Optional[str] = None
+    mode: Optional[str] = "thumbnail"
     asset_id: Optional[str] = None
     image_url: str
     thumbnail_url: Optional[str] = None
+    original_prompt: Optional[str] = None
+    enhanced_prompt: Optional[str] = None
+    mime_type: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    aspect_ratio: Optional[str] = None
+    project_id: Optional[str] = None
+    provider_attempts: Optional[List[dict]] = None
     design: dict
     message: str
     provider: Optional[str] = None
@@ -173,12 +443,21 @@ class ImagePromptRequest(BaseModel):
 
 
 class ImagePromptResponse(BaseModel):
+    success: Optional[bool] = True
+    status: Optional[str] = "completed"
+    request_id: Optional[str] = None
+    capability: Optional[str] = "prompt_enhancement"
     enhanced_prompt: str
     style_analysis: str
     color_palette: List[str]
     composition_notes: str
     lighting_description: str
     visual_elements: List[str]
+    provider: Optional[str] = None
+    source: Optional[str] = None
+    fallbackUsed: Optional[bool] = False
+    fallbackReason: Optional[str] = None
+    provider_attempts: Optional[List[dict]] = None
 
 
 class ChatHistoryItem(BaseModel):
@@ -188,19 +467,35 @@ class ChatHistoryItem(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    request_id: Optional[str] = None
+    message_id: Optional[str] = None
+    stream: Optional[bool] = False
     context: Optional[str] = "poster_design"
     conversation_id: Optional[str] = None
     project_id: Optional[str] = None
+    provider: Optional[str] = "auto"
+    model: Optional[str] = None
     history: Optional[List[ChatHistoryItem]] = None
 
 
 class ChatResponse(BaseModel):
+    success: Optional[bool] = True
+    status: Optional[str] = "completed"
+    request_id: Optional[str] = None
     reply: str
+    message: Optional[str] = None
     suggestions: List[str]
     poster_data: Optional[dict] = None
+    provider: Optional[str] = None
     source: Optional[str] = None
+    model: Optional[str] = None
+    usage: Optional[dict] = None
+    finish_reason: Optional[str] = None
     fallbackUsed: Optional[bool] = False
     conversation_id: Optional[str] = None
+    user_message_id: Optional[str] = None
+    assistant_message_id: Optional[str] = None
+    provider_attempts: Optional[List[dict]] = None
 
 
 @router.get("/provider-status")
@@ -208,12 +503,37 @@ async def provider_status():
     """Return non-secret AI provider configuration for diagnostics."""
     return {
         "image_provider_order": get_image_provider_order(),
+        "chat_provider_order": get_chat_provider_order(),
         "openai_configured": bool(settings.OPENAI_API_KEY),
         "openai_image_model": getattr(settings, "OPENAI_IMAGE_MODEL", "gpt-image-1"),
         "gemini_image_model": getattr(settings, "GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"),
         "stability_configured": bool(getattr(settings, "STABILITY_API_KEY", "")),
         "gemini_configured": bool(settings.GEMINI_API_KEY),
-        "local_fallback_enabled": True,
+        "local_fallback_enabled": False,
+        "production_image_policy": "A failed provider chain returns a structured error and never inserts a local placeholder.",
+        "capabilities": ai_capabilities_payload(),
+        "providers": provider_health_payload(),
+    }
+
+
+@router.get("/providers/status")
+async def providers_status(current_user: User = Depends(get_current_user)):
+    """Return protected, non-secret backend/provider diagnostics for local verification."""
+    return {
+        "backend_process": {
+            "pid": os.getpid(),
+            "port": settings.PORT,
+            "cwd": os.getcwd(),
+            "environment_loaded": ENV_LOADED,
+            "environment_file": str(ENV_PATH),
+            "environment_override_enabled": ENV_OVERRIDE_ENABLED,
+            "image_provider_priority": get_image_provider_order(),
+            "chat_provider_priority": get_chat_provider_order(),
+            "provider_priority": get_image_provider_order(),
+            "local_fallback_enabled": False,
+        },
+        "capabilities": ai_capabilities_payload(),
+        "providers": provider_health_payload(),
     }
 
 
@@ -249,10 +569,12 @@ def get_last_gemini_error() -> str:
     return _last_gemini_error
 
 
-def call_gemini_api(prompt: str, max_retries: int = 1, retry_delay: float = 1.0) -> str:
+def call_gemini_api(prompt: str, max_retries: int = 1, retry_delay: float = 1.0, model: str | None = None) -> str:
     """Call Google Gemini API to generate content with retry logic and caching."""
+    model_name = model or get_chat_model("gemini") or "gemini-2.0-flash"
+    cache_prompt = f"[model:{model_name}]\n{prompt}"
     # Check cache first
-    cached = get_cached_response(prompt)
+    cached = get_cached_response(cache_prompt)
     if cached:
         print(f"Gemini: Using cached response")
         return cached
@@ -267,10 +589,10 @@ def call_gemini_api(prompt: str, max_retries: int = 1, retry_delay: float = 1.0)
         _last_gemini_error = "Gemini API key is not configured"
         return ""
 
-    return call_gemini_api_urllib(prompt)
+    return call_gemini_api_urllib(prompt, model_name)
 
 
-def call_gemini_api_urllib(prompt: str) -> str:
+def call_gemini_api_urllib(prompt: str, model: str | None = None) -> str:
     """Fallback Gemini API call using urllib."""
     import urllib.request
     import urllib.error
@@ -279,7 +601,8 @@ def call_gemini_api_urllib(prompt: str) -> str:
     if not api_key:
         return ""
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+    model_name = model or get_chat_model("gemini") or "gemini-2.0-flash"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{urllib.parse.quote(model_name, safe='-_.')}:generateContent?key={api_key}"
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -297,14 +620,17 @@ def call_gemini_api_urllib(prompt: str) -> str:
                 parts = result['candidates'][0].get('content', {}).get('parts', [])
                 if parts:
                     text = parts[0].get('text', '')
-                    cache_response(prompt, text)
+                    cache_response(f"[model:{model_name}]\n{prompt}", text)
+                    clear_last_chat_provider_error("gemini")
                     return text
     except urllib.error.HTTPError as e:
         global _last_gemini_error
         _last_gemini_error = f"Gemini HTTP {e.code}: {e.reason}"
+        record_last_chat_provider_error("gemini", categorize_provider_error(e))
         print(f"Gemini urllib error: {_last_gemini_error}")
     except Exception as e:
-        _last_gemini_error = f"Gemini request failed: {e}"
+        _last_gemini_error = f"Gemini request failed ({type(e).__name__})"
+        record_last_chat_provider_error("gemini", categorize_provider_error(e))
         print(f"Gemini urllib error: {_last_gemini_error}")
 
     return ""
@@ -353,17 +679,18 @@ Current user question:
 Return a helpful answer to the current user question. If useful, include 2-4 short actionable suggestions."""
 
 
-def call_openai_chat_api(message: str, context: str, history: Optional[List[ChatHistoryItem]]) -> str:
+def call_openai_chat_api(message: str, context: str, history: Optional[List[ChatHistoryItem]], model: str | None = None) -> str:
     api_key = settings.OPENAI_API_KEY
     if not api_key:
         return ""
+    model_name = model or get_chat_model("openai") or "gpt-4o-mini"
 
     messages = [{"role": "system", "content": build_chat_system_prompt(context)}]
     messages.extend(sanitize_chat_history(history))
     messages.append({"role": "user", "content": message})
 
     payload = json.dumps({
-        "model": getattr(settings, "OPENAI_CHAT_MODEL", "gpt-4o-mini"),
+        "model": model_name,
         "messages": messages,
         "temperature": 0.6,
         "max_tokens": 700,
@@ -380,9 +707,13 @@ def call_openai_chat_api(message: str, context: str, history: Optional[List[Chat
         )
         with urllib.request.urlopen(req, timeout=30, context=build_ssl_context()) as response:
             result = json.loads(response.read().decode("utf-8"))
-            return clean_chat_text(result.get("choices", [{}])[0].get("message", {}).get("content", ""), 4000)
+            content = clean_chat_text(result.get("choices", [{}])[0].get("message", {}).get("content", ""), 4000)
+            if content:
+                clear_last_chat_provider_error("openai")
+            return content
     except Exception as exc:
-        print(f"OpenAI chat error: {exc}")
+        record_last_chat_provider_error("openai", categorize_provider_error(exc))
+        print(f"OpenAI chat request failed ({type(exc).__name__})")
         return ""
 
 
@@ -395,9 +726,11 @@ def call_pollinations_chat_api(message: str, context: str, history: Optional[Lis
             content_type = response.headers.get("Content-Type", "")
             text = response.read().decode("utf-8", errors="replace")
             if response.status == 200 and ("text/" in content_type or "application/json" in content_type) and text.strip():
+                clear_last_chat_provider_error("pollinations")
                 return clean_chat_text(text, 4000)
     except Exception as exc:
-        print(f"Pollinations chat error: {exc}")
+        record_last_chat_provider_error("pollinations", categorize_provider_error(exc))
+        print(f"Pollinations chat request failed ({type(exc).__name__})")
     return ""
 
 
@@ -428,6 +761,90 @@ def extract_chat_suggestions(reply: str) -> list[str]:
         "Ask for a color palette",
         "Ask for headline variations",
     ]
+
+
+def provider_key_format_valid(provider: str) -> bool | None:
+    """Return a coarse, non-secret key-format check for diagnostics."""
+    if provider == "openai":
+        key = (settings.OPENAI_API_KEY or "").strip()
+        if not key:
+            return None
+        return key.startswith("sk-") and len(key) >= 24
+    if provider == "gemini":
+        key = (settings.GEMINI_API_KEY or "").strip()
+        if not key:
+            return None
+        return len(key) >= 24 and not key.lower().startswith(("ya29.", "oauth"))
+    if provider == "stability":
+        key = (getattr(settings, "STABILITY_API_KEY", "") or "").strip()
+        if not key:
+            return None
+        return len(key) >= 20
+    return None
+
+
+def build_ai_health_payload(request_id: str | None = None) -> dict:
+    """Build a secret-safe AI diagnostics envelope from validated provider health."""
+    providers = provider_health_payload()
+    capabilities = ai_capabilities_payload()
+    normalized_providers: dict[str, dict[str, object]] = {}
+    warnings: list[str] = []
+
+    for provider, payload in providers.items():
+        image_reason = payload.get("image_reason") or payload.get("reason")
+        chat_reason = payload.get("chat_reason")
+        image_available = bool(payload.get("image_available"))
+        chat_available = bool(payload.get("chat_available"))
+        configured = bool(payload.get("configured"))
+        reachable = image_available or chat_available
+        normalized_providers[provider] = {
+            "configured": configured,
+            "keyFormatValid": provider_key_format_valid(provider),
+            "reachable": reachable,
+            "chatAvailable": chat_available,
+            "imageAvailable": image_available,
+            "chatReason": chat_reason,
+            "imageReason": image_reason,
+            "fingerprint": payload.get("key_fingerprint"),
+            "models": {
+                "chat": get_chat_model(provider),
+                "image": getattr(settings, "OPENAI_IMAGE_MODEL", "gpt-image-1") if provider == "openai" else getattr(settings, "GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image") if provider == "gemini" else "flux" if provider == "pollinations" else None,
+            },
+        }
+        if configured and not reachable:
+            warnings.append(f"{provider} configured but unavailable: {image_reason or chat_reason or 'not_checked'}")
+
+    any_capability = any(capabilities.values())
+    core_ready = capabilities.get("chat") and capabilities.get("imageGeneration")
+    status_value = "healthy" if core_ready else "degraded" if any_capability else "unavailable"
+
+    return {
+        "success": True,
+        "requestId": request_id or str(uuid.uuid4()),
+        "capability": "ai_diagnostics",
+        "status": status_value,
+        "defaultProvider": (get_image_provider_order() or ["openai"])[0],
+        "imageProviderOrder": get_image_provider_order(),
+        "chatProviderOrder": get_chat_provider_order(),
+        "capabilities": capabilities,
+        "providers": normalized_providers,
+        "policy": {
+            "localPlaceholderFallback": False,
+            "fakeAiFallback": bool(getattr(settings, "ENABLE_FAKE_AI_FALLBACK", False)),
+            "imageGenerationFailure": "structured_error_without_canvas_mutation",
+        },
+        "environment": {
+            "loaded": ENV_LOADED,
+            "overrideEnabled": ENV_OVERRIDE_ENABLED,
+            "cacheItems": len(_response_cache),
+        },
+        "warnings": warnings,
+        "error": None if any_capability else {
+            "code": "AI_NOT_CONFIGURED",
+            "message": "No validated AI provider capability is currently available.",
+            "retryable": True,
+        },
+    }
 
 
 def clean_thumbnail_text(value: str, limit: int = 300) -> str:
@@ -767,9 +1184,14 @@ def generate_enhanced_image_prompt(user_prompt: str, reference_description: str,
 # ─── Image Generation via Backend Proxy ────────────────────────
 
 class ImageGenerateRequest(BaseModel):
+    request_id: Optional[str] = None
     prompt: str
     width: Optional[int] = 1024
     height: Optional[int] = 1024
+    aspect_ratio: Optional[str] = "1:1"
+    style: Optional[str] = "auto"
+    variations: Optional[int] = 1
+    enhance_prompt: Optional[bool] = True
     seed: Optional[int] = None
     model: Optional[str] = "flux"
     project_id: Optional[str] = None
@@ -791,7 +1213,9 @@ def save_chat_exchange(
     user_message: str,
     assistant_reply: str,
     provider: str,
-) -> None:
+    user_message_id: Optional[str] = None,
+    assistant_message_id: Optional[str] = None,
+) -> tuple[str, str]:
     session = db.query(ChatSession).filter(
         ChatSession.id == conversation_id,
         ChatSession.user_id == user.id,
@@ -807,8 +1231,10 @@ def save_chat_exchange(
         db.add(session)
     session.updated_at = datetime.utcnow()
     session.provider = provider
+    user_message_id = user_message_id or generate_id("msg")
+    assistant_message_id = assistant_message_id or generate_id("msg")
     db.add(ChatMessage(
-        id=generate_id("msg"),
+        id=user_message_id,
         session_id=conversation_id,
         user_id=user.id,
         project_id=project_id,
@@ -817,7 +1243,7 @@ def save_chat_exchange(
         provider=provider,
     ))
     db.add(ChatMessage(
-        id=generate_id("msg"),
+        id=assistant_message_id,
         session_id=conversation_id,
         user_id=user.id,
         project_id=project_id,
@@ -826,6 +1252,7 @@ def save_chat_exchange(
         provider=provider,
     ))
     db.commit()
+    return user_message_id, assistant_message_id
 
 
 def generate_image_url(prompt: str, width: int = 1024, height: int = 1024, seed: int = None) -> str:
@@ -846,76 +1273,161 @@ def generate_image_url(prompt: str, width: int = 1024, height: int = 1024, seed:
 
 
 def generate_image_via_proxy(prompt: str, width: int = 1024, height: int = 1024) -> dict:
-    """Generate image using AI services with graceful fallback."""
+    """Generate an image through configured production providers only."""
     import random
     seed = random.randint(1, 999999)
+    failures: list[dict] = []
 
     for provider in get_image_provider_order():
         if provider == "openai" and settings.OPENAI_API_KEY:
             result = generate_image_openai(prompt, width, height)
             if result.get("success"):
+                record_provider_health("openai", True)
                 return result
+            category = result.get("error_category", "unavailable")
+            record_provider_health("openai", False, category)
+            failures.append({"provider": "openai", "category": category})
         elif provider == "gemini" and settings.GEMINI_API_KEY:
             result = generate_image_gemini(prompt, width, height)
             if result.get("success"):
+                record_provider_health("gemini", True)
                 return result
+            category = result.get("error_category", "unavailable")
+            record_provider_health("gemini", False, category)
+            failures.append({"provider": "gemini", "category": category})
         elif provider == "stability" and getattr(settings, "STABILITY_API_KEY", ""):
             result = generate_image_stability(prompt, width, height)
             if result.get("success"):
+                record_provider_health("stability", True)
                 return result
+            category = result.get("error_category", "unavailable")
+            record_provider_health("stability", False, category)
+            failures.append({"provider": "stability", "category": category})
         elif provider == "pollinations":
             result = generate_image_pollinations(prompt, width, height, seed)
             if result.get("success"):
+                record_provider_health("pollinations", True)
                 return result
+            category = result.get("error_category", "unavailable")
+            record_provider_health("pollinations", False, category)
+            failures.append({"provider": "pollinations", "category": category})
 
-    # Reliable local fallback so the browser can always load the image.
-    return generate_local_placeholder_image(prompt, width, height, seed)
+    return {"success": False, "error": "No production image provider returned an image", "provider_failures": failures}
+
+
+def pollinations_prompt_candidates(prompt: str) -> list[str]:
+    cleaned = re.sub(r"\s+", " ", prompt).strip()
+    user_request_match = re.search(
+        r"User thumbnail request:\s*(.*?)(?:\s+Platform:|\s+Style:|\s+Canvas:|$)",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    if user_request_match:
+        user_request = user_request_match.group(1).strip()
+        compact = (
+            "Professional YouTube thumbnail artwork, bold high-contrast composition, "
+            f"{user_request}, readable title space, polished digital design, no watermark, no UI mockup."
+        )
+    else:
+        user_request = cleaned
+        compact = (
+            f"High-quality generated image: {user_request}. "
+            "Clear main subject, polished composition, sharp details, clean lighting, no watermark, no UI mockup."
+        )
+    candidates = [cleaned, compact]
+    deduped: list[str] = []
+    for candidate in candidates:
+        value = candidate[:697].rstrip() + "..." if len(candidate) > 700 else candidate
+        if value and value not in deduped:
+            deduped.append(value)
+    return deduped
 
 
 def generate_image_pollinations(prompt: str, width: int, height: int, seed: int) -> dict:
     """Generate image using Pollinations AI API."""
-    pollinations_prompt = re.sub(r"\s+", " ", prompt).strip()
-    if len(pollinations_prompt) > 700:
-        pollinations_prompt = pollinations_prompt[:697].rstrip() + "..."
-    encoded = urllib.parse.quote(pollinations_prompt)
-    url = f"https://image.pollinations.ai/prompt/{encoded}?width={width}&height={height}&seed={seed}&nologo=true&model=flux"
+    last_category = "invalid_response"
+    for attempt, pollinations_prompt in enumerate(pollinations_prompt_candidates(prompt), start=1):
+        encoded = urllib.parse.quote(pollinations_prompt)
+        attempt_seed = seed + attempt - 1
+        url = f"https://image.pollinations.ai/prompt/{encoded}?width={width}&height={height}&seed={attempt_seed}&nologo=true&model=flux"
 
+        try:
+            ctx = build_ssl_context()
+            req = urllib.request.Request(url, headers={
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+            })
+            with urllib.request.urlopen(req, timeout=get_image_provider_timeout(), context=ctx) as response:
+                if response.status == 200:
+                    content_type = response.headers.get('Content-Type', '')
+                    if 'image' in content_type:
+                        image_bytes = response.read()
+                        if not image_bytes:
+                            raise ValueError("Provider returned an empty image")
+                        if not content_type.startswith("image/"):
+                            raise ValueError(f"Provider returned invalid content type: {content_type}")
+                        decoded_width, decoded_height = width, height
+                        try:
+                            from PIL import Image
+                            with Image.open(io.BytesIO(image_bytes)) as image:
+                                image.verify()
+                                decoded_width, decoded_height = image.size
+                        except Exception as exc:
+                            print(f"Pollinations image decode warning: {exc}")
+                        return {
+                            "success": True,
+                            "url": f"data:{content_type};base64,{base64.b64encode(image_bytes).decode('utf-8')}",
+                            "provider_url": url,
+                            "seed": attempt_seed,
+                            "width": decoded_width,
+                            "height": decoded_height,
+                            "source": "pollinations:flux",
+                            "mime_type": content_type,
+                            "http_status": response.status,
+                        }
+        except Exception as e:
+            last_category = categorize_provider_error(e)
+            last_status = e.code if isinstance(e, urllib.error.HTTPError) else None
+            print(f"Pollinations attempt {attempt} failed ({type(e).__name__})")
+
+    return {"success": False, "error_category": last_category, "http_status": locals().get("last_status")}
+
+
+def normalize_image_result_to_dimensions(image_result: dict, target_width: int, target_height: int) -> dict:
+    """Validate image bytes and return a high-quality center-cropped PNG at target dimensions."""
+    source = image_result.get("url") or image_result.get("image_url")
+    if not source:
+        raise ValueError("Image provider did not return an image source")
+    mime_type, image_bytes = read_image_bytes(source)
+    if not mime_type.startswith("image/"):
+        raise ValueError(f"Provider returned invalid image MIME type: {mime_type}")
     try:
-        ctx = build_ssl_context()
-        req = urllib.request.Request(url, headers={
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
-        })
-        with urllib.request.urlopen(req, timeout=60, context=ctx) as response:
-            if response.status == 200:
-                content_type = response.headers.get('Content-Type', '')
-                if 'image' in content_type:
-                    image_bytes = response.read()
-                    if not image_bytes:
-                        raise ValueError("Provider returned an empty image")
-                    if not content_type.startswith("image/"):
-                        raise ValueError(f"Provider returned invalid content type: {content_type}")
-                    decoded_width, decoded_height = width, height
-                    try:
-                        from PIL import Image
-                        with Image.open(io.BytesIO(image_bytes)) as image:
-                            image.verify()
-                            decoded_width, decoded_height = image.size
-                    except Exception as exc:
-                        print(f"Pollinations image decode warning: {exc}")
-                    return {
-                        "success": True,
-                        "url": f"data:{content_type};base64,{base64.b64encode(image_bytes).decode('utf-8')}",
-                        "provider_url": url,
-                        "seed": seed,
-                        "width": decoded_width,
-                        "height": decoded_height,
-                        "source": "pollinations:flux",
-                        "mime_type": content_type,
-                    }
-    except Exception as e:
-        print(f"Pollinations error: {e}")
+        from PIL import Image, ImageOps
+    except Exception as exc:
+        raise ValueError("Pillow is required to validate and normalize generated images") from exc
 
-    return {"success": False}
+    with Image.open(io.BytesIO(image_bytes)) as image:
+        image.load()
+        if image.width <= 0 or image.height <= 0:
+            raise ValueError("Provider returned an image with invalid dimensions")
+        normalized = ImageOps.fit(
+            image.convert("RGB"),
+            (target_width, target_height),
+            method=Image.Resampling.LANCZOS,
+            centering=(0.5, 0.5),
+        )
+        output = io.BytesIO()
+        normalized.save(output, format="PNG", optimize=True)
+
+    normalized_url = "data:image/png;base64," + base64.b64encode(output.getvalue()).decode("utf-8")
+    updated = dict(image_result)
+    updated.update({
+        "url": normalized_url,
+        "width": target_width,
+        "height": target_height,
+        "mime_type": "image/png",
+        "normalized": True,
+    })
+    return updated
 
 
 def generate_local_placeholder_image(prompt: str, width: int, height: int, seed: int) -> dict:
@@ -988,18 +1500,20 @@ def generate_image_openai(prompt: str, width: int, height: int) -> dict:
             'Authorization': f'Bearer {api_key}'
         })
         ctx = build_ssl_context()
-        with urllib.request.urlopen(req, timeout=20, context=ctx) as response:
+        with urllib.request.urlopen(req, timeout=get_image_provider_timeout(), context=ctx) as response:
             result = json.loads(response.read().decode('utf-8'))
             if 'data' in result and len(result['data']) > 0:
                 data = result['data'][0]
                 if 'b64_json' in data:
-                    return {"success": True, "url": f"data:image/png;base64,{data['b64_json']}", "source": f"openai:{getattr(settings, 'OPENAI_IMAGE_MODEL', 'gpt-image-1')}"}
+                    return {"success": True, "url": f"data:image/png;base64,{data['b64_json']}", "source": f"openai:{getattr(settings, 'OPENAI_IMAGE_MODEL', 'gpt-image-1')}", "http_status": response.status}
                 elif 'url' in data:
-                    return {"success": True, "url": data['url'], "source": f"openai:{getattr(settings, 'OPENAI_IMAGE_MODEL', 'gpt-image-1')}"}
+                    return {"success": True, "url": data['url'], "source": f"openai:{getattr(settings, 'OPENAI_IMAGE_MODEL', 'gpt-image-1')}", "http_status": response.status}
     except Exception as e:
-        print(f"OpenAI error: {e}")
+        category = categorize_provider_error(e)
+        print(f"OpenAI error ({type(e).__name__})")
+        return {"success": False, "error_category": category, "http_status": e.code if isinstance(e, urllib.error.HTTPError) else None}
 
-    return {"success": False}
+    return {"success": False, "error_category": "invalid_response"}
 
 
 def generate_image_gemini(prompt: str, width: int, height: int) -> dict:
@@ -1027,7 +1541,7 @@ def generate_image_gemini(prompt: str, width: int, height: int) -> dict:
 
     try:
         req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=60, context=build_ssl_context()) as response:
+        with urllib.request.urlopen(req, timeout=get_image_provider_timeout(), context=build_ssl_context()) as response:
             result = json.loads(response.read().decode("utf-8"))
             parts = result.get("candidates", [{}])[0].get("content", {}).get("parts", [])
             for part in parts:
@@ -1040,11 +1554,14 @@ def generate_image_gemini(prompt: str, width: int, height: int) -> dict:
                         "source": f"gemini:{model}",
                         "width": width,
                         "height": height,
+                        "http_status": response.status,
                     }
     except Exception as e:
-        print(f"Gemini image error: {e}")
+        category = categorize_provider_error(e)
+        print(f"Gemini image error ({type(e).__name__})")
+        return {"success": False, "error_category": category, "http_status": e.code if isinstance(e, urllib.error.HTTPError) else None}
 
-    return {"success": False}
+    return {"success": False, "error_category": "invalid_response"}
 
 
 def generate_image_stability(prompt: str, width: int, height: int) -> dict:
@@ -1079,7 +1596,7 @@ def generate_image_stability(prompt: str, width: int, height: int) -> dict:
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=45, context=build_ssl_context()) as response:
+        with urllib.request.urlopen(req, timeout=get_image_provider_timeout(), context=build_ssl_context()) as response:
             content = response.read()
             content_type = response.headers.get("Content-Type", "image/png")
             if response.status in {200, 201} and content_type.startswith("image/"):
@@ -1092,9 +1609,11 @@ def generate_image_stability(prompt: str, width: int, height: int) -> dict:
                     "height": height,
                 }
     except Exception as e:
-        print(f"Stability error: {e}")
+        category = categorize_provider_error(e)
+        print(f"Stability error ({type(e).__name__})")
+        return {"success": False, "error_category": category}
 
-    return {"success": False}
+    return {"success": False, "error_category": "invalid_response"}
 
 
 def is_valid_attachment(filename: str, allowed_extensions: set[str]) -> bool:
@@ -1524,6 +2043,7 @@ Rules:
     return PosterResponse(**poster_data)
 
 
+@router.post("/posters/generate", response_model=PosterGenerationResponse)
 @router.post("/generate-poster-image", response_model=PosterGenerationResponse)
 @router.post("/generate-poster", response_model=PosterGenerationResponse)
 async def generate_poster_with_attachments(
@@ -1536,6 +2056,8 @@ async def generate_poster_with_attachments(
     aspect_ratio: str = Form("4:5"),
     quality: str = Form("high"),
     output_count: int = Form(1),
+    request_id: str = Form(""),
+    enhance_prompt: bool = Form(True),
     documents: List[UploadFile] = File(default=[]),
     images: List[UploadFile] = File(default=[]),
     uploaded_files: List[UploadFile] = File(default=[]),
@@ -1547,6 +2069,7 @@ async def generate_poster_with_attachments(
 ):
     """Generate a complete poster image from prompt plus uploaded attachments."""
     prompt_text = prompt.strip()
+    client_request_id = clean_thumbnail_text(request_id, 120) or str(uuid.uuid4())
     if not prompt_text:
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
@@ -1584,7 +2107,8 @@ async def generate_poster_with_attachments(
         except Exception as exc:
             db.rollback()
             raise HTTPException(status_code=500, detail=f"Uploaded image persistence failed: {exc}") from exc
-    result = generate_poster_artifact(
+    result = await run_in_threadpool(
+        generate_poster_artifact,
         prompt=prompt_text,
         width=width,
         height=height,
@@ -1597,7 +2121,19 @@ async def generate_poster_with_attachments(
         output_count=output_count,
     )
     if not result.get("success") or not (result.get("poster_url") or result.get("image_url")):
-        raise HTTPException(status_code=502, detail=result.get("message") or "Poster image generation failed")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "AI_IMAGE_PROVIDERS_UNAVAILABLE",
+                "message": result.get("message") or "Real AI poster generation is currently unavailable",
+                "retryable": True,
+                "request_id": client_request_id,
+                "mode": "poster",
+                "status": "failed",
+                "providerAttempts": result.get("providerFailures") or result.get("provider_failures") or [],
+                "providerFailures": result.get("providerFailures") or result.get("provider_failures") or [],
+            },
+        )
 
     try:
         persisted = persist_generated_asset(
@@ -1614,7 +2150,7 @@ async def generate_poster_with_attachments(
             fallback_used=bool(result.get("fallbackUsed") or result.get("fallback_used")),
             user_id=current_user.id,
             project_id=project_id or None,
-            metadata=result,
+            metadata={**result, "request_id": client_request_id, "original_prompt": prompt_text},
         )
         persist_generation_job(
             db,
@@ -1624,19 +2160,36 @@ async def generate_poster_with_attachments(
             project_id=project_id or None,
             asset_id=persisted.id,
             provider=result.get("provider") or result.get("source"),
-            metadata={"prompt": prompt_text, "source": result.get("source"), "fallbackUsed": result.get("fallbackUsed")},
+            metadata={"prompt": prompt_text, "request_id": client_request_id, "source": result.get("source"), "fallbackUsed": result.get("fallbackUsed")},
         )
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Poster generated but persistence failed: {exc}") from exc
 
+    provider_attempts = result.get("providerFailures") or result.get("provider_failures") or []
+    result["status"] = "success"
+    result["request_id"] = client_request_id
+    result["generation_id"] = persisted.id
+    result["mode"] = "poster"
     result["asset_id"] = persisted.id
     result["image_url"] = persisted.public_url
     result["poster_url"] = persisted.public_url
+    result["original_prompt"] = prompt_text
+    result["enhanced_prompt"] = result.get("design", {}).get("image_prompt") or prompt_text
+    result["mime_type"] = persisted.mime_type
+    result["width"] = persisted.width
+    result["height"] = persisted.height
+    result["aspect_ratio"] = aspect_ratio
+    result["project_id"] = project_id or None
+    result["provider_attempts"] = provider_attempts
     result.setdefault("result", {})
     result["result"]["assetId"] = persisted.id
+    result["result"]["generationId"] = persisted.id
+    result["result"]["requestId"] = client_request_id
     result["result"]["imageUrl"] = persisted.public_url
     result["result"]["mimeType"] = persisted.mime_type
+    result["result"]["width"] = persisted.width
+    result["result"]["height"] = persisted.height
     result["uploaded_asset_ids"] = persisted_uploads
     return PosterGenerationResponse(**result)
 
@@ -1646,12 +2199,13 @@ async def generate_image_prompt(req: ImagePromptRequest):
     """Generate an enhanced image generation prompt based on user request and reference."""
     prompt = req.prompt.strip()
     reference = req.reference_description.strip() if req.reference_description else ""
+    request_id = str(uuid.uuid4())
+    provider_attempts: list[dict] = []
 
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
-    # Try Gemini for enhanced prompt generation
-    gemini_prompt = f"""You are an expert AI image prompt engineer. Analyze the user's request and reference description to create a highly detailed, context-aware image generation prompt.
+    enhancement_prompt = f"""You are an expert AI image prompt engineer. Analyze the user's request and reference description to create a highly detailed, context-aware image generation prompt.
 
 User's request: "{prompt}"
 Reference poster description: "{reference if reference else 'No reference provided'}"
@@ -1680,22 +2234,76 @@ Rules:
 - Include technical quality terms (8K, ultra-detailed, etc.)
 - Return ONLY valid JSON, no explanation"""
 
-    gemini_response = call_gemini_api(gemini_prompt)
+    provider_calls = {
+        "gemini": lambda: call_gemini_api(enhancement_prompt),
+        "openai": lambda: call_openai_chat_api(enhancement_prompt, "prompt_enhancement", []),
+        "pollinations": lambda: call_pollinations_chat_api(enhancement_prompt, "prompt_enhancement", []),
+        "pollinations:text": lambda: call_pollinations_chat_api(enhancement_prompt, "prompt_enhancement", []),
+    }
 
-    if gemini_response:
+    for configured_source in get_chat_provider_order():
+        source = "pollinations:text" if configured_source == "pollinations" else configured_source
+        provider_call = provider_calls.get(source) or provider_calls.get(configured_source)
+        if provider_call is None:
+            continue
+        if configured_source in {"openai", "gemini"} and not provider_configured(configured_source):
+            provider_attempts.append({"provider": source, "status": "missing_api_key", "retryable": False})
+            record_chat_provider_health(configured_source, False, "missing_api_key")
+            continue
         try:
-            json_match = re.search(r'\{[\s\S]*\}', gemini_response)
-            if json_match:
+            clear_last_chat_provider_error(configured_source)
+            raw_response = await run_in_threadpool(provider_call)
+        except Exception as exc:
+            failure = categorize_provider_error(exc)
+            provider_attempts.append({"provider": source, "status": failure, "retryable": failure in CHAT_RETRYABLE_FAILURES})
+            record_chat_provider_health(configured_source, False, failure)
+            continue
+
+        if raw_response:
+            try:
+                json_match = re.search(r'\{[\s\S]*\}', raw_response)
+                if not json_match:
+                    raise ValueError("Provider response did not include a JSON object")
                 data = json.loads(json_match.group())
                 required = ['enhanced_prompt', 'style_analysis', 'color_palette']
-                if all(k in data for k in required):
-                    return ImagePromptResponse(**data)
-        except (json.JSONDecodeError, Exception) as e:
-            print(f"Gemini: Image prompt parse error: {e}")
+                if not all(k in data for k in required):
+                    raise ValueError("Provider response missed required enhancement fields")
+                record_chat_provider_health(configured_source, True)
+                return ImagePromptResponse(
+                    **data,
+                    success=True,
+                    status="completed",
+                    request_id=request_id,
+                    capability="prompt_enhancement",
+                    provider=source,
+                    source=source,
+                    fallbackUsed=False,
+                    provider_attempts=provider_attempts,
+                )
+            except (json.JSONDecodeError, Exception) as exc:
+                provider_attempts.append({"provider": source, "status": "structured_output_parse_failed", "retryable": True})
+                record_chat_provider_health(configured_source, False, "structured_output_parse_failed")
+                print(f"AI prompt enhancement parse error ({type(exc).__name__})")
+                continue
 
-    # Fallback to local generation
+        failure = get_last_chat_provider_error(configured_source) or "empty_response"
+        provider_attempts.append({"provider": source, "status": failure, "retryable": failure in CHAT_RETRYABLE_FAILURES})
+        record_chat_provider_health(configured_source, False, failure)
+
+    # Deterministic local draft is allowed only as a transparent, non-AI fallback.
     result = generate_enhanced_image_prompt(prompt, reference, req.style)
-    return ImagePromptResponse(**result)
+    return ImagePromptResponse(
+        **result,
+        success=False,
+        status="fallback",
+        request_id=request_id,
+        capability="prompt_enhancement",
+        provider="local",
+        source="local:prompt-enhancement",
+        fallbackUsed=True,
+        fallbackReason="No configured text AI provider returned a valid prompt-enhancement JSON response.",
+        provider_attempts=provider_attempts,
+    )
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -1709,18 +2317,47 @@ async def ai_chat(
     if not prompt:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
+    request_id = clean_thumbnail_text(req.request_id or "", 120) or str(uuid.uuid4())
     context = req.context or "poster_design"
     conversation_id = stable_conversation_id(req.conversation_id)
 
-    provider_attempts = [
-        ("gemini", lambda: call_gemini_api(build_chat_prompt(prompt, context, req.history))),
-        ("openai", lambda: call_openai_chat_api(prompt, context, req.history)),
-        ("pollinations:text", lambda: call_pollinations_chat_api(prompt, context, req.history)),
-    ]
+    client_message_id = clean_thumbnail_text(req.message_id or "", 120) or generate_id("msg")
+    assistant_message_id = generate_id("msg")
+    requested_provider = normalize_requested_chat_provider(req.provider)
+    provider_order = get_chat_provider_order()
+    if requested_provider:
+        provider_order = [requested_provider]
+    provider_calls = {
+        "gemini": lambda model=None: call_gemini_api(build_chat_prompt(prompt, context, req.history), model=model),
+        "openai": lambda model=None: call_openai_chat_api(prompt, context, req.history, model=model),
+        "pollinations": lambda: call_pollinations_chat_api(prompt, context, req.history),
+        "pollinations:text": lambda: call_pollinations_chat_api(prompt, context, req.history),
+    }
+    provider_attempts: list[dict] = []
 
-    for source, provider_call in provider_attempts:
-        reply = provider_call()
-        if reply:
+    for configured_source in provider_order:
+        provider_call = provider_calls.get(configured_source)
+        if not provider_call:
+            continue
+        source = "pollinations:text" if configured_source == "pollinations" else configured_source
+        model_name = get_chat_model(source, req.model if requested_provider and configured_source == requested_provider else None)
+        if configured_source in {"openai", "gemini"} and not provider_configured(configured_source):
+            provider_attempts.append({"provider": source, "model": model_name, "status": "missing_api_key", "retryable": False})
+            record_chat_provider_health(configured_source, False, "missing_api_key")
+            continue
+        try:
+            clear_last_chat_provider_error(configured_source)
+            if configured_source in {"openai", "gemini"}:
+                reply = await run_in_threadpool(provider_call, model_name)
+            else:
+                reply = await run_in_threadpool(provider_call)
+        except Exception as exc:
+            failure = categorize_provider_error(exc)
+            provider_attempts.append({"provider": source, "model": model_name, "status": failure, "retryable": failure in CHAT_RETRYABLE_FAILURES})
+            record_chat_provider_health(configured_source, False, failure)
+            continue
+        if reply and reply.strip():
+            record_chat_provider_health(configured_source, True)
             try:
                 save_chat_exchange(
                     db,
@@ -1730,41 +2367,50 @@ async def ai_chat(
                     user_message=prompt,
                     assistant_reply=reply,
                     provider=source,
+                    user_message_id=client_message_id,
+                    assistant_message_id=assistant_message_id,
                 )
             except Exception as exc:
                 db.rollback()
                 raise HTTPException(status_code=500, detail=f"Chat response generated but persistence failed: {exc}") from exc
             return ChatResponse(
+                success=True,
+                status="completed",
+                request_id=request_id,
                 reply=reply,
+                message=reply,
                 suggestions=extract_chat_suggestions(reply),
                 poster_data=None,
+                provider=source,
                 source=source,
+                model=model_name,
+                usage={},
+                finish_reason="stop",
                 fallbackUsed=False,
                 conversation_id=conversation_id,
+                user_message_id=client_message_id,
+                assistant_message_id=assistant_message_id,
+                provider_attempts=provider_attempts,
             )
+        failure = get_last_chat_provider_error(configured_source) or "empty_response"
+        provider_attempts.append({"provider": source, "model": model_name, "status": failure, "retryable": failure in CHAT_RETRYABLE_FAILURES})
+        record_chat_provider_health(configured_source, False, failure)
 
-    reply = build_contextual_chat_fallback(prompt)
-    try:
-        save_chat_exchange(
-            db,
-            user=current_user,
-            conversation_id=conversation_id,
-            project_id=req.project_id,
-            user_message=prompt,
-            assistant_reply=reply,
-            provider="local-contextual",
-        )
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Chat response generated but persistence failed: {exc}") from exc
-
-    return ChatResponse(
-        reply=reply,
-        suggestions=extract_chat_suggestions(reply),
-        poster_data=None,
-        source="local-contextual",
-        fallbackUsed=True,
-        conversation_id=conversation_id,
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "code": "AI_CHAT_PROVIDERS_UNAVAILABLE",
+            "message": "No configured AI chat provider returned a response. Please retry after provider access is restored.",
+            "retryable": True,
+            "request_id": request_id,
+            "status": "failed",
+            "provider": requested_provider or "auto",
+            "model": req.model,
+            "conversation_id": conversation_id,
+            "user_message_id": client_message_id,
+            "providerAttempts": provider_attempts,
+            "provider_attempts": provider_attempts,
+        },
     )
 
 
@@ -1800,6 +2446,7 @@ async def get_chat_history(
     }
 
 
+@router.post("/images/generate")
 @router.post("/generate-image")
 async def generate_image(
     req: ImageGenerateRequest,
@@ -1809,12 +2456,38 @@ async def generate_image(
 ):
     """Generate an image URL via backend proxy to avoid CORS and Turnstile issues."""
     prompt = req.prompt.strip()
+    client_request_id = clean_thumbnail_text(req.request_id or "", 120) or str(uuid.uuid4())
+    safe_width = max(320, min(int(req.width or 1024), 1920))
+    safe_height = max(320, min(int(req.height or 1024), 1920))
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
-    result = generate_image_via_proxy(prompt, req.width, req.height)
+    result = await run_in_threadpool(generate_image_via_proxy, prompt, safe_width, safe_height)
     if not result.get("success") or not result.get("url"):
-        raise HTTPException(status_code=502, detail=result.get("error") or "Image generation failed")
+        provider_failures = result.get("provider_failures") or []
+        raise HTTPException(status_code=503, detail={
+            "code": "AI_IMAGE_PROVIDERS_UNAVAILABLE",
+            "message": result.get("error") or "No real AI image provider returned an image.",
+            "retryable": True,
+            "request_id": client_request_id,
+            "mode": "image",
+            "status": "failed",
+            "providerAttempts": provider_failures,
+            "providerFailures": provider_failures,
+        })
+    result = await run_in_threadpool(normalize_image_result_to_dimensions, result, safe_width, safe_height)
+    result_metadata = build_thumbnail_result_metadata(result, safe_width, safe_height)
+    if result_metadata["fallbackUsed"] or not result_metadata["productionQuality"]:
+        raise HTTPException(status_code=503, detail={
+            "code": "AI_IMAGE_PROVIDERS_UNAVAILABLE",
+            "message": "No real AI image provider returned a production-quality image.",
+            "retryable": True,
+            "request_id": client_request_id,
+            "mode": "image",
+            "status": "failed",
+            "providerAttempts": result.get("provider_failures") or [],
+            "providerFailures": result.get("provider_failures") or [],
+        })
     try:
         persisted = persist_generated_asset(
             db,
@@ -1825,12 +2498,12 @@ async def generate_image(
             enhanced_prompt=prompt,
             provider=result.get("source"),
             model=req.model,
-            width=req.width,
-            height=req.height,
-            fallback_used=bool(result.get("source") == "local"),
+            width=safe_width,
+            height=safe_height,
+            fallback_used=False,
             user_id=current_user.id,
             project_id=req.project_id,
-            metadata=result,
+            metadata={**result, "request_id": client_request_id, "original_prompt": prompt},
         )
         persist_generation_job(
             db,
@@ -1840,15 +2513,33 @@ async def generate_image(
             project_id=req.project_id,
             asset_id=persisted.id,
             provider=result.get("source"),
-            metadata={"prompt": prompt, "source": result.get("source")},
+            metadata={"prompt": prompt, "request_id": client_request_id, "source": result.get("source")},
         )
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Image generated but persistence failed: {exc}") from exc
+    result["success"] = True
+    result["status"] = "success"
+    result["request_id"] = client_request_id
+    result["generation_id"] = persisted.id
+    result["mode"] = "image"
     result["asset_id"] = persisted.id
     result["url"] = persisted.public_url
+    result["image_url"] = persisted.public_url
+    result["original_prompt"] = prompt
+    result["enhanced_prompt"] = prompt
+    result["mime_type"] = persisted.mime_type
+    result["width"] = persisted.width
+    result["height"] = persisted.height
+    result["aspect_ratio"] = req.aspect_ratio
+    result["project_id"] = req.project_id
+    result["productionQuality"] = True
+    result["fallbackUsed"] = False
+    result["provider_attempts"] = result.get("provider_failures") or []
     result["result"] = {
         "assetId": persisted.id,
+        "generationId": persisted.id,
+        "requestId": client_request_id,
         "imageUrl": persisted.public_url,
         "mimeType": persisted.mime_type,
         "width": persisted.width,
@@ -1857,6 +2548,7 @@ async def generate_image(
     return result
 
 
+@router.post("/thumbnails/generate", response_model=ThumbnailGenerationResponse)
 @router.post("/generate-thumbnail", response_model=ThumbnailGenerationResponse)
 async def generate_thumbnail(
     request: Request,
@@ -1870,6 +2562,8 @@ async def generate_thumbnail(
     height: int = Form(720),
     quality: str = Form("high"),
     output_count: int = Form(1),
+    request_id: str = Form(""),
+    enhance_prompt: bool = Form(True),
     reference_images: List[UploadFile] = File(default=[]),
     face_image: List[UploadFile] = File(default=[]),
     logo: List[UploadFile] = File(default=[]),
@@ -1879,8 +2573,36 @@ async def generate_thumbnail(
 ):
     """Generate a complete AI thumbnail image from prompt, settings, and optional uploaded references."""
     prompt_text = clean_thumbnail_text(prompt, 900)
+    client_request_id = clean_thumbnail_text(request_id, 120) or str(uuid.uuid4())
     if not prompt_text:
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
+
+    safe_width = max(320, min(int(width or 1280), 1920))
+    safe_height = max(320, min(int(height or 720), 1920))
+    if safe_width <= safe_height and (platform or "").lower() == "youtube":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "success": False,
+                "status": "failed",
+                "request_id": client_request_id,
+                "mode": "thumbnail",
+                "error_code": "INVALID_THUMBNAIL_DIMENSIONS",
+                "message": "YouTube thumbnails must use landscape dimensions such as 1280×720.",
+            },
+        )
+    if (aspect_ratio or "16:9") == "16:9" and safe_width * 9 != safe_height * 16:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "success": False,
+                "status": "failed",
+                "request_id": client_request_id,
+                "mode": "thumbnail",
+                "error_code": "INVALID_ASPECT_RATIO",
+                "message": f"16:9 thumbnails require matching landscape dimensions; received {safe_width}×{safe_height}.",
+            },
+        )
 
     all_images = [*reference_images, *face_image, *logo]
     for upload in all_images:
@@ -1908,8 +2630,6 @@ async def generate_thumbnail(
             db.rollback()
             raise HTTPException(status_code=500, detail=f"Uploaded image persistence failed: {exc}") from exc
 
-    safe_width = max(320, min(int(width or 1280), 1920))
-    safe_height = max(320, min(int(height or 720), 1920))
     count = max(1, min(int(output_count or 1), 4))
     enhanced_prompt = build_thumbnail_image_prompt(
         prompt=prompt_text,
@@ -1924,15 +2644,27 @@ async def generate_thumbnail(
         reference_count=len(reference_images or []),
         has_face=bool(face_image),
         has_logo=bool(logo),
-    )
+    ) if enhance_prompt else prompt_text
 
     variations: list[dict] = []
+    provider_attempts: list[dict] = []
     for index in range(count):
         provider_prompt = enhanced_prompt if index == 0 else f"{enhanced_prompt}\nVariation {index + 1}: keep the same subject but change the layout, focal framing, colors, and visual energy."
-        image_result = generate_image_via_proxy(provider_prompt, safe_width, safe_height)
+        image_result = await run_in_threadpool(generate_image_via_proxy, provider_prompt, safe_width, safe_height)
+        if image_result.get("provider_failures"):
+            provider_attempts = image_result.get("provider_failures", [])
         image_value = image_result.get("url", "")
         if image_value:
+            try:
+                image_result = await run_in_threadpool(normalize_image_result_to_dimensions, image_result, safe_width, safe_height)
+            except Exception as exc:
+                provider_attempts.append({"provider": image_result.get("source", "unknown"), "category": "invalid_image_dimensions"})
+                print(f"Thumbnail image normalization failed ({type(exc).__name__})")
+                continue
+            image_value = image_result.get("url", "")
             metadata = build_thumbnail_result_metadata(image_result, safe_width, safe_height)
+            if metadata["fallbackUsed"] or not metadata["productionQuality"]:
+                continue
             variations.append({
                 "index": index,
                 "image_url": image_value,
@@ -1947,7 +2679,19 @@ async def generate_thumbnail(
             })
 
     if not variations:
-        raise HTTPException(status_code=502, detail="Thumbnail image generation failed")
+        attempts = provider_attempts or (image_result.get("provider_failures", []) if 'image_result' in locals() else [])
+        raise HTTPException(status_code=503, detail={
+            "success": False,
+            "status": "failed",
+            "request_id": client_request_id,
+            "mode": "thumbnail",
+            "error_code": "NO_IMAGE_PROVIDER_AVAILABLE",
+            "code": "AI_IMAGE_PROVIDERS_UNAVAILABLE",
+            "message": "No real AI image provider returned a production-quality thumbnail.",
+            "retryable": True,
+            "provider_attempts": attempts,
+            "providerFailures": attempts,
+        })
 
     primary = variations[0]
     fallback_used = bool(primary.get("fallbackUsed"))
@@ -1967,6 +2711,7 @@ async def generate_thumbnail(
         "editable_as": "single_image_layer",
         "provider": primary.get("provider"),
         "source": primary.get("source"),
+        "request_id": client_request_id,
         "productionQuality": production_quality,
         "fallbackUsed": fallback_used,
         "fallbackReason": fallback_reason,
@@ -1983,7 +2728,7 @@ async def generate_thumbnail(
             model="flux",
             width=safe_width,
             height=safe_height,
-            fallback_used=bool(primary.get("fallbackUsed")),
+            fallback_used=False,
             user_id=current_user.id,
             project_id=project_id or None,
             metadata={
@@ -1991,6 +2736,7 @@ async def generate_thumbnail(
                 "provider": primary.get("provider"),
                 "source": primary.get("source"),
                 "seed": primary.get("seed"),
+                "request_id": client_request_id,
                 "uploaded_asset_ids": persisted_uploads,
             },
         )
@@ -2002,25 +2748,43 @@ async def generate_thumbnail(
             project_id=project_id or None,
             asset_id=persisted.id,
             provider=primary.get("provider"),
-            metadata={"prompt": prompt_text, "source": primary.get("source"), "fallbackUsed": primary.get("fallbackUsed")},
+            metadata={"prompt": prompt_text, "request_id": client_request_id, "source": primary.get("source"), "fallbackUsed": primary.get("fallbackUsed")},
         )
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Thumbnail generated but persistence failed: {exc}") from exc
     primary["asset_id"] = persisted.id
+    primary["generation_id"] = persisted.id
+    primary["request_id"] = client_request_id
     primary["image_url"] = persisted.public_url
     primary["thumbnail_url"] = persisted.public_url
     primary.setdefault("result", {})
     primary["result"]["assetId"] = persisted.id
+    primary["result"]["generationId"] = persisted.id
+    primary["result"]["requestId"] = client_request_id
     primary["result"]["imageUrl"] = persisted.public_url
     primary["result"]["mimeType"] = persisted.mime_type
+    primary["result"]["width"] = safe_width
+    primary["result"]["height"] = safe_height
     primary["uploaded_asset_ids"] = persisted_uploads
 
     return ThumbnailGenerationResponse(
         success=True,
+        status="success",
+        request_id=client_request_id,
+        generation_id=persisted.id,
+        mode="thumbnail",
         asset_id=primary.get("asset_id"),
         image_url=primary["image_url"],
         thumbnail_url=primary["thumbnail_url"],
+        original_prompt=prompt_text,
+        enhanced_prompt=enhanced_prompt,
+        mime_type=persisted.mime_type,
+        width=safe_width,
+        height=safe_height,
+        aspect_ratio=aspect_ratio,
+        project_id=project_id or None,
+        provider_attempts=provider_attempts,
         design=design,
         message=f"Thumbnail generated with {primary.get('provider', 'AI provider')}",
         provider=primary.get("provider"),
@@ -2035,7 +2799,7 @@ async def generate_thumbnail(
 
 
 @router.get("/cache/status")
-async def get_cache_status():
+async def get_cache_status(_current_user: User = Depends(get_current_user)):
     """Get cache status for debugging."""
     return {
         "cached_items": len(_response_cache),
@@ -2052,18 +2816,13 @@ async def get_cache_status():
 
 
 @router.delete("/cache")
-async def clear_cache():
+async def clear_cache(_current_user: User = Depends(get_current_user)):
     """Clear the response cache."""
     _response_cache.clear()
     return {"message": "Cache cleared successfully"}
 
 
 @router.get("/health")
-async def ai_health_check():
-    """Health check for AI service."""
-    api_key_configured = bool(settings.GEMINI_API_KEY)
-    return {
-        "status": "ok",
-        "gemini_configured": api_key_configured,
-        "cache_items": len(_response_cache)
-    }
+async def ai_health_check(_current_user: User = Depends(get_current_user)):
+    """Authenticated, secret-safe AI diagnostics endpoint."""
+    return build_ai_health_payload()

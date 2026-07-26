@@ -3,7 +3,7 @@ import { ZoomIn, ZoomOut, Maximize } from 'lucide-react';
 import { useEditorStore } from '../../store/useEditorStore';
 
 export const ZoomController: React.FC = () => {
-  const { zoom, setZoom, canvas } = useEditorStore();
+  const { zoom, setZoom, canvas, canvasWidth, canvasHeight } = useEditorStore();
 
   const handleZoomIn = () => {
     setZoom(zoom + 0.1);
@@ -15,38 +15,38 @@ export const ZoomController: React.FC = () => {
 
   const handleFit = () => {
     if (!canvas) return;
-    
-    // Find parent element size
-    const container = canvas.getElement().parentElement?.parentElement;
-    if (!container) return;
-    
-    const containerWidth = container.clientWidth;
-    const containerHeight = container.clientHeight;
-    
-    const scaleX = (containerWidth - 120) / 800;
-    const scaleY = (containerHeight - 120) / 800;
+
+    // Find the workspace container
+    const canvasContainer = canvas.getElement()?.parentElement;
+    const workspaceContainer = canvasContainer?.parentElement;
+    if (!workspaceContainer) return;
+
+    const containerWidth = workspaceContainer.clientWidth;
+    const containerHeight = workspaceContainer.clientHeight;
+
+    const cw = canvas.getWidth() || canvasWidth || 800;
+    const ch = canvas.getHeight() || canvasHeight || 800;
+
+    // Calculate ideal zoom with padding
+    const padding = 80;
+    const scaleX = (containerWidth - padding) / cw;
+    const scaleY = (containerHeight - padding) / ch;
     const idealZoom = Math.min(scaleX, scaleY, 1.0);
-    
-    // Reset zoom and center
+
+    // Calculate centering offset
+    const scaledWidth = cw * idealZoom;
+    const scaledHeight = ch * idealZoom;
+    const offsetX = (containerWidth - scaledWidth) / 2;
+    const offsetY = (containerHeight - scaledHeight) / 2;
+
+    // Apply viewport transform
+    canvas.setViewportTransform([idealZoom, 0, 0, idealZoom, offsetX, offsetY]);
     setZoom(idealZoom);
-    canvas.setViewportTransform([idealZoom, 0, 0, idealZoom, 0, 0]);
-    
-    // Center the viewport
-    const vW = containerWidth;
-    const vH = containerHeight;
-    const cW = 800 * idealZoom;
-    const cH = 800 * idealZoom;
-    
-    const offsetX = (vW - cW) / 2;
-    const offsetY = (vH - cH) / 2;
-    
-    canvas.viewportTransform![4] = offsetX;
-    canvas.viewportTransform![5] = offsetY;
     canvas.renderAll();
   };
 
   return (
-    <div className="absolute bottom-6 right-6 flex items-center gap-2 bg-[#121214]/90 backdrop-blur-md px-3 py-1.5 rounded-full border border-zinc-800 shadow-xl select-none z-10">
+    <div className="absolute bottom-6 right-6 flex items-center gap-2 bg-[#101018]/90 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/[0.08] shadow-xl select-none z-10">
       <button
         onClick={handleZoomOut}
         className="p-1 hover:bg-zinc-800 rounded-full text-zinc-400 hover:text-white transition-colors cursor-pointer"

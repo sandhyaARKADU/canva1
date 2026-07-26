@@ -53,6 +53,7 @@ export const SmartResize: React.FC = () => {
 
     canvas.setWidth(targetWidth);
     canvas.setHeight(targetHeight);
+    useEditorStore.getState().setCanvasDimensions(targetWidth, targetHeight);
     canvas.renderAll();
     saveHistory();
 

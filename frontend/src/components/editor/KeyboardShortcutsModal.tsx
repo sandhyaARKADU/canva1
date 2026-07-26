@@ -126,9 +126,9 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
       />
 
       {/* Modal */}
-      <div className="relative bg-[#121214] border border-zinc-800 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden">
+      <div className="relative bg-[#101018] border border-white/[0.08] rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-zinc-800">
+        <div className="flex items-center justify-between p-6 border-b border-white/[0.08]">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-xl bg-violet-600/20">
               <Keyboard className="w-5 h-5 text-violet-400" />
@@ -147,7 +147,7 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
         </div>
 
         {/* Search */}
-        <div className="px-6 py-4 border-b border-zinc-800">
+        <div className="px-6 py-4 border-b border-white/[0.08]">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
             <input
@@ -155,20 +155,20 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
               placeholder="Search shortcuts..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-zinc-900 border border-zinc-800 focus:border-violet-500 rounded-lg py-2.5 pl-10 pr-4 text-sm text-zinc-200 outline-none transition-colors placeholder:text-zinc-600"
+              className="w-full bg-zinc-900 border border-white/[0.08] focus:border-violet-500 rounded-lg py-2.5 pl-10 pr-4 text-sm text-zinc-200 outline-none transition-colors placeholder:text-zinc-600"
               autoFocus
             />
           </div>
         </div>
 
         {/* Group Tabs */}
-        <div className="px-6 py-3 border-b border-zinc-800 flex gap-2 overflow-x-auto">
+        <div className="px-6 py-3 border-b border-white/[0.08] flex gap-2 overflow-x-auto">
           <button
             onClick={() => setActiveGroup(null)}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
               activeGroup === null
                 ? 'bg-violet-600/20 text-violet-400 border border-violet-500/30'
-                : 'bg-zinc-900 text-zinc-400 border border-zinc-800 hover:border-zinc-700'
+                : 'bg-zinc-900 text-zinc-400 border border-white/[0.08] hover:border-zinc-700'
             }`}
           >
             All
@@ -180,7 +180,7 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
                 activeGroup === group.name
                   ? 'bg-violet-600/20 text-violet-400 border border-violet-500/30'
-                  : 'bg-zinc-900 text-zinc-400 border border-zinc-800 hover:border-zinc-700'
+                  : 'bg-zinc-900 text-zinc-400 border border-white/[0.08] hover:border-zinc-700'
               }`}
             >
               {group.name}
@@ -234,7 +234,7 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-zinc-800 bg-zinc-900/30">
+        <div className="px-6 py-4 border-t border-white/[0.08] bg-zinc-900/30">
           <p className="text-[10px] text-zinc-500 text-center">
             Press <kbd className="px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-[9px] font-mono">?</kbd> anywhere to open this panel
           </p>

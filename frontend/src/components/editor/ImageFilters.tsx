@@ -28,7 +28,7 @@ const VINTAGE_MATRIX = [
 ];
 
 export const ImageFilters: React.FC = () => {
-  const { canvas, selectedObject } = useEditorStore();
+  const { canvas, selectedObject, saveHistory } = useEditorStore();
 
   const [brightness, setBrightness] = useState(0);
   const [contrast, setContrast] = useState(0);
@@ -120,6 +120,8 @@ export const ImageFilters: React.FC = () => {
     }
 
     applyFilters(newB, newC, newS, activeQuickFilters);
+    window.clearTimeout((window as any).__teckstudioFilterHistoryTimer);
+    (window as any).__teckstudioFilterHistoryTimer = window.setTimeout(() => saveHistory(), 250);
   };
 
   const toggleQuickFilter = (key: QuickFilter) => {
@@ -131,6 +133,7 @@ export const ImageFilters: React.FC = () => {
     }
     setActiveQuickFilters(next);
     applyFilters(brightness, contrast, saturation, next);
+    saveHistory();
   };
 
   const resetAll = () => {
@@ -139,6 +142,7 @@ export const ImageFilters: React.FC = () => {
     setSaturation(0);
     setActiveQuickFilters(new Set());
     applyFilters(0, 0, 0, new Set());
+    saveHistory();
   };
 
   const sliders: {

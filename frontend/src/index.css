@@ -4,16 +4,30 @@
 
 @theme {
   --font-sans: "Outfit", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  
-  /* Slate/Dark Palette Customizations */
-  --color-editor-bg: #09090b;
-  --color-panel-bg: #121214;
-  --color-panel-header: #18181b;
-  --color-panel-border: #27272a;
-  --color-panel-hover: #1f1f23;
-  --color-accent-purple: #8b5cf6;
-  --color-accent-purple-hover: #7c3aed;
-  --color-accent-pink: #d946ef;
+
+  /* ── Premium Dark AI-Design-Platform Palette ── */
+  --color-editor-bg: #08080D;
+  --color-panel-bg: #101018;
+  --color-panel-header: #12121B;
+  --color-panel-border: rgba(255, 255, 255, 0.10);
+  --color-panel-hover: #171722;
+  --color-accent-purple: #8B5CF6;
+  --color-accent-purple-hover: #7C3AED;
+  --color-accent-pink: #A855F7;
+  --color-accent-cyan: #22D3EE;
+
+  /* ── Named Surfaces ── */
+  --color-surface-primary: #08080D;
+  --color-surface-secondary: #0E0E16;
+  --color-surface-sidebar: #101018;
+  --color-surface-card: #12121B;
+  --color-surface-elevated: #171722;
+
+  /* ── Text Hierarchy ── */
+  --color-text-primary: #F8FAFC;
+  --color-text-secondary: #A8A8B8;
+  --color-text-muted: #71717F;
+  --color-text-disabled: rgba(168, 168, 184, 0.55);
 }
 
 html,
@@ -23,45 +37,46 @@ body,
   padding: 0;
   width: 100%;
   height: 100%;
-  background-color: var(--color-editor-bg);
-  color: #f4f4f5;
+  background: radial-gradient(circle at 75% 5%, rgba(139, 92, 246, 0.07), transparent 30%),
+              radial-gradient(circle at 15% 90%, rgba(34, 211, 238, 0.04), transparent 25%),
+              #08080D;
+  color: var(--color-text-primary);
   font-family: var(--font-sans);
   overflow: hidden;
 }
 
-/* Custom scrollbars for a premium feel */
+/* ── Premium Dark Scrollbar ── */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--color-panel-bg);
+  background: #0E0E16;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--color-panel-border);
+  background: rgba(139, 92, 246, 0.45);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-accent-purple);
+  background: rgba(168, 85, 247, 0.75);
 }
 
-/* Glassmorphism utility helper */
+/* ── Glass Panel Utility ── */
 .glass-panel {
-  background: rgba(18, 18, 20, 0.75);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(39, 39, 42, 0.5);
+  background: rgba(16, 16, 24, 0.80);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-/* Fabric canvas selection border adjustment */
+/* ── Fabric Canvas Adjustment ── */
 .canvas-container {
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
   border-radius: 8px;
-  overflow: hidden;
-  background-color: #ffffff; /* Default canvas background representation */
+  background-color: #ffffff;
   transition: box-shadow 0.3s ease;
 }
 

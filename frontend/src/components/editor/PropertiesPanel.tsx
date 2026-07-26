@@ -6,6 +6,7 @@ import {
   AlignLeft,
   AlignCenter,
   AlignRight,
+  AlignJustify,
   Group,
   Ungroup,
   Copy,
@@ -30,6 +31,8 @@ import { AlignmentTools } from './AlignmentTools';
 import { DevModeInspector } from './DevModeInspector';
 import { ImageCropper } from './ImageCropper';
 import { TextOnPath } from './TextOnPath';
+import { ElementPropertiesControls } from './ElementPropertiesControls';
+import { COMMON_FONT_SIZES, MAX_FONT_SIZE, MIN_FONT_SIZE, clampFontSize, hasPartialTextSelection, isTextObjectLocked, readSelectionStyleValue } from '../../utils/textSelectionStyles';
 
 const PRESET_COLORS = [
   '#ffffff', '#000000', '#f4f4f5', '#71717a',
@@ -59,16 +62,19 @@ export const PropertiesPanel: React.FC = () => {
     fontStyle,
     underline,
     textAlign,
+    textSelectionRange,
     opacity,
     setFillColor,
     setStrokeColor,
     setStrokeWidth,
     setFontFamily,
-    setFontSize,
+    applyFontSize,
     setFontWeight,
     setFontStyle,
     setUnderline,
     setTextAlign,
+    captureTextSelection,
+    applyTextSelectionStyles,
     setOpacity,
     groupSelected,
     ungroupSelected,
@@ -85,6 +91,7 @@ export const PropertiesPanel: React.FC = () => {
     text: true,
     effects: true,
     spacing: false,
+    element: true,
   });
 
   const toggleSection = (section: string) => {
@@ -98,6 +105,65 @@ export const PropertiesPanel: React.FC = () => {
   );
 
   const isLine = selectedObject && selectedObject.type === 'line';
+  const hasPartialTextRange = Boolean(isText && hasPartialTextSelection(selectedObject, textSelectionRange));
+  const textStyleTargetLabel = !isText
+    ? 'Select a text element to edit its style.'
+    : hasPartialTextRange
+      ? 'Styling selected text'
+      : 'Styling entire text box';
+
+  const selectedFontSizeValue = isText
+    ? readSelectionStyleValue<number>(selectedObject, 'fontSize', fontSize, textSelectionRange)
+    : fontSize;
+  const hasMixedFontSize = selectedFontSizeValue === 'Mixed';
+  const effectiveFontSize = typeof selectedFontSizeValue === 'number' ? selectedFontSizeValue : fontSize;
+  const isSelectedTextLocked = Boolean(isText && isTextObjectLocked(selectedObject));
+  const [fontSizeDraft, setFontSizeDraft] = React.useState(String(effectiveFontSize));
+  const fontStepAppliedAtRef = React.useRef(0);
+
+  React.useEffect(() => {
+    setFontSizeDraft(hasMixedFontSize ? '' : String(effectiveFontSize));
+  }, [effectiveFontSize, hasMixedFontSize]);
+
+  const commitFontSizeDraft = React.useCallback((value = fontSizeDraft) => {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) {
+      setFontSizeDraft(hasMixedFontSize ? '' : String(effectiveFontSize));
+      return;
+    }
+
+    const nextSize = clampFontSize(parsed);
+    setFontSizeDraft(String(nextSize));
+    applyFontSize(nextSize);
+  }, [applyFontSize, effectiveFontSize, fontSizeDraft, hasMixedFontSize]);
+
+  const applyFontSizeStep = React.useCallback((event: React.SyntheticEvent<HTMLElement>, delta: number) => {
+    if (!isText) return;
+    event.preventDefault();
+    const now = Date.now();
+    if (now - fontStepAppliedAtRef.current < 120) return;
+    fontStepAppliedAtRef.current = now;
+    captureTextSelection();
+    applyFontSize(clampFontSize(effectiveFontSize + delta));
+  }, [applyFontSize, captureTextSelection, effectiveFontSize, isText]);
+
+  const preserveTextSelection = React.useCallback(() => {
+    if (isText) captureTextSelection();
+  }, [captureTextSelection, isText]);
+
+  const preserveTextButtonMouseDown = React.useCallback((event: React.MouseEvent<HTMLElement>) => {
+    if (!isText) return;
+    event.preventDefault();
+    captureTextSelection();
+  }, [captureTextSelection, isText]);
+
+  const textColorInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  React.useEffect(() => {
+    const handleOpenTextColor = () => textColorInputRef.current?.click();
+    window.addEventListener('teckstudio:open-text-color', handleOpenTextColor);
+    return () => window.removeEventListener('teckstudio:open-text-color', handleOpenTextColor);
+  }, []);
 
   // Canvas background state helper
   const [canvasBg, setCanvasBg] = React.useState('#ffffff');
@@ -179,6 +245,10 @@ export const PropertiesPanel: React.FC = () => {
   const handleLetterSpacingChange = (spacing: number) => {
     if (!selectedObject || !canvas) return;
     setLetterSpacing(spacing);
+    if (isText) {
+      applyTextSelectionStyles({ charSpacing: spacing });
+      return;
+    }
     (selectedObject as any).set('charSpacing', spacing);
     canvas.renderAll();
     saveHistory();
@@ -231,7 +301,7 @@ export const PropertiesPanel: React.FC = () => {
   // If no object selected, show Page properties
   if (!selectedObject) {
     return (
-      <aside className="w-72 border-l border-zinc-800 bg-[#121214] p-4 flex flex-col gap-4 select-none shrink-0 overflow-y-auto">
+      <aside className="w-72 border-l border-white/[0.08] bg-[#101018] p-4 flex flex-col gap-4 select-none shrink-0 overflow-y-auto">
         <div>
           <h3 className="text-sm font-bold text-zinc-100 mb-1">Page Settings</h3>
           <p className="text-[10px] text-zinc-500">Configure global canvas options</p>
@@ -270,7 +340,7 @@ export const PropertiesPanel: React.FC = () => {
                     className={`w-6 h-6 rounded-md border ${
                       canvasBg.toLowerCase() === color.toLowerCase()
                         ? 'border-violet-500 scale-110 shadow-md ring-2 ring-violet-500/20'
-                        : 'border-zinc-800 hover:scale-105'
+                        : 'border-white/[0.08] hover:scale-105'
                     } cursor-pointer transition-all`}
                     title={color}
                   />
@@ -289,7 +359,7 @@ export const PropertiesPanel: React.FC = () => {
   }
 
   return (
-    <aside className="w-72 border-l border-zinc-800 bg-[#121214] p-4 flex flex-col gap-3 select-none shrink-0 overflow-y-auto z-10">
+    <aside className="w-72 border-l border-white/[0.08] bg-[#101018] p-4 flex flex-col gap-3 select-none shrink-0 overflow-y-auto z-10">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -339,6 +409,13 @@ export const PropertiesPanel: React.FC = () => {
         </button>
       )}
 
+      <ElementPropertiesControls
+        canvas={canvas}
+        selectedObject={selectedObject}
+        saveHistory={saveHistory}
+        ungroupSelected={ungroupSelected}
+      />
+
       {/* Transform Section */}
       <div className="flex flex-col gap-2">
         <SectionHeader title="Transform" sectionKey="transform" icon={<Move className="w-4 h-4 text-cyan-400" />} />
@@ -355,7 +432,7 @@ export const PropertiesPanel: React.FC = () => {
                   canvas.renderAll();
                   saveHistory();
                 }}
-                className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-xs text-zinc-200 outline-none focus:border-violet-500 font-mono"
+                className="w-full bg-zinc-900 border border-white/[0.08] rounded px-2 py-1.5 text-xs text-zinc-200 outline-none focus:border-violet-500 font-mono"
               />
             </div>
             <div className="flex flex-col gap-1">
@@ -369,7 +446,7 @@ export const PropertiesPanel: React.FC = () => {
                   canvas.renderAll();
                   saveHistory();
                 }}
-                className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-xs text-zinc-200 outline-none focus:border-violet-500 font-mono"
+                className="w-full bg-zinc-900 border border-white/[0.08] rounded px-2 py-1.5 text-xs text-zinc-200 outline-none focus:border-violet-500 font-mono"
               />
             </div>
             <div className="flex flex-col gap-1">
@@ -384,7 +461,7 @@ export const PropertiesPanel: React.FC = () => {
                   canvas.renderAll();
                   saveHistory();
                 }}
-                className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-xs text-zinc-200 outline-none focus:border-violet-500 font-mono"
+                className="w-full bg-zinc-900 border border-white/[0.08] rounded px-2 py-1.5 text-xs text-zinc-200 outline-none focus:border-violet-500 font-mono"
               />
             </div>
             <div className="flex flex-col gap-1">
@@ -399,7 +476,7 @@ export const PropertiesPanel: React.FC = () => {
                   canvas.renderAll();
                   saveHistory();
                 }}
-                className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-xs text-zinc-200 outline-none focus:border-violet-500 font-mono"
+                className="w-full bg-zinc-900 border border-white/[0.08] rounded px-2 py-1.5 text-xs text-zinc-200 outline-none focus:border-violet-500 font-mono"
               />
             </div>
             <div className="flex flex-col gap-1 col-span-2">
@@ -435,16 +512,19 @@ export const PropertiesPanel: React.FC = () => {
             <div className="flex flex-col gap-2 px-1">
               <div className="flex items-center gap-2">
                 <input
+                  ref={isText ? textColorInputRef : undefined}
                   type="color"
                   value={fillColor}
+                  onPointerDown={preserveTextSelection}
                   onChange={(e) => setFillColor(e.target.value)}
                   className="w-10 h-10 rounded-lg border border-zinc-700 bg-transparent cursor-pointer"
                 />
                 <input
                   type="text"
                   value={fillColor.toUpperCase()}
+                  onPointerDown={preserveTextSelection}
                   onChange={(e) => setFillColor(e.target.value)}
-                  className="flex-1 bg-zinc-900 border border-zinc-800 focus:border-violet-500 rounded-lg px-3 py-1.5 text-xs text-zinc-200 outline-none text-center font-mono"
+                  className="flex-1 bg-zinc-900 border border-white/[0.08] focus:border-violet-500 rounded-lg px-3 py-1.5 text-xs text-zinc-200 outline-none text-center font-mono"
                 />
               </div>
 
@@ -452,6 +532,7 @@ export const PropertiesPanel: React.FC = () => {
                 {PRESET_COLORS.map((color) => (
                   <button
                     key={color}
+                    onMouseDown={preserveTextButtonMouseDown}
                     onClick={() => setFillColor(color)}
                     style={{ backgroundColor: color }}
                     className={`w-6 h-6 rounded-md border ${
@@ -477,13 +558,17 @@ export const PropertiesPanel: React.FC = () => {
             <SectionHeader title="Text Properties" sectionKey="text" icon={<Type className="w-4 h-4 text-emerald-400" />} />
             {openSections.text && (
               <div className="flex flex-col gap-3 px-1">
+                <div className={`rounded-lg border px-3 py-2 text-[11px] font-semibold ${hasPartialTextRange ? 'border-violet-400/30 bg-violet-500/10 text-violet-100' : 'border-white/[0.08] bg-zinc-900/60 text-zinc-400'}`}>
+                  {textStyleTargetLabel}
+                </div>
                 {/* Font Family */}
                 <div className="flex flex-col gap-1.5">
                   <label className="text-[10px] text-zinc-500">Font Family</label>
                   <select
                     value={fontFamily}
+                    onPointerDown={preserveTextSelection}
                     onChange={(e) => setFontFamily(e.target.value)}
-                    className="w-full bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-violet-500 cursor-pointer"
+                    className="w-full bg-zinc-900 border border-white/[0.08] text-zinc-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-violet-500 cursor-pointer"
                   >
                     {FONT_FAMILIES.map((family) => (
                       <option key={family} value={family}>{family}</option>
@@ -495,30 +580,65 @@ export const PropertiesPanel: React.FC = () => {
                 <div className="flex flex-col gap-1.5">
                   <div className="flex justify-between items-center">
                     <label className="text-[10px] text-zinc-500">Font Size</label>
-                    <span className="text-[10px] text-zinc-400 font-mono">{fontSize}px</span>
+                    <span className="text-[10px] text-zinc-400 font-mono">{hasMixedFontSize ? 'Mixed' : `${effectiveFontSize}px`}</span>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="grid grid-cols-[28px_1fr_28px] gap-2">
                     <button
-                      onClick={() => setFontSize(Math.max(fontSize - 2, 4))}
-                      className="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 flex items-center justify-center text-zinc-300 font-bold text-xs cursor-pointer"
+                      onPointerDown={(event) => applyFontSizeStep(event, -1)}
+                      onMouseUp={(event) => applyFontSizeStep(event, -1)}
+                      onClick={(event) => applyFontSizeStep(event, -1)}
+                      disabled={isSelectedTextLocked || effectiveFontSize <= MIN_FONT_SIZE}
+                      className="w-7 h-7 rounded-lg bg-zinc-900 border border-white/[0.08] hover:bg-zinc-800 disabled:opacity-45 disabled:cursor-not-allowed flex items-center justify-center text-zinc-300 font-bold text-xs cursor-pointer"
+                      title="Decrease font size by 1px"
                     >
                       <Minus className="w-3 h-3" />
                     </button>
                     <input
-                      type="range"
-                      min="6"
-                      max="200"
-                      value={fontSize}
-                      onChange={(e) => setFontSize(parseInt(e.target.value))}
-                      className="flex-1 accent-violet-500 h-1 rounded-full cursor-pointer bg-zinc-800"
+                      type="number"
+                      min={MIN_FONT_SIZE}
+                      max={MAX_FONT_SIZE}
+                      value={fontSizeDraft}
+                      placeholder={hasMixedFontSize ? 'Mixed' : undefined}
+                      disabled={isSelectedTextLocked}
+                      onPointerDown={preserveTextSelection}
+                      onChange={(e) => setFontSizeDraft(e.target.value)}
+                      onBlur={() => commitFontSizeDraft()}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          commitFontSizeDraft();
+                          event.currentTarget.blur();
+                        }
+                      }}
+                      className="w-full bg-zinc-900 border border-white/[0.08] rounded px-2 py-1.5 text-xs text-zinc-200 outline-none focus:border-violet-500 font-mono text-center placeholder:text-amber-300 disabled:opacity-45 disabled:cursor-not-allowed"
+                      title="Change the size of the selected text"
                     />
                     <button
-                      onClick={() => setFontSize(fontSize + 2)}
-                      className="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 flex items-center justify-center text-zinc-300 font-bold text-xs cursor-pointer"
+                      onPointerDown={(event) => applyFontSizeStep(event, 1)}
+                      onMouseUp={(event) => applyFontSizeStep(event, 1)}
+                      onClick={(event) => applyFontSizeStep(event, 1)}
+                      disabled={isSelectedTextLocked || effectiveFontSize >= MAX_FONT_SIZE}
+                      className="w-7 h-7 rounded-lg bg-zinc-900 border border-white/[0.08] hover:bg-zinc-800 disabled:opacity-45 disabled:cursor-not-allowed flex items-center justify-center text-zinc-300 font-bold text-xs cursor-pointer"
+                      title="Increase font size by 1px"
                     >
                       <Plus className="w-3 h-3" />
                     </button>
                   </div>
+                  {isSelectedTextLocked && (
+                    <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-[10px] font-semibold text-amber-200">
+                      Unlock this text element to change its size.
+                    </div>
+                  )}
+                  <select
+                    value={!hasMixedFontSize && COMMON_FONT_SIZES.includes(effectiveFontSize) ? effectiveFontSize : ''}
+                    disabled={isSelectedTextLocked}
+                    onPointerDown={preserveTextSelection}
+                    onChange={(e) => { if (e.target.value) commitFontSizeDraft(e.target.value); }}
+                    className="w-full bg-zinc-900 border border-white/[0.08] text-zinc-300 rounded-lg px-3 py-2 text-xs outline-none focus:border-violet-500 cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+                  >
+                    <option value="">Common sizes</option>
+                    {COMMON_FONT_SIZES.map((size) => <option key={size} value={size}>{size}px</option>)}
+                  </select>
                 </div>
 
                 {/* Formatting & Alignment */}
@@ -526,8 +646,9 @@ export const PropertiesPanel: React.FC = () => {
                   <label className="text-[10px] text-zinc-500">Formatting</label>
                   <div className="grid grid-cols-2 gap-2">
                     {/* Text Style toggles */}
-                    <div className="flex border border-zinc-800 rounded-lg bg-zinc-900 p-0.5">
+                    <div className="flex border border-white/[0.08] rounded-lg bg-zinc-900 p-0.5">
                       <button
+                        onMouseDown={preserveTextButtonMouseDown}
                         onClick={() => setFontWeight(fontWeight === 'bold' ? 'normal' : 'bold')}
                         className={`flex-1 py-1.5 rounded-md flex items-center justify-center cursor-pointer transition-colors ${
                           fontWeight === 'bold' ? 'bg-violet-600/20 text-violet-400' : 'text-zinc-400 hover:text-white'
@@ -537,6 +658,7 @@ export const PropertiesPanel: React.FC = () => {
                         <Bold className="w-3.5 h-3.5" />
                       </button>
                       <button
+                        onMouseDown={preserveTextButtonMouseDown}
                         onClick={() => setFontStyle(fontStyle === 'italic' ? 'normal' : 'italic')}
                         className={`flex-1 py-1.5 rounded-md flex items-center justify-center cursor-pointer transition-colors ${
                           fontStyle === 'italic' ? 'bg-violet-600/20 text-violet-400' : 'text-zinc-400 hover:text-white'
@@ -546,6 +668,7 @@ export const PropertiesPanel: React.FC = () => {
                         <Italic className="w-3.5 h-3.5" />
                       </button>
                       <button
+                        onMouseDown={preserveTextButtonMouseDown}
                         onClick={() => setUnderline(!underline)}
                         className={`flex-1 py-1.5 rounded-md flex items-center justify-center cursor-pointer transition-colors ${
                           underline ? 'bg-violet-600/20 text-violet-400' : 'text-zinc-400 hover:text-white'
@@ -557,8 +680,9 @@ export const PropertiesPanel: React.FC = () => {
                     </div>
 
                     {/* Text Alignments */}
-                    <div className="flex border border-zinc-800 rounded-lg bg-zinc-900 p-0.5">
+                    <div className="flex border border-white/[0.08] rounded-lg bg-zinc-900 p-0.5">
                       <button
+                        onMouseDown={preserveTextButtonMouseDown}
                         onClick={() => setTextAlign('left')}
                         className={`flex-1 py-1.5 rounded-md flex items-center justify-center cursor-pointer transition-colors ${
                           textAlign === 'left' ? 'bg-violet-600/20 text-violet-400' : 'text-zinc-400 hover:text-white'
@@ -568,6 +692,7 @@ export const PropertiesPanel: React.FC = () => {
                         <AlignLeft className="w-3.5 h-3.5" />
                       </button>
                       <button
+                        onMouseDown={preserveTextButtonMouseDown}
                         onClick={() => setTextAlign('center')}
                         className={`flex-1 py-1.5 rounded-md flex items-center justify-center cursor-pointer transition-colors ${
                           textAlign === 'center' ? 'bg-violet-600/20 text-violet-400' : 'text-zinc-400 hover:text-white'
@@ -577,6 +702,7 @@ export const PropertiesPanel: React.FC = () => {
                         <AlignCenter className="w-3.5 h-3.5" />
                       </button>
                       <button
+                        onMouseDown={preserveTextButtonMouseDown}
                         onClick={() => setTextAlign('right')}
                         className={`flex-1 py-1.5 rounded-md flex items-center justify-center cursor-pointer transition-colors ${
                           textAlign === 'right' ? 'bg-violet-600/20 text-violet-400' : 'text-zinc-400 hover:text-white'
@@ -585,7 +711,39 @@ export const PropertiesPanel: React.FC = () => {
                       >
                         <AlignRight className="w-3.5 h-3.5" />
                       </button>
+                      <button
+                        onMouseDown={preserveTextButtonMouseDown}
+                        onClick={() => setTextAlign('justify')}
+                        className={`flex-1 py-1.5 rounded-md flex items-center justify-center cursor-pointer transition-colors ${
+                          textAlign === 'justify' ? 'bg-violet-600/20 text-violet-400' : 'text-zinc-400 hover:text-white'
+                        }`}
+                        title="Justify"
+                      >
+                        <AlignJustify className="w-3.5 h-3.5" />
+                      </button>
                     </div>
+                  </div>
+                </div>
+
+                {/* Character Background */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] text-zinc-500">Selection Highlight</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      defaultValue="#8b5cf6"
+                      onPointerDown={preserveTextSelection}
+                      onChange={(e) => applyTextSelectionStyles({ textBackgroundColor: e.target.value })}
+                      className="w-8 h-8 rounded-lg border border-zinc-700 bg-transparent cursor-pointer"
+                    />
+                    <button
+                      type="button"
+                      onMouseDown={preserveTextButtonMouseDown}
+                      onClick={() => applyTextSelectionStyles({ textBackgroundColor: '' })}
+                      className="flex-1 rounded-lg border border-white/[0.08] bg-zinc-900 px-2 py-2 text-[10px] font-bold text-zinc-300 hover:text-white"
+                    >
+                      Clear highlight
+                    </button>
                   </div>
                 </div>
 
@@ -600,6 +758,7 @@ export const PropertiesPanel: React.FC = () => {
                     min="-200"
                     max="500"
                     value={letterSpacing}
+                    onPointerDown={preserveTextSelection}
                     onChange={(e) => handleLetterSpacingChange(parseInt(e.target.value))}
                     className="w-full accent-violet-500 h-1 rounded-full cursor-pointer bg-zinc-800"
                   />
@@ -617,6 +776,7 @@ export const PropertiesPanel: React.FC = () => {
                     max="3"
                     step="0.1"
                     value={lineHeight}
+                    onPointerDown={preserveTextSelection}
                     onChange={(e) => handleLineHeightChange(parseFloat(e.target.value))}
                     className="w-full accent-violet-500 h-1 rounded-full cursor-pointer bg-zinc-800"
                   />
@@ -627,18 +787,18 @@ export const PropertiesPanel: React.FC = () => {
         </>
       )}
 
-      {/* Stroke Settings Area - Hidden for text and line */}
-      {!isText && (
+      {/* Stroke Settings Area */}
+      {!isLine && (
         <>
           <div className="h-[1px] bg-zinc-800" />
 
           <div className="flex flex-col gap-2">
-            <SectionHeader title="Border" sectionKey="stroke" icon={<Square className="w-4 h-4 text-amber-400" />} />
+            <SectionHeader title={isText ? "Text Stroke" : "Border"} sectionKey="stroke" icon={<Square className="w-4 h-4 text-amber-400" />} />
             {openSections.stroke && (
               <div className="flex flex-col gap-3 px-1">
                 {/* Stroke Color */}
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] text-zinc-500">Border Color</label>
+                  <label className="text-[10px] text-zinc-500">{isText ? "Stroke Color" : "Border Color"}</label>
                   <div className="flex items-center gap-2">
                     <input
                       type="color"
@@ -650,7 +810,7 @@ export const PropertiesPanel: React.FC = () => {
                       type="text"
                       value={strokeColor.toUpperCase()}
                       onChange={(e) => setStrokeColor(e.target.value)}
-                      className="flex-1 bg-zinc-900 border border-zinc-800 focus:border-violet-500 rounded-lg px-3 py-1.5 text-xs text-zinc-200 outline-none text-center font-mono"
+                      className="flex-1 bg-zinc-900 border border-white/[0.08] focus:border-violet-500 rounded-lg px-3 py-1.5 text-xs text-zinc-200 outline-none text-center font-mono"
                     />
                   </div>
                 </div>
@@ -658,7 +818,7 @@ export const PropertiesPanel: React.FC = () => {
                 {/* Stroke Width */}
                 <div className="flex flex-col gap-1.5">
                   <div className="flex justify-between items-center">
-                    <label className="text-[10px] text-zinc-500">Border Width</label>
+                    <label className="text-[10px] text-zinc-500">{isText ? "Stroke Width" : "Border Width"}</label>
                     <span className="text-[10px] text-zinc-400 font-mono">{strokeWidth}px</span>
                   </div>
                   <input
@@ -734,7 +894,7 @@ export const PropertiesPanel: React.FC = () => {
                   type="text"
                   value={shadowColor.toUpperCase()}
                   onChange={(e) => handleShadowChange(shadowBlur, shadowOffsetX, shadowOffsetY, e.target.value)}
-                  className="flex-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-[10px] text-zinc-200 outline-none font-mono"
+                  className="flex-1 bg-zinc-900 border border-white/[0.08] rounded px-2 py-1 text-[10px] text-zinc-200 outline-none font-mono"
                 />
               </div>
               <div className="flex flex-col gap-1">
@@ -758,7 +918,7 @@ export const PropertiesPanel: React.FC = () => {
                     type="number"
                     value={shadowOffsetX}
                     onChange={(e) => handleShadowChange(shadowBlur, parseInt(e.target.value) || 0, shadowOffsetY, shadowColor)}
-                    className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-[10px] text-zinc-200 outline-none font-mono"
+                    className="w-full bg-zinc-900 border border-white/[0.08] rounded px-2 py-1 text-[10px] text-zinc-200 outline-none font-mono"
                   />
                 </div>
                 <div className="flex flex-col gap-1">
@@ -767,7 +927,7 @@ export const PropertiesPanel: React.FC = () => {
                     type="number"
                     value={shadowOffsetY}
                     onChange={(e) => handleShadowChange(shadowBlur, shadowOffsetX, parseInt(e.target.value) || 0, shadowColor)}
-                    className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-[10px] text-zinc-200 outline-none font-mono"
+                    className="w-full bg-zinc-900 border border-white/[0.08] rounded px-2 py-1 text-[10px] text-zinc-200 outline-none font-mono"
                   />
                 </div>
               </div>

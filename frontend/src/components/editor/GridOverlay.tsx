@@ -4,7 +4,7 @@ import { useEditorStore } from '../../store/useEditorStore';
 import { fabric } from 'fabric';
 
 export const GridOverlay: React.FC = () => {
-  const { canvas, rulersEnabled, setRulersEnabled } = useEditorStore();
+  const { canvas, rulersEnabled, setRulersEnabled, canvasWidth, canvasHeight } = useEditorStore();
   const [showGrid, setShowGrid] = useState(false);
   const [snapToGrid, setSnapToGrid] = useState(false);
   const [gridSize, setGridSize] = useState(25);
@@ -25,11 +25,11 @@ export const GridOverlay: React.FC = () => {
     if (!canvas) return;
     removeGrid();
 
-    const canvasWidth = 800;
-    const canvasHeight = 800;
+    const cw = canvas.getWidth() || canvasWidth || 800;
+    const ch = canvas.getHeight() || canvasHeight || 800;
 
-    for (let i = 0; i <= canvasWidth; i += gridSize) {
-      const line = new fabric.Line([i, 0, i, canvasHeight], {
+    for (let i = 0; i <= cw; i += gridSize) {
+      const line = new fabric.Line([i, 0, i, ch], {
         stroke: '#3f3f46',
         strokeWidth: i % 100 === 0 ? 0.8 : 0.3,
         selectable: false,
@@ -42,8 +42,8 @@ export const GridOverlay: React.FC = () => {
       canvas.sendToBack(line);
     }
 
-    for (let j = 0; j <= canvasHeight; j += gridSize) {
-      const line = new fabric.Line([0, j, canvasWidth, j], {
+    for (let j = 0; j <= ch; j += gridSize) {
+      const line = new fabric.Line([0, j, cw, j], {
         stroke: '#3f3f46',
         strokeWidth: j % 100 === 0 ? 0.8 : 0.3,
         selectable: false,

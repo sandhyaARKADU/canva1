@@ -15,7 +15,7 @@ export const DevModeInspector: React.FC = () => {
 
   if (!selectedObject) {
     return (
-      <aside className="w-72 border-l border-zinc-800 bg-[#121214] p-6 flex flex-col gap-6 select-none shrink-0 overflow-y-auto">
+      <aside className="w-72 border-l border-white/[0.08] bg-[#101018] p-6 flex flex-col gap-6 select-none shrink-0 overflow-y-auto">
         <div className="flex flex-col items-center justify-center py-20 text-center text-zinc-500">
           <Code className="w-10 h-10 mb-3 opacity-40 text-emerald-400" />
           <h4 className="font-semibold text-zinc-300 text-sm">Select an element</h4>
@@ -197,7 +197,7 @@ export const DevModeInspector: React.FC = () => {
   };
 
   return (
-    <aside className="w-72 border-l border-zinc-800 bg-[#121214] p-5 flex flex-col gap-5 select-none shrink-0 overflow-y-auto z-10 text-zinc-300">
+    <aside className="w-72 border-l border-white/[0.08] bg-[#101018] p-5 flex flex-col gap-5 select-none shrink-0 overflow-y-auto z-10 text-zinc-300">
       {/* Header */}
       <div>
         <div className="flex items-center gap-2 mb-1">
@@ -271,7 +271,7 @@ export const DevModeInspector: React.FC = () => {
         </div>
 
         {/* Tab Buttons */}
-        <div className="flex border border-zinc-800 rounded-lg bg-zinc-950 p-0.5 text-[11px] font-semibold">
+        <div className="flex border border-white/[0.08] rounded-lg bg-zinc-950 p-0.5 text-[11px] font-semibold">
           {[
             { id: 'css', label: 'CSS', icon: Globe },
             { id: 'tailwind', label: 'Tailwind', icon: Terminal },

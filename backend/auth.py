@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from jose import JWTError, jwt
 from hashlib import sha256
 import secrets
@@ -57,7 +57,7 @@ def create_token(user_id: str, email: str) -> str:
     if not settings.JWT_SECRET.strip():
         raise RuntimeError("JWT_SECRET is not configured.")
 
-    expire = datetime.utcnow() + timedelta(days=settings.JWT_EXPIRY_DAYS)
+    expire = datetime.now(timezone.utc) + timedelta(days=settings.JWT_EXPIRY_DAYS)
     payload = {
         "id": user_id,
         "email": email,
@@ -97,7 +97,15 @@ def get_current_user(
         AuthSession.token_hash == token_hash,
         AuthSession.revoked_at.is_(None),
     ).first()
-    if not session or (session.expires_at and session.expires_at < datetime.utcnow()):
+
+    if not session:
         raise HTTPException(status_code=401, detail="Invalid or expired session")
 
+    if session.expires_at:
+        expires_at = session.expires_at if session.expires_at.tzinfo is not None else session.expires_at.replace(tzinfo=timezone.utc)
+        if expires_at < datetime.now(timezone.utc):
+            raise HTTPException(status_code=401, detail="Invalid or expired session")
+
     return user
+
+

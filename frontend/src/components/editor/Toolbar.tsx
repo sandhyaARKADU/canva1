@@ -12,12 +12,24 @@ import {
   Ruler,
   Share2,
   Keyboard,
+  QrCode,
+  BarChart3,
+  Calendar,
+  Bell,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useEditorStore } from '../../store/useEditorStore';
 import { ShareModal } from './ShareModal';
 import { KeyboardShortcutsModal } from './KeyboardShortcutsModal';
 import { AutoSaveIndicator } from './AutoSaveIndicator';
+import { TextFontSizeControl } from './TextFontSizeControl';
+import { QRCodeModal } from './QRCodeModal';
+import { ChartGeneratorModal } from './ChartGeneratorModal';
+import { ContentPlannerModal } from './ContentPlannerModal';
+import { NotificationCenter } from './NotificationCenter';
+
+const toolbarGroupClass = 'flex h-10 shrink-0 items-center gap-1 rounded-xl border border-white/[0.08] bg-zinc-950/80 p-0.5 shadow-sm';
+const iconButtonClass = 'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white disabled:cursor-not-allowed disabled:text-zinc-700 disabled:hover:bg-transparent';
 
 export const Toolbar: React.FC = () => {
   const navigate = useNavigate();
@@ -42,14 +54,17 @@ export const Toolbar: React.FC = () => {
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showQRModal, setShowQRModal] = useState(false);
+  const [showChartModal, setShowChartModal] = useState(false);
+  const [showPlannerModal, setShowPlannerModal] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
 
   const canUndo = historyIndex > 0;
   const canRedo = historyIndex < history.length - 1;
 
   const handleExport = (type: 'png' | 'jpg' | 'svg') => {
     if (!canvas) return;
-    
-    // Discard active selection so selection boxes aren't in the exported image
+
     const activeObject = canvas.getActiveObject();
     canvas.discardActiveObject();
     canvas.renderAll();
@@ -58,23 +73,22 @@ export const Toolbar: React.FC = () => {
       if (type === 'png') {
         const dataURL = canvas.toDataURL({
           format: 'png',
-          multiplier: 2, // Export at 2x resolution for high quality
+          multiplier: 2,
         });
         triggerDownload(dataURL, `${projectName}.png`);
       } else if (type === 'jpg') {
-        // Force background white if transparent
         const oldBg = canvas.backgroundColor;
         if (!oldBg || oldBg === 'transparent') {
           canvas.setBackgroundColor('#ffffff', () => {});
         }
-        
+
         const dataURL = canvas.toDataURL({
           format: 'jpeg',
           quality: 0.95,
           multiplier: 2,
         });
         triggerDownload(dataURL, `${projectName}.jpg`);
-        
+
         if (!oldBg || oldBg === 'transparent') {
           canvas.setBackgroundColor(oldBg as string, () => {});
         }
@@ -86,7 +100,6 @@ export const Toolbar: React.FC = () => {
         URL.revokeObjectURL(url);
       }
 
-      // Restore active selection if there was one
       if (activeObject) {
         canvas.setActiveObject(activeObject);
         canvas.renderAll();
@@ -103,202 +116,249 @@ export const Toolbar: React.FC = () => {
   };
 
   return (
-    <header className="h-14 border-b border-zinc-800 bg-[#121214] px-6 flex items-center justify-between select-none z-20 shrink-0">
-      {/* Brand & Project Info */}
-      <div className="flex items-center gap-4">
-        <button 
+    <header className="grid h-16 shrink-0 grid-cols-[minmax(220px,0.9fr)_minmax(0,1.2fr)_auto] items-center gap-3 border-b border-white/[0.08] bg-[#101018] px-3 select-none xl:grid-cols-[minmax(300px,0.9fr)_minmax(0,1.3fr)_auto] xl:px-5">
+      <section className="flex min-w-0 items-center gap-2" aria-label="Project and save status">
+        <button
           onClick={() => navigate('/')}
-          className="p-1.5 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-lg transition-colors cursor-pointer mr-2"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
           title="Back to Home"
+          aria-label="Back to Home"
         >
-          <Home className="w-5 h-5" />
+          <Home className="h-5 w-5" />
         </button>
-        <div className="flex items-center gap-2 text-transparent bg-clip-text bg-gradient-to-r from-violet-400 to-fuchsia-400">
-          <Sparkles className="w-5 h-5 text-violet-400 animate-pulse" />
+        <div className="hidden shrink-0 items-center gap-2 text-transparent bg-clip-text bg-gradient-to-r from-violet-400 to-fuchsia-400 lg:flex">
+          <Sparkles className="h-5 w-5 text-violet-400" />
           <span className="font-extrabold text-lg tracking-wider">TECKSTUDIO</span>
         </div>
-        
-        <div className="h-5 w-[1px] bg-zinc-800" />
-        
+        <div className="hidden h-6 w-px shrink-0 bg-zinc-800 xl:block" />
         <input
           type="text"
           value={projectName}
           placeholder="Name your design"
           onChange={(e) => setProjectName(e.target.value)}
-          className="bg-transparent border border-transparent hover:border-zinc-800 focus:border-violet-500 focus:bg-zinc-900 px-2 py-0.5 rounded text-sm text-zinc-100 font-semibold focus:outline-none transition-colors max-w-[200px]"
+          className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1 text-sm font-semibold text-zinc-100 transition-colors hover:border-white/[0.08] focus:border-violet-500 focus:bg-[#12121B] focus:outline-none"
           title="Click to rename project"
+          aria-label="Project name"
         />
-        <AutoSaveIndicator />
-      </div>
+        <div className="hidden shrink-0 md:block">
+          <AutoSaveIndicator />
+        </div>
+      </section>
 
-      {/* History and Actions Controls */}
-      <div className="flex items-center gap-1.5">
-        <button
-          onClick={undo}
-          disabled={!canUndo}
-          className="p-2 hover:bg-zinc-800 text-zinc-400 hover:text-white disabled:text-zinc-600 disabled:hover:bg-transparent rounded-lg transition-colors cursor-pointer"
-          title="Undo (Ctrl+Z)"
-        >
-          <Undo2 className="w-4 h-4" />
-        </button>
-        <button
-          onClick={redo}
-          disabled={!canRedo}
-          className="p-2 hover:bg-zinc-800 text-zinc-400 hover:text-white disabled:text-zinc-600 disabled:hover:bg-transparent rounded-lg transition-colors cursor-pointer"
-          title="Redo (Ctrl+Y)"
-        >
-          <Redo2 className="w-4 h-4" />
-        </button>
+      <section className="min-w-0 overflow-hidden" aria-label="Editor controls">
+        <div className="flex min-w-0 items-center gap-3 overflow-x-auto whitespace-nowrap py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <TextFontSizeControl />
 
-        <div className="h-4 w-[1px] bg-zinc-800 mx-2" />
-
-        {selectedObject && (
-          <>
+          <div className={toolbarGroupClass} aria-label="History controls">
             <button
-              onClick={duplicateSelected}
-              className="p-2 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-lg transition-colors cursor-pointer"
-              title="Duplicate Selected (Ctrl+D)"
+              onClick={undo}
+              disabled={!canUndo}
+              className={iconButtonClass}
+              title="Undo (Ctrl+Z)"
+              aria-label="Undo"
             >
-              <Copy className="w-4 h-4" />
+              <Undo2 className="h-4 w-4" />
             </button>
             <button
-              onClick={deleteSelected}
-              className="p-2 hover:bg-zinc-800 text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
-              title="Delete Selected (Delete/Backspace)"
+              onClick={redo}
+              disabled={!canRedo}
+              className={iconButtonClass}
+              title="Redo (Ctrl+Y)"
+              aria-label="Redo"
             >
-              <Trash2 className="w-4 h-4" />
+              <Redo2 className="h-4 w-4" />
             </button>
-            <div className="h-4 w-[1px] bg-zinc-800 mx-2" />
-          </>
-        )}
+          </div>
 
+          <div className={toolbarGroupClass} aria-label="Object actions">
+            {selectedObject && (
+              <>
+                <button
+                  onClick={duplicateSelected}
+                  className={iconButtonClass}
+                  title="Duplicate Selected (Ctrl+D)"
+                  aria-label="Duplicate selected object"
+                >
+                  <Copy className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={deleteSelected}
+                  className={`${iconButtonClass} text-rose-400 hover:bg-rose-500/10 hover:text-rose-300`}
+                  title="Delete Selected (Delete/Backspace)"
+                  aria-label="Delete selected object"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </>
+            )}
+            <button
+              onClick={clearCanvas}
+              className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+              title="Clear Entire Canvas"
+              aria-label="Clear entire canvas"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              <span>Clear</span>
+            </button>
+          </div>
+
+          {/* Advanced Module Quick Tools */}
+          <div className={toolbarGroupClass} aria-label="Advanced Modules">
+            <button
+              onClick={() => setShowQRModal(true)}
+              className={iconButtonClass}
+              title="QR Code Generator"
+              aria-label="QR Code Generator"
+            >
+              <QrCode className="h-4 w-4 text-violet-400" />
+            </button>
+            <button
+              onClick={() => setShowChartModal(true)}
+              className={iconButtonClass}
+              title="Chart & Infographic Builder"
+              aria-label="Chart & Infographic Builder"
+            >
+              <BarChart3 className="h-4 w-4 text-indigo-400" />
+            </button>
+            <button
+              onClick={() => setShowPlannerModal(true)}
+              className={iconButtonClass}
+              title="Social Media Content Planner"
+              aria-label="Social Media Content Planner"
+            >
+              <Calendar className="h-4 w-4 text-pink-400" />
+            </button>
+          </div>
+
+          <div className={toolbarGroupClass} aria-label="Additional tools">
+            <button
+              onClick={() => setRulersEnabled(!rulersEnabled)}
+              className={`${iconButtonClass} ${rulersEnabled ? 'border border-violet-500/30 bg-violet-600/15 text-violet-400' : ''}`}
+              title={rulersEnabled ? 'Hide Rulers' : 'Show Rulers'}
+              aria-label={rulersEnabled ? 'Hide Rulers' : 'Show Rulers'}
+            >
+              <Ruler className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className="flex shrink-0 items-center gap-2" aria-label="Main editor actions">
         <button
-          onClick={clearCanvas}
-          className="p-2 hover:bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer flex items-center gap-1 text-xs font-semibold"
-          title="Clear Entire Canvas"
+          onClick={() => setShowNotifications(!showNotifications)}
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors relative"
+          title="Notification Center"
+          aria-label="Notification Center"
         >
-          <RotateCcw className="w-3.5 h-3.5" />
-          Clear
-        </button>
-      </div>
-
-      {/* Mode Switcher and Export */}
-      <div className="flex items-center gap-3">
-        {/* Rulers Toggle */}
-        <button
-          onClick={() => setRulersEnabled(!rulersEnabled)}
-          className={`p-2 rounded-lg transition-colors cursor-pointer ${
-            rulersEnabled
-              ? 'bg-violet-600/15 text-violet-400 border border-violet-500/30'
-              : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
-          }`}
-          title={rulersEnabled ? 'Hide Rulers' : 'Show Rulers'}
-        >
-          <Ruler className="w-4 h-4" />
+          <Bell className="h-4 w-4 text-amber-400" />
         </button>
 
-        {/* Figma Design/Dev Switcher */}
-        <div className="flex bg-zinc-900 border border-zinc-850 rounded-lg p-0.5">
+        <div className="flex h-10 shrink-0 rounded-xl border border-white/[0.08] bg-zinc-950/80 p-0.5">
           <button
             onClick={() => setEditorMode('design')}
-            className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
-              editorMode === 'design' 
-                ? 'bg-zinc-800 text-violet-400 border border-zinc-700/50 shadow-sm' 
-                : 'text-zinc-500 hover:text-zinc-300'
+            className={`flex h-9 items-center rounded-lg px-3 text-xs font-bold transition-all ${
+              editorMode === 'design'
+                ? 'bg-zinc-800 text-violet-400 shadow-sm'
+                : 'text-zinc-500 hover:bg-[#12121B] hover:text-zinc-300'
             }`}
+            aria-label="Design mode"
           >
             Design
           </button>
           <button
             onClick={() => setEditorMode('dev')}
-            className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
-              editorMode === 'dev' 
-                ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shadow-sm' 
-                : 'text-zinc-500 hover:text-zinc-300'
+            className={`flex h-9 items-center gap-1 rounded-lg px-3 text-xs font-bold transition-all ${
+              editorMode === 'dev'
+                ? 'bg-emerald-500/15 text-emerald-400 shadow-sm'
+                : 'text-zinc-500 hover:bg-[#12121B] hover:text-zinc-300'
             }`}
+            aria-label="Dev mode"
           >
-            <Sparkles className="w-3 h-3 text-emerald-400" /> Dev Mode
+            <Sparkles className="h-3 w-3 text-emerald-400" />
+            <span className="hidden xl:inline">Dev Mode</span>
+            <span className="xl:hidden">Dev</span>
           </button>
         </div>
 
-        {/* Export Button & Dropdown */}
-        <div className="relative">
+        <div className="relative shrink-0">
           <button
             onClick={() => setShowExportMenu(!showExportMenu)}
-            className="bg-violet-600 hover:bg-violet-500 text-white text-xs font-bold px-4 py-2 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer shadow-lg hover:shadow-violet-600/15 focus:outline-none"
+            className="flex h-10 items-center gap-1.5 rounded-xl bg-violet-600 px-4 text-xs font-bold text-white shadow-lg shadow-violet-600/10 transition-colors hover:bg-violet-500 focus:outline-none"
+            aria-label="Export design"
           >
-            <Download className="w-3.5 h-3.5" />
-            Export
-            <ChevronDown className="w-3 h-3 ml-0.5" />
+            <Download className="h-3.5 w-3.5" />
+            <span>Export</span>
+            <ChevronDown className="h-3 w-3" />
           </button>
 
-        {showExportMenu && (
-          <>
-            <div
-              className="fixed inset-0 z-30"
-              onClick={() => setShowExportMenu(false)}
-            />
-            <div className="absolute right-0 mt-2 w-44 bg-[#121214] border border-zinc-800 rounded-xl shadow-2xl p-1 z-40">
-              <button
-                onClick={() => handleExport('png')}
-                className="w-full text-left text-xs text-zinc-300 hover:text-white hover:bg-zinc-800 px-3 py-2 rounded-lg transition-colors cursor-pointer flex flex-col"
-              >
-                <span className="font-semibold">PNG Image</span>
-                <span className="text-[10px] text-zinc-500">Best for sharing (Transparent)</span>
-              </button>
-              <button
-                onClick={() => handleExport('jpg')}
-                className="w-full text-left text-xs text-zinc-300 hover:text-white hover:bg-zinc-800 px-3 py-2 rounded-lg transition-colors cursor-pointer flex flex-col"
-              >
-                <span className="font-semibold">JPG Image</span>
-                <span className="text-[10px] text-zinc-500">Good for web (White bg)</span>
-              </button>
-              <button
-                onClick={() => handleExport('svg')}
-                className="w-full text-left text-xs text-zinc-300 hover:text-white hover:bg-zinc-800 px-3 py-2 rounded-lg transition-colors cursor-pointer flex flex-col"
-              >
-                <span className="font-semibold">SVG Vector</span>
-                <span className="text-[10px] text-zinc-500">Scalable vector graphics</span>
-              </button>
-              <div className="border-t border-zinc-800 my-1" />
-              <button
-                onClick={() => {
-                  setShowExportMenu(false);
-                  setShowShareModal(true);
-                }}
-                className="w-full text-left text-xs text-zinc-300 hover:text-white hover:bg-zinc-800 px-3 py-2 rounded-lg transition-colors cursor-pointer flex items-center gap-2"
-              >
-                <Share2 className="w-3.5 h-3.5" />
-                <span className="font-semibold">Share Design</span>
-              </button>
-            </div>
-          </>
-        )}
+          {showExportMenu && (
+            <>
+              <div className="fixed inset-0 z-30" onClick={() => setShowExportMenu(false)} />
+              <div className="absolute right-0 z-40 mt-2 w-44 rounded-xl border border-white/[0.08] bg-[#101018] p-1 shadow-2xl">
+                <button
+                  onClick={() => handleExport('png')}
+                  className="flex w-full flex-col rounded-lg px-3 py-2 text-left text-xs text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white"
+                >
+                  <span className="font-semibold">PNG Image</span>
+                  <span className="text-[10px] text-zinc-500">Best for sharing (Transparent)</span>
+                </button>
+                <button
+                  onClick={() => handleExport('jpg')}
+                  className="flex w-full flex-col rounded-lg px-3 py-2 text-left text-xs text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white"
+                >
+                  <span className="font-semibold">JPG Image</span>
+                  <span className="text-[10px] text-zinc-500">Good for web (White bg)</span>
+                </button>
+                <button
+                  onClick={() => handleExport('svg')}
+                  className="flex w-full flex-col rounded-lg px-3 py-2 text-left text-xs text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white"
+                >
+                  <span className="font-semibold">SVG Vector</span>
+                  <span className="text-[10px] text-zinc-500">Scalable vector graphics</span>
+                </button>
+                <div className="my-1 border-t border-white/[0.08]" />
+                <button
+                  onClick={() => {
+                    setShowExportMenu(false);
+                    setShowShareModal(true);
+                  }}
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white"
+                >
+                  <Share2 className="h-3.5 w-3.5" />
+                  <span className="font-semibold">Share Design</span>
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
-        {/* Share Button */}
         <button
           onClick={() => setShowShareModal(true)}
-          className="bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-bold px-3 py-2 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer border border-zinc-700"
+          className="flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-800 px-3 text-xs font-bold text-white transition-colors hover:bg-zinc-700"
           title="Share Design"
+          aria-label="Share Design"
         >
-          <Share2 className="w-3.5 h-3.5" />
-          Share
+          <Share2 className="h-3.5 w-3.5" />
+          <span className="hidden lg:inline">Share</span>
         </button>
 
-        {/* Keyboard Shortcuts Button */}
         <button
           onClick={() => setShowShortcuts(true)}
-          className="p-2 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
           title="Keyboard Shortcuts (?)"
+          aria-label="Keyboard shortcuts"
         >
-          <Keyboard className="w-4 h-4" />
+          <Keyboard className="h-4 w-4" />
         </button>
-      </div>
+      </section>
 
-      {/* Modals */}
+      {/* Modals & Drawers */}
       <ShareModal isOpen={showShareModal} onClose={() => setShowShareModal(false)} />
       <KeyboardShortcutsModal isOpen={showShortcuts} onClose={() => setShowShortcuts(false)} />
+      <QRCodeModal isOpen={showQRModal} onClose={() => setShowQRModal(false)} />
+      <ChartGeneratorModal isOpen={showChartModal} onClose={() => setShowChartModal(false)} />
+      <ContentPlannerModal isOpen={showPlannerModal} onClose={() => setShowPlannerModal(false)} />
+      <NotificationCenter isOpen={showNotifications} onClose={() => setShowNotifications(false)} />
     </header>
   );
 };

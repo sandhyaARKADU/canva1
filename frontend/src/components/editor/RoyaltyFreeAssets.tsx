@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
   Search,
   Image,
@@ -25,12 +25,14 @@ interface BackendAsset {
   file_type: string;
   image_url?: string | null;
   thumbnail_url?: string | null;
+  preview_url?: string | null;
+  source_url?: string | null;
+  original_url?: string | null;
   local_storage_path?: string | null;
   mime_type?: string | null;
   orientation?: string | null;
   source?: string | null;
   source_asset_id?: string | null;
-  source_url?: string | null;
   source_page_url?: string | null;
   author_name?: string | null;
   author_url?: string | null;
@@ -59,6 +61,9 @@ interface AssetSearchItem {
   description?: string | null;
   imageUrl: string;
   thumbnailUrl: string;
+  previewUrl?: string;
+  sourceUrl?: string;
+  originalUrl?: string;
   localStoragePath?: string | null;
   width: number;
   height: number;
@@ -85,6 +90,18 @@ interface AssetSearchResponse {
   perPage: number;
   total: number;
   hasMore: boolean;
+}
+
+interface AssetCategorySummary {
+  id: string;
+  label: string;
+  count: number;
+}
+
+interface AssetCategoriesResponse {
+  success: boolean;
+  categories: AssetCategorySummary[];
+  total: number;
 }
 
 interface ImageResult {
@@ -161,6 +178,38 @@ const prepareCanvasImageSource = async (
   return blobToDataUrl(blob);
 };
 
+const loadDecodedImage = (source: string) => new Promise<HTMLImageElement>((resolve, reject) => {
+  const image = new window.Image();
+  if (!source.startsWith('data:')) {
+    image.crossOrigin = 'anonymous';
+  }
+  image.onload = async () => {
+    try {
+      if ('decode' in image) await image.decode();
+      resolve(image);
+    } catch {
+      resolve(image);
+    }
+  };
+  image.onerror = () => reject(new Error('Browser could not decode the selected asset image.'));
+  image.src = source;
+});
+
+const loadStoredAssetList = (key: string): ImageResult[] => {
+  try {
+    const value = window.localStorage.getItem(key);
+    if (!value) return [];
+    const parsed = JSON.parse(value) as ImageResult[];
+    return Array.isArray(parsed) ? parsed.filter((item) => item?.id && item?.src) : [];
+  } catch {
+    return [];
+  }
+};
+
+const storeAssetList = (key: string, assets: ImageResult[]) => {
+  window.localStorage.setItem(key, JSON.stringify(assets.slice(0, RECENT_ASSET_LIMIT)));
+};
+
 const IMAGE_PAGE_SIZE = 30;
 
 type ImageCategory = {
@@ -168,6 +217,7 @@ type ImageCategory = {
   name: string;
   emoji: string;
   query: string;
+  count?: number;
 };
 
 const IMAGE_CATEGORIES: ImageCategory[] = [
@@ -183,7 +233,49 @@ const IMAGE_CATEGORIES: ImageCategory[] = [
   { id: 'animals', name: 'Animals', emoji: '🐾', query: 'animals wildlife pets birds nature' },
   { id: 'people', name: 'People', emoji: '👥', query: 'people portrait team lifestyle professional' },
   { id: 'minimal', name: 'Minimal', emoji: '⬜', query: 'minimal clean simple neutral isolated whitespace' },
+  { id: 'education', name: 'Education', emoji: '🎓', query: 'education learning classroom students online course books' },
+  { id: 'healthcare', name: 'Healthcare', emoji: '⚕️', query: 'healthcare medical doctor hospital wellness clinic' },
+  { id: 'finance', name: 'Finance', emoji: '💹', query: 'finance banking investment charts money accounting' },
+  { id: 'marketing', name: 'Marketing', emoji: '📣', query: 'marketing campaign branding social analytics content' },
+  { id: 'social-media', name: 'Social Media', emoji: '📱', query: 'social media creator content phone engagement' },
+  { id: 'events', name: 'Events', emoji: '🎟️', query: 'events conference party stage invitation celebration' },
+  { id: 'sports', name: 'Sports', emoji: '🏆', query: 'sports athlete competition stadium equipment team' },
+  { id: 'music', name: 'Music', emoji: '🎵', query: 'music concert instruments studio audio performance' },
+  { id: 'entertainment', name: 'Entertainment', emoji: '🎬', query: 'entertainment cinema streaming stage performance media' },
+  { id: 'real-estate', name: 'Real Estate', emoji: '🏘️', query: 'real estate home property interior architecture' },
+  { id: 'e-commerce', name: 'E-commerce', emoji: '🛒', query: 'ecommerce product shopping retail packaging store' },
+  { id: 'startup', name: 'Startup', emoji: '🚀', query: 'startup pitch innovation founder team growth' },
+  { id: 'office', name: 'Office', emoji: '🗂️', query: 'office desk workspace productivity meeting laptop' },
+  { id: 'lifestyle', name: 'Lifestyle', emoji: '🌇', query: 'lifestyle home wellness travel daily moments' },
+  { id: 'beauty', name: 'Beauty', emoji: '💄', query: 'beauty cosmetics skincare makeup spa product' },
+  { id: 'luxury', name: 'Luxury', emoji: '💎', query: 'luxury premium gold elegant fashion interior' },
+  { id: 'automotive', name: 'Automotive', emoji: '🚗', query: 'automotive car vehicle road showroom transport' },
+  { id: 'gaming', name: 'Gaming', emoji: '🎮', query: 'gaming esports controller neon console streaming' },
+  { id: 'science', name: 'Science', emoji: '🔬', query: 'science laboratory research chemistry microscope' },
+  { id: 'space', name: 'Space', emoji: '🪐', query: 'space galaxy astronaut planet stars cosmic' },
+  { id: 'environment', name: 'Environment', emoji: '♻️', query: 'environment sustainability renewable energy ecology green' },
+  { id: 'agriculture', name: 'Agriculture', emoji: '🌾', query: 'agriculture farming crops field harvest organic' },
+  { id: 'festivals', name: 'Festivals', emoji: '🎉', query: 'festivals celebration lights culture holiday party' },
+  { id: 'backgrounds', name: 'Backgrounds', emoji: '🖼️', query: 'backgrounds gradient abstract texture clean wallpaper' },
+  { id: 'textures', name: 'Textures', emoji: '🧱', query: 'textures paper fabric marble grain surface' },
+  { id: 'patterns', name: 'Patterns', emoji: '▦', query: 'patterns geometric repeat seamless graphic design' },
+  { id: 'gradients', name: 'Gradients', emoji: '🌈', query: 'gradients mesh color abstract background smooth' },
+  { id: 'illustrations', name: 'Illustrations', emoji: '✏️', query: 'illustrations vector character editorial graphic' },
+  { id: 'icons', name: 'Icons', emoji: '⭐', query: 'icons symbol interface pictogram outline set' },
+  { id: 'stickers', name: 'Stickers', emoji: '🏷️', query: 'stickers badge emoji fun transparent graphic' },
+  { id: 'frames', name: 'Frames', emoji: '🪟', query: 'frames border photo frame mockup decorative' },
+  { id: 'mockups', name: 'Mockups', emoji: '📐', query: 'mockups device poster packaging product presentation' },
+  { id: 'product-images', name: 'Product Images', emoji: '📦', query: 'product images isolated studio ecommerce object' },
+  { id: 'ui-elements', name: 'UI Elements', emoji: '🧩', query: 'ui elements buttons cards dashboard interface' },
+  { id: 'infographics', name: 'Infographics', emoji: '📊', query: 'infographics process timeline diagram data' },
+  { id: 'charts', name: 'Charts', emoji: '📈', query: 'charts graph analytics dashboard finance data' },
+  { id: 'maps', name: 'Maps', emoji: '🗺️', query: 'maps location route travel city geography' },
 ];
+
+const IMAGE_CATEGORY_BY_ID = new Map(IMAGE_CATEGORIES.map((category) => [category.id, category]));
+const LOCAL_FAVORITES_KEY = 'teckstudio_favourite_assets';
+const LOCAL_RECENT_KEY = 'teckstudio_recent_assets';
+const RECENT_ASSET_LIMIT = 24;
 
 // Free SVG elements/illustrations (inline SVGs for instant use)
 const SVG_ELEMENTS = [
@@ -443,11 +535,45 @@ export const RoyaltyFreeAssets: React.FC = () => {
   const [loading, loadingSet] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
+  const [favoriteAssets, setFavoriteAssets] = useState<ImageResult[]>([]);
+  const [recentAssets, setRecentAssets] = useState<ImageResult[]>([]);
+  const [imageCategories, setImageCategories] = useState<ImageCategory[]>([]);
+  const [categoryStatsLoading, setCategoryStatsLoading] = useState(false);
+  const [assetCollection, setAssetCollection] = useState<'browse' | 'all' | 'featured' | 'popular' | 'new' | 'favorites' | 'recent'>('browse');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [elementAssets, setElementAssets] = useState<BackendAsset[]>([]);
   const [gradientAssets, setGradientAssets] = useState<BackendAsset[]>([]);
   const [assetError, setAssetError] = useState('');
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout>>(null);
+
+  const fetchImageCategories = useCallback(async () => {
+    setCategoryStatsLoading(true);
+    try {
+      const response = await apiFetch('/api/assets/categories', { auth: false });
+      const data = (await response.json().catch(() => null)) as AssetCategoriesResponse | null;
+      if (!response.ok || !data?.success) {
+        throw new Error(`Failed to load asset categories (${response.status})`);
+      }
+      const available = data.categories
+        .filter((category) => Number(category.count) > 0)
+        .map((category) => {
+          const definition = IMAGE_CATEGORY_BY_ID.get(category.id);
+          return {
+            id: category.id,
+            name: definition?.name || category.label,
+            emoji: definition?.emoji || '🖼️',
+            query: definition?.query || category.label,
+            count: Number(category.count),
+          } satisfies ImageCategory;
+        });
+      setImageCategories(available);
+    } catch (err) {
+      setImageCategories([]);
+      setAssetError(err instanceof Error ? err.message : 'Error loading asset categories.');
+    } finally {
+      setCategoryStatsLoading(false);
+    }
+  }, []);
 
   const fetchBackendAssets = useCallback(async (
     category: AssetTab,
@@ -498,7 +624,7 @@ export const RoyaltyFreeAssets: React.FC = () => {
       const data = await fetchBackendImageAssets(theme, query, page, IMAGE_PAGE_SIZE);
       const results = data.items.map((asset) => ({
         id: asset.id,
-        src: resolveAssetUrl(asset.imageUrl),
+        src: resolveAssetUrl(asset.originalUrl || asset.sourceUrl || asset.imageUrl),
         thumbnail: resolveAssetUrl(asset.thumbnailUrl || asset.imageUrl),
         photographer: 'TECKSTUDIO Assets',
         alt: asset.title,
@@ -549,13 +675,39 @@ export const RoyaltyFreeAssets: React.FC = () => {
     fetchLibraryAssets();
   }, [fetchLibraryAssets]);
 
+
+  useEffect(() => {
+    fetchImageCategories();
+    const storedFavorites = loadStoredAssetList(LOCAL_FAVORITES_KEY);
+    const storedRecent = loadStoredAssetList(LOCAL_RECENT_KEY);
+    setFavoriteAssets(storedFavorites);
+    setRecentAssets(storedRecent);
+    setFavorites(new Set(storedFavorites.map((asset) => asset.id)));
+  }, [fetchImageCategories]);
+
   // Handle search
   useEffect(() => {
     if (searchTimeoutRef.current) {
       clearTimeout(searchTimeoutRef.current);
     }
 
-    if (!selectedCategory && !searchQuery.trim()) {
+    if (assetCollection === 'favorites') {
+      setImages(favoriteAssets);
+      setImageTotal(favoriteAssets.length);
+      setAssetError('');
+      loadingSet(false);
+      return undefined;
+    }
+
+    if (assetCollection === 'recent') {
+      setImages(recentAssets);
+      setImageTotal(recentAssets.length);
+      setAssetError('');
+      loadingSet(false);
+      return undefined;
+    }
+
+    if (!selectedCategory && !searchQuery.trim() && assetCollection === 'browse') {
       setImages([]);
       setAssetError('');
       loadingSet(false);
@@ -571,11 +723,12 @@ export const RoyaltyFreeAssets: React.FC = () => {
         clearTimeout(searchTimeoutRef.current);
       }
     };
-  }, [searchQuery, selectedCategory, fetchImages]);
+  }, [searchQuery, selectedCategory, assetCollection, favoriteAssets, recentAssets, fetchImages]);
 
   // Handle category click
-  const handleCategoryClick = (category: typeof IMAGE_CATEGORIES[0]) => {
+  const handleCategoryClick = (category: ImageCategory) => {
     setSelectedCategory(category.id);
+    setAssetCollection('browse');
     setSearchQuery('');
     setImagePage(1);
     setImageTotal(0);
@@ -583,11 +736,30 @@ export const RoyaltyFreeAssets: React.FC = () => {
 
   const handleBackToCategories = () => {
     setSelectedCategory(null);
+    setAssetCollection('browse');
     setSearchQuery('');
     setImages([]);
     setImagePage(1);
     setImageTotal(0);
     setAssetError('');
+  };
+
+  const handleCollectionSelect = (collection: typeof assetCollection) => {
+    setSelectedCategory(null);
+    setAssetCollection(collection);
+    setSearchQuery('');
+    setImages([]);
+    setImagePage(1);
+    setImageTotal(0);
+    setAssetError('');
+  };
+
+  const rememberRecentAsset = (asset: ImageResult) => {
+    setRecentAssets((current) => {
+      const next = [asset, ...current.filter((item) => item.id !== asset.id)].slice(0, RECENT_ASSET_LIMIT);
+      storeAssetList(LOCAL_RECENT_KEY, next);
+      return next;
+    });
   };
 
   const addBackendAssetToCanvas = (asset: BackendAsset) => {
@@ -672,48 +844,66 @@ export const RoyaltyFreeAssets: React.FC = () => {
     try {
       const imageSource = await prepareCanvasImageSource(src, metadata);
 
-      await new Promise<void>((resolve, reject) => {
-        fabric.Image.fromURL(
-          imageSource,
-          (img) => {
-            if (!img || !img.width || !img.height) {
-              reject(new Error('Unable to load a valid image asset.'));
-              return;
-            }
+      const imageElement = await loadDecodedImage(imageSource);
+      const naturalWidth = imageElement.naturalWidth || imageElement.width;
+      const naturalHeight = imageElement.naturalHeight || imageElement.height;
+      if (!naturalWidth || !naturalHeight) {
+        throw new Error('Unable to load a valid image asset.');
+      }
 
-            // Scale to fit canvas
-            const canvasWidth = targetCanvas.getWidth();
-            const canvasHeight = targetCanvas.getHeight();
-            const maxWidth = canvasWidth * 0.6;
-            const maxHeight = canvasHeight * 0.6;
-
-            const scale = Math.min(maxWidth / (img.width || 1), maxHeight / (img.height || 1), 1);
-            const visibleCenter = getVisibleCanvasCenter(targetCanvas);
-
-            img.set({
-              left: visibleCenter.x,
-              top: visibleCenter.y,
-              originX: 'center',
-              originY: 'center',
-              scaleX: scale,
-              scaleY: scale,
-              opacity: 1,
-              visible: true,
-            });
-            (img as fabric.Image & { assetMetadata?: BackendAsset | AssetSearchItem | ImageResult }).assetMetadata = metadata;
-
-            targetCanvas.add(img);
-            img.setCoords();
-            targetCanvas.bringToFront(img);
-            targetCanvas.setActiveObject(img);
-            targetCanvas.renderAll();
-            targetCanvas.requestRenderAll();
-            saveHistory();
-            resolve();
-          },
-          imageSource.startsWith('data:') ? undefined : { crossOrigin: 'anonymous' }
-        );
+      const img = new fabric.Image(imageElement, {
+        objectCaching: true,
+        noScaleCache: false,
       });
+
+      const canvasWidth = targetCanvas.getWidth();
+      const canvasHeight = targetCanvas.getHeight();
+      const maxWidth = canvasWidth * 0.6;
+      const maxHeight = canvasHeight * 0.6;
+      const scale = Math.min(maxWidth / naturalWidth, maxHeight / naturalHeight, 1);
+      const visibleCenter = getVisibleCanvasCenter(targetCanvas);
+      const asset = (metadata && 'metadata' in metadata ? metadata.metadata : metadata) as BackendAsset | AssetSearchItem | undefined;
+      const sourceUrl = asset && 'imageUrl' in asset
+        ? resolveAssetUrl(asset.originalUrl || asset.sourceUrl || asset.imageUrl)
+        : resolveAssetUrl((asset as BackendAsset | undefined)?.image_url || src);
+      const thumbnailUrl = asset && 'thumbnailUrl' in asset
+        ? resolveAssetUrl(asset.thumbnailUrl)
+        : resolveAssetUrl((asset as BackendAsset | undefined)?.thumbnail_url || sourceUrl);
+      const categorySlug = asset?.category || selectedCategory;
+
+      img.set({
+        left: visibleCenter.x,
+        top: visibleCenter.y,
+        originX: 'center',
+        originY: 'center',
+        scaleX: scale,
+        scaleY: scale,
+        opacity: 1,
+        visible: true,
+        objectType: 'asset-image',
+        teckstudioObjectType: 'asset-image',
+        teckstudioAssetType: 'image',
+        assetId: asset?.id,
+        assetCategory: categorySlug,
+        sourceUrl,
+        thumbnailUrl,
+        originalWidth: naturalWidth,
+        originalHeight: naturalHeight,
+        naturalWidth,
+        naturalHeight,
+        assetMetadata: asset,
+      } as fabric.IObjectOptions & Record<string, unknown>);
+
+      targetCanvas.add(img);
+      img.setCoords();
+      targetCanvas.bringToFront(img);
+      targetCanvas.setActiveObject(img);
+      targetCanvas.renderAll();
+      targetCanvas.requestRenderAll();
+      if (metadata && 'src' in metadata && 'thumbnail' in metadata) {
+        rememberRecentAsset(metadata as ImageResult);
+      }
+      saveHistory();
     } catch (error) {
       setAssetError(error instanceof Error ? error.message : 'Unable to add image asset to canvas.');
     }
@@ -784,17 +974,29 @@ export const RoyaltyFreeAssets: React.FC = () => {
   };
 
   // Toggle favorite
-  const toggleFavorite = (id: string) => {
-    setFavorites((prev) => {
-      const newFavorites = new Set(prev);
-      if (newFavorites.has(id)) {
-        newFavorites.delete(id);
+  const toggleFavorite = (assetOrId: ImageResult | string) => {
+    const asset = typeof assetOrId === 'string'
+      ? images.find((item) => item.id === assetOrId) || favoriteAssets.find((item) => item.id === assetOrId)
+      : assetOrId;
+    const id = typeof assetOrId === 'string' ? assetOrId : assetOrId.id;
+    setFavorites((previous) => {
+      const next = new Set(previous);
+      let nextAssets = favoriteAssets;
+      if (next.has(id)) {
+        next.delete(id);
+        nextAssets = favoriteAssets.filter((item) => item.id !== id);
       } else {
-        newFavorites.add(id);
+        next.add(id);
+        if (asset) {
+          nextAssets = [asset, ...favoriteAssets.filter((item) => item.id !== id)].slice(0, RECENT_ASSET_LIMIT);
+        }
       }
-      return newFavorites;
+      setFavoriteAssets(nextAssets);
+      storeAssetList(LOCAL_FAVORITES_KEY, nextAssets);
+      return next;
     });
   };
+
 
   const backendGradientAssets = gradientAssets
     .map((asset) => {
@@ -813,9 +1015,15 @@ export const RoyaltyFreeAssets: React.FC = () => {
       }
     })
     .filter((asset): asset is typeof GRADIENT_OVERLAYS[0] => Boolean(asset));
-  const selectedImageCategory = IMAGE_CATEGORIES.find((category) => category.id === selectedCategory);
-  const showImageResults = Boolean(selectedCategory || searchQuery.trim());
-  const hasMoreImages = showImageResults && images.length < imageTotal;
+  const selectedImageCategory = imageCategories.find((category) => category.id === selectedCategory) || IMAGE_CATEGORY_BY_ID.get(selectedCategory || '');
+  const showImageResults = Boolean(selectedCategory || searchQuery.trim() || assetCollection !== 'browse');
+  const visibleImages = useMemo(() => {
+    if (assetCollection === 'featured') return images.filter((image, index) => index < 18 || image.metadata?.source === 'local-reference-media');
+    if (assetCollection === 'popular') return [...images].sort((left, right) => String(left.alt).localeCompare(String(right.alt)));
+    if (assetCollection === 'new') return [...images].reverse();
+    return images;
+  }, [assetCollection, images]);
+  const hasMoreImages = showImageResults && !['favorites', 'recent'].includes(assetCollection) && images.length < imageTotal;
 
   return (
     <div className="flex flex-col h-full">
@@ -860,19 +1068,63 @@ export const RoyaltyFreeAssets: React.FC = () => {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
               <input
                 type="text"
-                placeholder={selectedImageCategory ? `Search ${selectedImageCategory.name} images...` : 'Search free images...'}
+                placeholder={selectedImageCategory ? `Search ${selectedImageCategory.name} assets...` : 'Search assets, photos, graphics, backgrounds, or topics'}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full bg-zinc-900 border border-zinc-800 focus:border-violet-500 rounded-lg py-2.5 pl-10 pr-4 text-sm text-zinc-200 outline-none transition-colors placeholder:text-zinc-600"
               />
             </div>
 
+            <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none]">
+              {[
+                ['browse', 'Categories'],
+                ['all', 'All assets'],
+                ['featured', 'Featured'],
+                ['popular', 'Popular'],
+                ['new', 'New'],
+                ['favorites', 'Favourites'],
+                ['recent', 'Recent'],
+              ].map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => handleCollectionSelect(id as typeof assetCollection)}
+                  className={`shrink-0 rounded-full border px-3 py-1.5 text-[11px] font-semibold transition-colors ${
+                    assetCollection === id && !selectedCategory
+                      ? 'border-violet-500 bg-violet-500/15 text-violet-200'
+                      : 'border-zinc-800 bg-zinc-900/70 text-zinc-400 hover:border-violet-500/40 hover:text-zinc-200'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {showImageResults && imageCategories.length > 0 && (
+              <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none]">
+                {imageCategories.slice(0, 20).map((category) => (
+                  <button
+                    key={category.id}
+                    type="button"
+                    onClick={() => handleCategoryClick(category)}
+                    className={`shrink-0 rounded-full border px-3 py-1.5 text-[11px] font-semibold transition-colors ${
+                      selectedCategory === category.id
+                        ? 'border-violet-500 bg-violet-500/15 text-violet-200'
+                        : 'border-zinc-800 bg-zinc-900/70 text-zinc-400 hover:border-violet-500/40 hover:text-zinc-200'
+                    }`}
+                  >
+                    {category.emoji} {category.name}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {/* Categories */}
             {!showImageResults && (
               <div>
                 <h4 className="text-xs font-bold text-zinc-400 mb-3 uppercase tracking-wider">Browse Categories</h4>
                 <div className="grid grid-cols-3 gap-2">
-                  {IMAGE_CATEGORIES.map((cat) => (
+                  {imageCategories.map((cat) => (
                     <button
                       key={cat.id}
                       onClick={() => handleCategoryClick(cat)}
@@ -880,9 +1132,15 @@ export const RoyaltyFreeAssets: React.FC = () => {
                     >
                       <span className="text-xl">{cat.emoji}</span>
                       <span className="text-[10px] font-semibold text-zinc-300">{cat.name}</span>
+                      <span className="text-[9px] text-zinc-500">{cat.count || 0}</span>
                     </button>
                   ))}
                 </div>
+                {!categoryStatsLoading && imageCategories.length === 0 && (
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 text-center text-xs text-zinc-500">
+                    No asset categories are available.
+                  </div>
+                )}
               </div>
             )}
 
@@ -937,9 +1195,9 @@ export const RoyaltyFreeAssets: React.FC = () => {
             )}
 
             {/* Image Grid */}
-            {!loading && showImageResults && images.length > 0 && (
+            {!loading && showImageResults && visibleImages.length > 0 && (
               <div className={viewMode === 'grid' ? 'columns-2 gap-2 space-y-2' : 'flex flex-col gap-2'}>
-                {images.map((img) => (
+                {visibleImages.map((img) => (
                   <div
                     key={img.id}
                     className={`group relative rounded-xl overflow-hidden border border-zinc-800 hover:border-violet-500/50 transition-all cursor-pointer ${
@@ -951,7 +1209,9 @@ export const RoyaltyFreeAssets: React.FC = () => {
 	                      src={img.thumbnail}
 	                      alt={img.alt}
 	                      title={`${img.alt}${img.license ? ` • ${img.license}` : ''}`}
-	                      className={viewMode === 'list' ? 'h-16 w-16 rounded-lg object-cover' : 'h-auto w-full'}
+	                      className={viewMode === 'list' ? 'h-16 w-16 rounded-lg object-cover object-center [image-rendering:auto]' : 'h-auto w-full object-cover object-center [image-rendering:auto]'}
+                          srcSet={img.src !== img.thumbnail ? `${img.thumbnail} 480w, ${img.src} 1600w` : undefined}
+                          sizes={viewMode === 'list' ? '64px' : '(max-width: 360px) 160px, 220px'}
 	                      loading="lazy"
 	                      onClick={(event) => {
 	                        event.stopPropagation();
@@ -984,7 +1244,7 @@ export const RoyaltyFreeAssets: React.FC = () => {
 	                        title="Favorite asset"
 	                        onClick={(e) => {
 	                          e.stopPropagation();
-	                          toggleFavorite(img.id);
+	                          toggleFavorite(img);
 	                        }}
 	                        className="pointer-events-auto p-2 bg-white/20 rounded-full hover:bg-white/30"
 	                      >
@@ -1016,12 +1276,12 @@ export const RoyaltyFreeAssets: React.FC = () => {
             )}
 
             {/* Empty State */}
-            {!loading && showImageResults && images.length === 0 && (
+            {!loading && showImageResults && visibleImages.length === 0 && (
               <div className="text-center py-12 text-zinc-500">
                 <Image className="w-12 h-12 mx-auto mb-3 opacity-40" />
-                <p className="text-sm font-semibold">No backend images found</p>
+                <p className="text-sm font-semibold">No assets found</p>
                 <p className="text-xs mt-1">
-                  Try a different search or category.
+                  Try another keyword or select a different category.
                 </p>
                 <button
                   onClick={() => fetchImages(searchQuery, 1, selectedCategory)}

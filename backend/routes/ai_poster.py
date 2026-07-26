@@ -18,7 +18,9 @@ import time
 import hashlib
 import urllib.request
 import urllib.parse
+import urllib.error
 import ssl
+import socket
 import random
 import uuid
 import zipfile
@@ -55,9 +57,46 @@ def build_ssl_context() -> ssl.SSLContext:
 
 
 def get_image_provider_order() -> list[str]:
-    configured = getattr(settings, "IMAGE_PROVIDER_ORDER", "openai,gemini,stability,pollinations")
+    configured = (
+        getattr(settings, "AI_PROVIDER_PRIORITY", "")
+        or getattr(settings, "IMAGE_PROVIDER_ORDER", "openai,gemini,pollinations")
+    )
     providers = [provider.strip().lower() for provider in configured.split(",") if provider.strip()]
-    return providers or ["openai", "gemini", "stability", "pollinations"]
+    return providers or ["openai", "gemini", "pollinations"]
+
+
+def get_image_provider_timeout() -> int:
+    try:
+        timeout = int(getattr(settings, "AI_IMAGE_TIMEOUT_SECONDS", 60))
+    except (TypeError, ValueError):
+        timeout = 60
+    return max(10, min(timeout, 180))
+
+
+_provider_health: dict[str, dict[str, object]] = {}
+
+
+def normalize_provider_name(provider: str) -> str:
+    provider = provider.lower().strip()
+    if provider.startswith("gemini"):
+        return "gemini"
+    if provider.startswith("openai"):
+        return "openai"
+    if provider.startswith("pollinations"):
+        return "pollinations"
+    return provider
+
+
+def record_provider_health(provider: str, available: bool, reason: str | None = None) -> None:
+    _provider_health[normalize_provider_name(provider)] = {
+        "available": available,
+        "reason": None if available else reason,
+        "checked_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+def get_provider_health_snapshot() -> dict[str, dict[str, object]]:
+    return dict(_provider_health)
 
 
 def aspect_ratio_for_provider(width: int, height: int) -> str:
@@ -76,6 +115,53 @@ def aspect_ratio_for_provider(width: int, height: int) -> str:
     return min(supported, key=lambda value: abs(supported[value] - ratio))
 
 
+def categorize_provider_error(error: BaseException) -> str:
+    """Map provider/network exceptions to user-actionable categories without exposing secrets."""
+    if isinstance(error, urllib.error.HTTPError):
+        detail = ""
+        try:
+            body = error.read().decode("utf-8", errors="replace")
+            payload = json.loads(body)
+            provider_error = payload.get("error", payload)
+            detail = " ".join(
+                str(provider_error.get(field, ""))
+                for field in ("type", "code", "message")
+            ).lower()
+        except Exception:
+            detail = ""
+        if "quota" in detail or "rate_limit" in detail or "too many" in detail:
+            return "quota_or_rate_limit"
+        if "billing" in detail or "payment" in detail or "hard_limit" in detail:
+            return "billing_required"
+        if "model" in detail and ("not found" in detail or "unsupported" in detail or "access" in detail):
+            return "model_access_or_config"
+        if "invalid" in detail or "bad request" in detail:
+            return "invalid_request"
+        if error.code in {401, 403}:
+            return "auth_error"
+        if error.code == 402:
+            return "billing_required"
+        if error.code == 429:
+            return "quota_or_rate_limit"
+        if error.code in {408, 504}:
+            return "timeout"
+        if 500 <= error.code <= 599:
+            return "provider_server_error"
+        return "provider_http_error"
+    if isinstance(error, TimeoutError) or isinstance(error, socket.timeout):
+        return "timeout"
+    if isinstance(error, urllib.error.URLError):
+        reason = str(error.reason).lower()
+        if "timed out" in reason or "timeout" in reason:
+            return "timeout"
+        if "ssl" in reason or "certificate" in reason:
+            return "network_or_ssl_error"
+        return "network_or_ssl_error"
+    if isinstance(error, ssl.SSLError):
+        return "network_or_ssl_error"
+    return "network_or_ssl_error"
+
+
 def log_provider_attempt(
     provider: str,
     status: str,
@@ -88,7 +174,7 @@ def log_provider_attempt(
     started_at: float | None = None,
 ) -> None:
     elapsed_ms = int((time.time() - started_at) * 1000) if started_at else None
-    safe_error = truncate_text(str(error), 220) if error else None
+    safe_error = type(error).__name__ if isinstance(error, BaseException) else truncate_text(str(error), 80) if error else None
     print(json.dumps({
         "event": "ai_image_provider_attempt",
         "provider": provider,
@@ -695,27 +781,43 @@ def generate_image_prompt(prompt: str, theme: dict) -> str:
 # ─── Image Generation ──────────────────────────────────────────
 
 def generate_image(prompt: str, width: int = 1024, height: int = 1024) -> dict:
-    """Generate an image using multiple fallback methods."""
+    """Generate an image using configured production providers only."""
+    failures: list[dict] = []
     for provider in get_image_provider_order():
         if provider == "openai" and settings.OPENAI_API_KEY:
             result = generate_image_openai(prompt, width, height)
             if result.get("success"):
+                record_provider_health("openai", True)
                 return result
+            category = result.get("error_category", "unavailable")
+            record_provider_health("openai", False, category)
+            failures.append({"provider": "openai", "category": category})
         elif provider == "gemini" and settings.GEMINI_API_KEY:
             result = generate_image_gemini(prompt, width, height)
             if result.get("success"):
+                record_provider_health("gemini", True)
                 return result
+            category = result.get("error_category", "unavailable")
+            record_provider_health("gemini", False, category)
+            failures.append({"provider": "gemini", "category": category})
         elif provider == "stability" and getattr(settings, "STABILITY_API_KEY", ""):
             result = generate_image_stability(prompt, width, height)
             if result.get("success"):
+                record_provider_health("stability", True)
                 return result
+            category = result.get("error_category", "unavailable")
+            record_provider_health("stability", False, category)
+            failures.append({"provider": "stability", "category": category})
         elif provider == "pollinations":
             result = generate_image_pollinations(prompt, width, height)
             if result.get("success"):
+                record_provider_health("pollinations", True)
                 return result
+            category = result.get("error_category", "unavailable")
+            record_provider_health("pollinations", False, category)
+            failures.append({"provider": "pollinations", "category": category})
 
-    # Reliable local fallback so the browser can always load the image.
-    return generate_image_picsum(prompt, width, height)
+    return {"success": False, "error": "No production image provider returned an image", "provider_failures": failures}
 
 
 def generate_image_openai(prompt: str, width: int, height: int) -> dict:
@@ -749,7 +851,7 @@ def generate_image_openai(prompt: str, width: int, height: int) -> dict:
             'Authorization': f'Bearer {api_key}'
         })
         ctx = build_ssl_context()
-        with urllib.request.urlopen(req, timeout=20, context=ctx) as response:
+        with urllib.request.urlopen(req, timeout=get_image_provider_timeout(), context=ctx) as response:
             result = json.loads(response.read().decode('utf-8'))
             if 'data' in result and len(result['data']) > 0:
                 data = result['data'][0]
@@ -760,11 +862,11 @@ def generate_image_openai(prompt: str, width: int, height: int) -> dict:
                     log_provider_attempt("openai", "request_completed", http_status=response.status, mime_type="image/url", validation="valid_image_url", started_at=started_at)
                     return {"success": True, "url": data['url'], "source": f"openai:{getattr(settings, 'OPENAI_IMAGE_MODEL', 'gpt-image-1')}", "mime_type": "image/png"}
     except Exception as e:
-        category = "provider_http_error" if hasattr(e, "code") else "network_or_ssl_error"
+        category = categorize_provider_error(e)
         log_provider_attempt("openai", "request_failed", failure_category=category, error=e, started_at=started_at)
-        print(f"OpenAI error: {e}")
+        print(f"OpenAI image request failed ({type(e).__name__})")
 
-    return {"success": False}
+    return {"success": False, "error_category": category if 'category' in locals() else "invalid_response"}
 
 
 def generate_image_gemini(prompt: str, width: int, height: int) -> dict:
@@ -794,7 +896,7 @@ def generate_image_gemini(prompt: str, width: int, height: int) -> dict:
     log_provider_attempt("gemini-image", "request_started", started_at=started_at)
     try:
         req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=60, context=build_ssl_context()) as response:
+        with urllib.request.urlopen(req, timeout=get_image_provider_timeout(), context=build_ssl_context()) as response:
             result = json.loads(response.read().decode("utf-8"))
             parts = result.get("candidates", [{}])[0].get("content", {}).get("parts", [])
             for part in parts:
@@ -810,11 +912,11 @@ def generate_image_gemini(prompt: str, width: int, height: int) -> dict:
                         "height": height,
                     }
     except Exception as e:
-        category = "provider_http_error" if hasattr(e, "code") else "network_or_ssl_error"
+        category = categorize_provider_error(e)
         log_provider_attempt("gemini-image", "request_failed", failure_category=category, error=e, started_at=started_at)
-        print(f"Gemini image error: {e}")
+        print(f"Gemini image request failed ({type(e).__name__})")
 
-    return {"success": False}
+    return {"success": False, "error_category": category if 'category' in locals() else "invalid_response"}
 
 
 def generate_image_stability(prompt: str, width: int, height: int) -> dict:
@@ -851,7 +953,7 @@ def generate_image_stability(prompt: str, width: int, height: int) -> dict:
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=45, context=build_ssl_context()) as response:
+        with urllib.request.urlopen(req, timeout=get_image_provider_timeout(), context=build_ssl_context()) as response:
             content = response.read()
             content_type = response.headers.get("Content-Type", "image/png")
             if response.status in {200, 201} and content_type.startswith("image/"):
@@ -865,11 +967,11 @@ def generate_image_stability(prompt: str, width: int, height: int) -> dict:
                     "height": height,
                 }
     except Exception as e:
-        category = "provider_http_error" if hasattr(e, "code") else "network_or_ssl_error"
+        category = categorize_provider_error(e)
         log_provider_attempt("stability", "request_failed", failure_category=category, error=e, started_at=started_at)
-        print(f"Stability error: {e}")
+        print(f"Stability image request failed ({type(e).__name__})")
 
-    return {"success": False}
+    return {"success": False, "error_category": category if 'category' in locals() else "invalid_response"}
 
 
 def build_poster_body_text(prompt: str, attachment_context: dict | None) -> str:
@@ -932,6 +1034,26 @@ def extract_user_request_from_provider_prompt(prompt: str) -> str:
     if match:
         return clean_text(match.group(1))
     return clean_text(prompt)
+
+
+def pollinations_poster_prompt_candidates(prompt: str) -> list[str]:
+    user_prompt = extract_user_request_from_provider_prompt(prompt)
+    candidates = [
+        (
+            f"Finished professional poster artwork: {user_prompt}. "
+            "Recognizable subjects, complete scene, dynamic composition, polished commercial illustration, no UI mockup, no prompt text."
+        ),
+        (
+            f"Professional poster illustration: {user_prompt}. "
+            "Clear main subjects, balanced composition, polished graphic design, clean negative space, no watermark."
+        ),
+    ]
+    deduped: list[str] = []
+    for candidate in candidates:
+        value = truncate_text(candidate, 700)
+        if value and value not in deduped:
+            deduped.append(value)
+    return deduped
 
 
 def build_complete_poster_image_prompt(
@@ -1006,6 +1128,8 @@ def generate_poster_artifact(
         image_url = image_result.get("url", "")
         if image_url:
             metadata = image_result_metadata(image_result, width, height)
+            if metadata["fallback_used"] or not metadata["production_quality"]:
+                continue
             variations.append({
                 "index": index,
                 "image_url": image_url,
@@ -1033,13 +1157,14 @@ def generate_poster_artifact(
                 "height": height,
                 "attachment_context": attachment_context,
             },
-            "message": "Poster image generation failed",
+            "message": "No real AI image provider returned a production-quality poster image",
             "attachment_summary": attachment_context.get("attachment_context", ""),
             "provider": "none",
             "source": "none",
             "productionQuality": False,
             "fallbackUsed": False,
-            "fallbackReason": "No provider returned an image",
+            "fallbackReason": "All configured real image providers failed or were unavailable",
+            "providerFailures": image_result.get("provider_failures", []) if 'image_result' in locals() else [],
             "result": {
                 "imageUrl": None,
                 "imageData": None,
@@ -1096,52 +1221,45 @@ def generate_poster_artifact(
 
 def generate_image_pollinations(prompt: str, width: int, height: int) -> dict:
     """Generate image using Pollinations AI API."""
-    user_prompt = extract_user_request_from_provider_prompt(prompt)
-    pollinations_prompt = truncate_text(
-        (
-            f"Finished professional poster artwork: {user_prompt}. "
-            "Recognizable subjects, complete scene, dynamic composition, polished commercial illustration, no UI mockup, no prompt text."
-        ),
-        700,
-    )
-    encoded = urllib.parse.quote(pollinations_prompt)
     seed = random.randint(1, 999999)
+    last_category = "invalid_response"
+    for attempt, pollinations_prompt in enumerate(pollinations_poster_prompt_candidates(prompt), start=1):
+        encoded = urllib.parse.quote(pollinations_prompt)
+        attempt_seed = seed + attempt - 1
+        url = f"https://image.pollinations.ai/prompt/{encoded}?width={width}&height={height}&seed={attempt_seed}&nologo=true&model=flux"
 
-    # Use Pollinations AI with seed for reproducibility
-    url = f"https://image.pollinations.ai/prompt/{encoded}?width={width}&height={height}&seed={seed}&nologo=true&model=flux"
+        started_at = time.time()
+        log_provider_attempt("pollinations", "request_started", started_at=started_at)
+        try:
+            ctx = build_ssl_context()
+            req = urllib.request.Request(url, headers={
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+            })
+            with urllib.request.urlopen(req, timeout=get_image_provider_timeout(), context=ctx) as response:
+                if response.status == 200:
+                    content_type = response.headers.get('Content-Type', '')
+                    if 'image' in content_type:
+                        image_bytes = response.read()
+                        decoded_width, decoded_height = validate_image_bytes(image_bytes, content_type)
+                        image_data = data_url_from_bytes(image_bytes, content_type)
+                        log_provider_attempt("pollinations", "request_completed", http_status=response.status, mime_type=content_type, validation="valid_image_data", started_at=started_at)
+                        return {
+                            "success": True,
+                            "url": image_data,
+                            "provider_url": url,
+                            "source": "pollinations:flux",
+                            "mime_type": content_type,
+                            "seed": attempt_seed,
+                            "width": decoded_width or width,
+                            "height": decoded_height or height,
+                        }
+                    log_provider_attempt("pollinations", "request_failed", http_status=response.status, mime_type=content_type, validation="invalid_mime_type", failure_category="invalid_response", started_at=started_at)
+        except Exception as e:
+            last_category = categorize_provider_error(e)
+            log_provider_attempt("pollinations", "request_failed", failure_category=last_category, error=e, started_at=started_at)
+            print(f"Pollinations image attempt {attempt} failed ({type(e).__name__})")
 
-    started_at = time.time()
-    log_provider_attempt("pollinations", "request_started", started_at=started_at)
-    try:
-        ctx = build_ssl_context()
-        req = urllib.request.Request(url, headers={
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
-        })
-        with urllib.request.urlopen(req, timeout=60, context=ctx) as response:
-            if response.status == 200:
-                content_type = response.headers.get('Content-Type', '')
-                if 'image' in content_type:
-                    image_bytes = response.read()
-                    decoded_width, decoded_height = validate_image_bytes(image_bytes, content_type)
-                    image_data = data_url_from_bytes(image_bytes, content_type)
-                    log_provider_attempt("pollinations", "request_completed", http_status=response.status, mime_type=content_type, validation="valid_image_data", started_at=started_at)
-                    return {
-                        "success": True,
-                        "url": image_data,
-                        "provider_url": url,
-                        "source": "pollinations:flux",
-                        "mime_type": content_type,
-                        "seed": seed,
-                        "width": decoded_width or width,
-                        "height": decoded_height or height,
-                    }
-                log_provider_attempt("pollinations", "request_failed", http_status=response.status, mime_type=content_type, validation="invalid_mime_type", failure_category="invalid_response", started_at=started_at)
-    except Exception as e:
-        category = "timeout" if isinstance(e, TimeoutError) else "network_or_ssl_error"
-        log_provider_attempt("pollinations", "request_failed", failure_category=category, error=e, started_at=started_at)
-        print(f"Pollinations error: {e}")
-
-    return {"success": False}
+    return {"success": False, "error_category": last_category}
 
 
 def generate_image_picsum(prompt: str, width: int, height: int) -> dict:
@@ -1438,7 +1556,7 @@ async def generate_ai_poster(request: Request):
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
-    print(f"[AI Poster] Generating poster from prompt: {prompt[:50]}...")
+    print("[AI Poster] Generating poster request")
     result = generate_poster_artifact(
         prompt=prompt,
         width=width,
@@ -1449,7 +1567,16 @@ async def generate_ai_poster(request: Request):
         quality=quality,
         output_count=output_count,
     )
-    print(f"[AI Poster] Poster ready!")
+    if not result.get("success") or not result.get("image_url"):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "AI_IMAGE_PROVIDERS_UNAVAILABLE",
+                "message": result.get("message") or "Real AI poster generation is currently unavailable",
+                "retryable": True,
+            },
+        )
+    print("[AI Poster] Poster ready")
     return PosterGenerateResponse(
         success=True,
         image_url=result["image_url"],

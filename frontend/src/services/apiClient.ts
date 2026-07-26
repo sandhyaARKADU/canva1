@@ -36,6 +36,9 @@ export async function apiFetch(path: string, options: ApiFetchOptions = {}) {
   if (token && !requestHeaders.has('Authorization')) {
     requestHeaders.set('Authorization', `Bearer ${token}`);
   }
+  if (init.body && typeof init.body === 'string' && !requestHeaders.has('Content-Type')) {
+    requestHeaders.set('Content-Type', 'application/json');
+  }
 
   try {
     if (signal) {

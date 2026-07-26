@@ -7,7 +7,7 @@ from database import SessionLocal, engine
 from routes.assets import get_asset, get_asset_data_url, list_asset_categories, search_assets
 
 
-CANONICAL_CATEGORIES = [
+CORE_CATEGORIES = {
     "nature",
     "business",
     "food-drink",
@@ -20,7 +20,8 @@ CANONICAL_CATEGORIES = [
     "animals",
     "people",
     "minimal",
-]
+}
+CANONICAL_CATEGORIES = [category["id"] for category in __import__("routes.assets", fromlist=["CANONICAL_IMAGE_CATEGORIES"]).CANONICAL_IMAGE_CATEGORIES]
 
 
 def _is_supported_image_url(value: str) -> bool:
@@ -40,8 +41,12 @@ def _count_category(slug: str) -> int:
 
 def test_category_counts() -> None:
     counts = {slug: _count_category(slug) for slug in CANONICAL_CATEGORIES}
-    missing = {slug: count for slug, count in counts.items() if count < 100}
-    assert not missing, f"Expected at least 100 public images per category, got {missing}"
+    missing = {
+        slug: count
+        for slug, count in counts.items()
+        if count < (100 if slug in CORE_CATEGORIES else 30)
+    }
+    assert not missing, f"Expected enough public images per category, got {missing}"
 
 
 def test_metadata_quality() -> None:
@@ -121,7 +126,7 @@ def test_asset_api_contract() -> None:
     try:
         categories = list_asset_categories(db=db)
         assert categories.success is True
-        assert categories.total >= 1200
+        assert categories.total >= 1200 + (len(CANONICAL_CATEGORIES) - len(CORE_CATEGORIES)) * 30
         assert len(categories.categories) == len(CANONICAL_CATEGORIES)
         assert all(category.count >= 100 for category in categories.categories)
 

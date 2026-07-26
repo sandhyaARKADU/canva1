@@ -71,6 +71,17 @@ type AiEntryPoint = 'chat' | 'poster' | 'image' | 'thumbnail';
 
 type GeneratedAssetType = 'image' | 'poster' | 'thumbnail';
 
+type PosterGenerationMode = 'single_image_poster' | 'editable_structured_poster' | 'carousel_or_card_set';
+
+function classifyPosterGenerationMode(prompt: string): PosterGenerationMode {
+  const normalized = prompt.toLowerCase();
+  if (/\b(carousel|slides?|multi[- ]?card|multiple cards?)\b/.test(normalized)) return 'carousel_or_card_set';
+  if (/\b(infographic|timeline|step[- ]?by[- ]?step|numbered (?:cards?|sections?|steps?)|comparison|editable (?:layout|poster|template)|\d+\s*(?:cards?|sections?|steps?))\b/.test(normalized)) {
+    return 'editable_structured_poster';
+  }
+  return 'single_image_poster';
+}
+
 type PosterAttachmentFile = {
   id: string;
   name: string;
@@ -143,8 +154,24 @@ function getStableChatConversationId(): string {
 function getFabricImageSource(object: fabric.Object | null | undefined) {
   if (!object || object.type !== 'image') return '';
   const imageObject = object as fabric.Image & { src?: string };
-  const getSrc = imageObject.getSrc as unknown as (() => string) | undefined;
-  return getSrc?.() || (imageObject.get('src') as string) || imageObject.src || '';
+  let storedSource = String((imageObject as any).teckstudioImageSource || '');
+  try {
+    storedSource = String((imageObject as any).get?.('teckstudioImageSource') || storedSource);
+  } catch {
+    storedSource = String((imageObject as any).teckstudioImageSource || '');
+  }
+  const serializedSource = String(imageObject.src || '');
+  const elementSource = String((imageObject as any)._originalElement?.src || (imageObject as any)._element?.src || '');
+  if (storedSource || serializedSource || elementSource) {
+    return storedSource || serializedSource || elementSource;
+  }
+
+  try {
+    const getSrc = imageObject.getSrc as unknown as (() => string) | undefined;
+    return getSrc?.() || '';
+  } catch {
+    return '';
+  }
 }
 
 function triggerBrowserDownload(downloadUrl: string, fileName: string) {
@@ -154,6 +181,42 @@ function triggerBrowserDownload(downloadUrl: string, fileName: string) {
   document.body.appendChild(link);
   link.click();
   link.remove();
+}
+
+type AiStatus = { ok: boolean; msg: string; requestId?: string };
+
+type ProviderFailure = {
+  provider?: unknown;
+  category?: unknown;
+  status?: unknown;
+  model?: unknown;
+};
+
+const TEMPORARY_AI_UNAVAILABLE_MESSAGE = 'AI service is temporarily unavailable. Please try again later.';
+
+function getProviderFailures(payload: any): ProviderFailure[] {
+  const detail = payload?.detail;
+  if (Array.isArray(detail?.providerFailures)) return detail.providerFailures;
+  if (Array.isArray(detail?.provider_attempts)) return detail.provider_attempts;
+  if (Array.isArray(payload?.providerFailures)) return payload.providerFailures;
+  if (Array.isArray(payload?.provider_attempts)) return payload.provider_attempts;
+  return [];
+}
+
+function isProviderAvailabilityError(payload: any) {
+  const detail = payload?.detail;
+  const code = String(detail?.code || payload?.code || '');
+  return getProviderFailures(payload).length > 0 || code.includes('PROVIDERS_UNAVAILABLE');
+}
+
+function formatAiApiError(payload: any, fallbackMessage: string) {
+  if (isProviderAvailabilityError(payload)) return TEMPORARY_AI_UNAVAILABLE_MESSAGE;
+
+  const detail = payload?.detail;
+  const message = typeof detail === 'string'
+    ? detail
+    : detail?.message || payload?.message || payload?.error || fallbackMessage;
+  return message;
 }
 
 /* ─── Theme Database ─── */
@@ -450,10 +513,12 @@ export const AIAssistant: React.FC = () => {
   const [activeAiTool, setActiveAiTool] = useState<AiEntryPoint>(initialAiEntryPoint || 'poster');
   const [posterPrompt, setPosterPrompt] = useState(initialAiEntryPoint === 'poster' ? initialPrompt : '');
   const [posterLoading, setPosterLoading] = useState(false);
-  const [posterStatus, setPosterStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [posterStatus, setPosterStatus] = useState<AiStatus | null>(null);
   const [posterPreviewUrl, setPosterPreviewUrl] = useState('');
   const [posterResult, setPosterResult] = useState<any>(null);
   const [posterCanvasObjectId, setPosterCanvasObjectId] = useState('');
+  const activePosterRequestRef = useRef('');
+  const posterAbortRef = useRef<AbortController | null>(null);
   const [editablePosterSpec, setEditablePosterSpec] = useState<PosterSpec | null>(null);
   const [posterSpecTheme, setPosterSpecTheme] = useState<PosterSpecThemeId>('tech-blue');
   const [posterSpecCardCount, setPosterSpecCardCount] = useState(7);
@@ -466,9 +531,12 @@ export const AIAssistant: React.FC = () => {
 
   const [imgPrompt, setImgPrompt] = useState(initialAiEntryPoint === 'image' ? initialPrompt : '');
   const [imgLoading, setImgLoading] = useState(false);
-  const [imgStatus, setImgStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [imgStatus, setImgStatus] = useState<AiStatus | null>(null);
   const [imgPreview, setImgPreview] = useState('');
   const [imgResult, setImgResult] = useState<any>(null);
+  const [imgCanvasObjectId, setImgCanvasObjectId] = useState('');
+  const activeImageRequestRef = useRef('');
+  const imageAbortRef = useRef<AbortController | null>(null);
 
   const [thumbPrompt, setThumbPrompt] = useState(initialAiEntryPoint === 'thumbnail' ? initialPrompt : '');
   const [thumbTitle, setThumbTitle] = useState('');
@@ -485,7 +553,10 @@ export const AIAssistant: React.FC = () => {
   const [thumbPreview, setThumbPreview] = useState('');
   const [thumbResult, setThumbResult] = useState<any>(null);
   const [thumbLoading, setThumbLoading] = useState(false);
-  const [thumbStatus, setThumbStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [thumbStatus, setThumbStatus] = useState<AiStatus | null>(null);
+  const [thumbCanvasObjectId, setThumbCanvasObjectId] = useState('');
+  const activeThumbnailRequestRef = useRef('');
+  const thumbnailAbortRef = useRef<AbortController | null>(null);
 
   // AI Chat state
   const [chatMessage, setChatMessage] = useState(initialAiEntryPoint === 'chat' ? initialPrompt : '');
@@ -493,6 +564,8 @@ export const AIAssistant: React.FC = () => {
   const [chatConversationId] = useState(getStableChatConversationId);
   const [chatSuggestions, setChatSuggestions] = useState<string[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
+  const [chatStatus, setChatStatus] = useState<AiStatus | null>(null);
+  const [lastChatPrompt, setLastChatPrompt] = useState('');
 
   const documentInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -540,6 +613,68 @@ export const AIAssistant: React.FC = () => {
     if (isPosterImage(activeObject)) return activeObject as fabric.Image;
 
     return canvas.getObjects().slice().reverse().find((object) => isPosterImage(object)) as fabric.Image | undefined;
+  };
+
+  const findGeneratedCanvasImage = (
+    canvas: fabric.Canvas,
+    assetType: GeneratedAssetType | 'ai-image' | 'ai-thumbnail',
+    imageSource: string,
+    objectId: string,
+    assetId?: string,
+  ) => {
+    const acceptedTypes = assetType === 'image'
+      ? ['ai-image', 'image']
+      : assetType === 'thumbnail'
+        ? ['ai-thumbnail', 'thumbnail']
+        : [assetType];
+    const isGeneratedImage = (object: fabric.Object | null | undefined) => {
+      if (!object || object.type !== 'image') return false;
+      const candidateObjectId = String((object as any).get?.('id') || (object as any).id || '');
+      const candidateAssetType = String((object as any).get?.('teckstudioAssetType') || (object as any).teckstudioAssetType || '');
+      const candidateGeneratedAssetId = String((object as any).get?.('teckstudioGeneratedAssetId') || (object as any).teckstudioGeneratedAssetId || '');
+      const candidateSource = getFabricImageSource(object) || String((object as any).get?.('teckstudioImageSource') || '');
+      return (
+        Boolean(objectId && candidateObjectId === objectId) ||
+        Boolean(assetId && candidateGeneratedAssetId === assetId) ||
+        Boolean(imageSource && candidateSource === imageSource) ||
+        acceptedTypes.includes(candidateAssetType)
+      );
+    };
+
+    const activeObject = canvas.getActiveObject();
+    if (isGeneratedImage(activeObject)) return activeObject as fabric.Image;
+    return canvas.getObjects().slice().reverse().find((object) => isGeneratedImage(object)) as fabric.Image | undefined;
+  };
+
+  const selectGeneratedLayerForEditing = (
+    assetType: GeneratedAssetType | 'ai-image' | 'ai-thumbnail',
+    imageSource: string,
+    objectId: string,
+    assetId: string | undefined,
+    setStatus: (status: AiStatus) => void,
+    successMessage: string,
+  ) => {
+    const canvas = getCanvas();
+    if (!canvas) {
+      setStatus({ ok: false, msg: 'Canvas not ready. Open a design first.' });
+      return;
+    }
+    if (!imageSource) {
+      setStatus({ ok: false, msg: 'No generated image is available to edit.' });
+      return;
+    }
+    const generatedLayer = findGeneratedCanvasImage(canvas, assetType, imageSource, objectId, assetId);
+    if (!generatedLayer) {
+      setStatus({ ok: false, msg: 'Generated image layer was not found on the canvas. Generate it again before editing.' });
+      return;
+    }
+    generatedLayer.set({ selectable: true, evented: true });
+    canvas.discardActiveObject();
+    canvas.setActiveObject(generatedLayer);
+    useEditorStore.getState().setSelectedObject(generatedLayer);
+    canvas.requestRenderAll();
+    window.dispatchEvent(new CustomEvent('teckstudio:open-panel', { detail: { panel: 'effects' } }));
+    setStatus({ ok: true, msg: successMessage });
   };
 
   const createGeneratedAssetProject = async ({
@@ -665,38 +800,17 @@ export const AIAssistant: React.FC = () => {
       provider,
     };
 
-    try {
-      const response = await apiFetch('/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(projectPayload),
-      });
-      const payload = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(payload?.detail || payload?.error || `Failed to create editable project (${response.status})`);
-      }
-      const createdProject = payload?.project || payload;
-      return { id: createdProject.id || projectId, width: canvasWidth, height: canvasHeight };
-    } catch (error) {
-      const localProjectId = `local_${window.crypto?.randomUUID?.() ?? `${Date.now()}_${Math.random().toString(36).slice(2)}`}`;
-      const rawProjects = localStorage.getItem('teckstudio_local_projects');
-      const localProjects = rawProjects ? JSON.parse(rawProjects) : [];
-      localProjects.unshift({
-        ...projectPayload,
-        id: localProjectId,
-        createdAt: now,
-        updatedAt: now,
-        openInEditorFallbackReason: error instanceof Error ? error.message : String(error),
-      });
-      localStorage.setItem('teckstudio_local_projects', JSON.stringify(localProjects));
-      console.warn('[Poster Action]', {
-        action: 'open-in-editor-local-fallback',
-        assetType,
-        localProjectId,
-        reason: error instanceof Error ? error.message : String(error),
-      });
-      return { id: localProjectId, width: canvasWidth, height: canvasHeight };
+    const response = await apiFetch('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(projectPayload),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.detail || payload?.error || `Failed to create editable project (${response.status})`);
     }
+    const createdProject = payload?.project || payload;
+    return { id: createdProject.id || projectId, width: canvasWidth, height: canvasHeight };
   };
 
   const openGeneratedAssetInEditor = async (asset: {
@@ -888,6 +1002,13 @@ export const AIAssistant: React.FC = () => {
 
   const handleGenerateEditablePoster = async () => {
     if (!posterPrompt.trim()) return;
+    if (classifyPosterGenerationMode(posterPrompt) === 'single_image_poster') {
+      setPosterStatus({
+        ok: false,
+        msg: 'This is a single visual poster request. Use “Generate AI Poster Image” for a real generated poster image.',
+      });
+      return;
+    }
     setPosterSpecLoading(true);
     setPosterStatus(null);
 
@@ -915,9 +1036,12 @@ export const AIAssistant: React.FC = () => {
       setPosterPreviewUrl('');
       setPosterResult(null);
       setPosterCanvasObjectId('');
+      const usedLocalPosterSpecFallback = Boolean(payload.validation?.fallbackUsed);
       setPosterStatus({
-        ok: true,
-        msg: `Editable poster rendered with ${payload.source || 'PosterSpec'} (${renderResult.objectCount} editable objects).`,
+        ok: !usedLocalPosterSpecFallback,
+        msg: usedLocalPosterSpecFallback
+          ? `AI service is temporarily unavailable. Rendered an editable draft instead (${renderResult.objectCount} editable objects).`
+          : `Editable poster rendered with ${payload.source || 'PosterSpec'} (${renderResult.objectCount} editable objects).`,
       });
     } catch (error) {
       setPosterStatus({
@@ -975,14 +1099,27 @@ export const AIAssistant: React.FC = () => {
 
   /* ━━━ POSTER GENERATOR (AI Image-Based) ━━━ */
   const handleGeneratePoster = async () => {
-    if (!posterPrompt.trim()) return;
+    const submittedPrompt = posterPrompt.trim();
+    if (!submittedPrompt || posterLoading) return;
+
+    const requestId = createAttachmentId();
+    const controller = new AbortController();
+    const previousController = posterAbortRef.current;
+    activePosterRequestRef.current = requestId;
+    posterAbortRef.current = controller;
+    previousController?.abort();
+
     setPosterLoading(true);
     setPosterStatus(null);
+    setPosterResult(null);
+    setPosterPreviewUrl('');
+    setPosterCanvasObjectId('');
 
     const canvas = getCanvas();
     const isRegeneration = Boolean(getPosterImageSource());
     debugPosterAction(isRegeneration ? 'regenerate-start' : 'generate-start', {
-      hasPrompt: Boolean(posterPrompt.trim()),
+      requestId,
+      hasPrompt: Boolean(submittedPrompt),
       canvasWidth: canvas?.getWidth() || null,
       canvasHeight: canvas?.getHeight() || null,
     });
@@ -997,7 +1134,8 @@ export const AIAssistant: React.FC = () => {
       setPosterStatus({ ok: false, msg: 'Analyzing your prompt & generating AI image...' });
 
       const formData = new FormData();
-      formData.append('prompt', posterPrompt);
+      formData.append('request_id', requestId);
+      formData.append('prompt', submittedPrompt);
       formData.append('style', 'auto');
       formData.append('negative_prompt', 'generic template, hard-coded poster title, unrelated placeholder text, UI mockup, random buttons, platform branding');
       formData.append('quality', 'high');
@@ -1016,20 +1154,31 @@ export const AIAssistant: React.FC = () => {
         formData.append('reference_images', attachment.file, attachment.name);
       });
 
-      const response = await apiFetch('/api/ai/generate-poster-image', {
+      const response = await apiFetch('/api/ai/posters/generate', {
         method: 'POST',
         body: formData,
         timeoutMs: 120000,
+        signal: controller.signal,
       });
+      if (activePosterRequestRef.current !== requestId) return;
 
-      if (!response.ok) throw new Error('Backend returned error');
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => null);
+        const error = new Error(formatAiApiError(errorPayload, `Poster generation failed (${response.status})`));
+        throw error;
+      }
 
       const result = await response.json();
+      if (activePosterRequestRef.current !== requestId) return;
+      if (result.request_id && result.request_id !== requestId) return;
       if (!result.success) throw new Error('Generation failed');
 
       const { design, image_url, poster_url, provider } = result;
       const fallbackUsed = Boolean(result.fallbackUsed ?? result.fallback_used);
       const productionQuality = Boolean(result.productionQuality);
+      if (fallbackUsed || !productionQuality) {
+        throw new Error('The AI image providers did not return a production-quality poster. Your existing canvas was not changed.');
+      }
       const source = result.source || provider || 'unknown';
       const previewUrl = result.result?.imageData || result.result?.imageUrl || poster_url || image_url || '';
       if (!previewUrl) throw new Error('Poster image missing from backend response');
@@ -1042,6 +1191,7 @@ export const AIAssistant: React.FC = () => {
 
       setPosterStatus({ ok: false, msg: 'Validating generated poster image...' });
       await loadBrowserImage(previewUrl);
+      if (activePosterRequestRef.current !== requestId) return;
       setPosterStatus({ ok: false, msg: 'Loading generated poster into canvas...' });
 
       await new Promise<void>((resolve, reject) => {
@@ -1068,7 +1218,9 @@ export const AIAssistant: React.FC = () => {
             teckstudioAssetType: 'poster',
             teckstudioImageSource: previewUrl,
             teckstudioGeneratedAssetId: generatedAssetId,
-            teckstudioPrompt: posterPrompt,
+            teckstudioPrompt: submittedPrompt,
+            teckstudioRequestId: requestId,
+            teckstudioGenerationId: result.generation_id || result.result?.generationId || generatedAssetId,
           } as any);
           canvas.add(img);
           canvas.setActiveObject(img);
@@ -1079,14 +1231,13 @@ export const AIAssistant: React.FC = () => {
         }, { crossOrigin: 'anonymous' });
       });
 
+      if (activePosterRequestRef.current !== requestId) return;
       setPosterResult(result);
       setPosterPreviewUrl(previewUrl);
       setPosterCanvasObjectId(objectId);
       setPosterStatus({
         ok: true,
-        msg: fallbackUsed || !productionQuality
-          ? 'AI image provider is currently unavailable. A local fallback preview was added as an image layer.'
-          : `Poster generated with ${source} and added as an image layer.`
+        msg: `Poster generated with ${source} and added as an image layer.`
       });
       debugPosterAction(isRegeneration ? 'regenerate-success' : 'generate-success', {
         source,
@@ -1104,31 +1255,45 @@ export const AIAssistant: React.FC = () => {
             await apiFetch('/api/templates', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ name: layerName, description: posterPrompt, data: JSON.stringify(canvas.toJSON(['id', 'name'])), width: W, height: H, tags: posterPrompt })
+              body: JSON.stringify({ name: layerName, description: submittedPrompt, data: JSON.stringify(canvas.toJSON(['id', 'name'])), width: W, height: H, tags: submittedPrompt })
             });
           }
         } catch { /* non-critical */ }
       })();
 
     } catch (err) {
+      if ((err as Error)?.name === 'AbortError' || activePosterRequestRef.current !== requestId) return;
       console.error('Poster error:', err);
-      setPosterStatus({ ok: false, msg: err instanceof Error ? err.message : 'Poster generation failed. No template fallback was used.' });
+      setPosterResult(null);
+      setPosterPreviewUrl('');
+      setPosterCanvasObjectId('');
+      setPosterStatus({
+        ok: false,
+        msg: err instanceof Error ? err.message : 'Poster generation failed. No template fallback was used.',
+      });
       debugPosterAction(isRegeneration ? 'regenerate-error' : 'generate-error', {
         error: err instanceof Error ? err.message : String(err),
       });
     } finally {
-      setPosterLoading(false);
+      if (activePosterRequestRef.current === requestId) {
+        setPosterLoading(false);
+        posterAbortRef.current = null;
+      }
     }
   };
 
   /* ━━━ AI CHAT ━━━ */
-  const handleChat = async () => {
-    if (!chatMessage.trim() || chatLoading) return;
-    const userMsg = chatMessage.trim();
+  const handleChat = async (retryMessage?: string) => {
+    const userMsg = (retryMessage || chatMessage).trim();
+    if (!userMsg || chatLoading) return;
+    const requestId = createAttachmentId();
+    const messageId = createAttachmentId();
     const nextHistory: Array<{ role: 'user' | 'ai'; text: string }> = [...chatHistory, { role: 'user', text: userMsg }];
     setChatMessage('');
     setChatSuggestions([]);
+    setChatStatus(null);
     setChatHistory(nextHistory);
+    setLastChatPrompt(userMsg);
     setChatLoading(true);
 
     try {
@@ -1138,10 +1303,14 @@ export const AIAssistant: React.FC = () => {
         timeoutMs: 60000,
         body: JSON.stringify({
           message: userMsg,
+          request_id: requestId,
+          message_id: messageId,
+          provider: 'auto',
+          stream: false,
           context: 'poster_design',
           conversation_id: chatConversationId,
           project_id: getPersistedProjectId(),
-          history: nextHistory.slice(-10).map((item) => ({
+          history: chatHistory.slice(-10).map((item) => ({
             role: item.role === 'ai' ? 'assistant' : 'user',
             content: item.text,
           })),
@@ -1150,20 +1319,32 @@ export const AIAssistant: React.FC = () => {
 
       if (response.ok) {
         const data = await response.json();
-        if (!data.reply || typeof data.reply !== 'string') {
+        const assistantReply = typeof data.message === 'string' ? data.message : data.reply;
+        if (!assistantReply || typeof assistantReply !== 'string') {
           throw new Error('Backend returned an empty chat response');
         }
-        setChatHistory(prev => [...prev, { role: 'ai', text: data.reply }]);
+        setChatHistory(prev => [...prev, { role: 'ai', text: assistantReply }]);
+        setChatStatus({
+          ok: true,
+          msg: `AI Chat responded using ${data.provider || data.source || 'configured provider'}.`,
+          requestId: data.request_id || requestId,
+        });
         if (Array.isArray(data.suggestions)) {
           setChatSuggestions(data.suggestions.filter((suggestion: unknown) => typeof suggestion === 'string' && suggestion.trim()).slice(0, 4));
         }
       } else {
         const payload = await response.json().catch(() => null);
-        throw new Error(payload?.detail || payload?.error || `Chat request failed with status ${response.status}`);
+        const error = new Error(formatAiApiError(payload, `Chat request failed with status ${response.status}`)) as Error & { requestId?: string };
+        (error as Error & { requestId?: string }).requestId = payload?.detail?.request_id || requestId;
+        throw error;
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : 'AI Chat is unavailable. Please try again.';
-      setChatHistory(prev => [...prev, { role: 'ai', text: message }]);
+      setChatStatus({
+        ok: false,
+        msg: message,
+        requestId: (e as { requestId?: string })?.requestId || requestId,
+      });
       setChatSuggestions([
         'Try again',
         'Ask for a layout critique',
@@ -1177,77 +1358,111 @@ export const AIAssistant: React.FC = () => {
 
   /* ━━━ IMAGE GENERATOR ━━━ */
   const handleGenerateImage = async () => {
-    if (!imgPrompt.trim()) return;
+    const submittedPrompt = imgPrompt.trim();
+    if (!submittedPrompt || imgLoading) return;
     const canvas = getCanvas();
     if (!canvas) { setImgStatus({ ok: false, msg: 'Canvas not ready.' }); return; }
 
+    const requestId = createAttachmentId();
+    const controller = new AbortController();
+    const previousController = imageAbortRef.current;
+    activeImageRequestRef.current = requestId;
+    imageAbortRef.current = controller;
+    previousController?.abort();
+
     setImgLoading(true);
-    setImgStatus(null);
+    setImgStatus({ ok: false, msg: 'Generating AI image...' });
+    setImgResult(null);
+    setImgPreview('');
+    setImgCanvasObjectId('');
 
     try {
-      // Use backend AI image generation endpoint
-      const response = await apiFetch('/api/ai/generate-image', {
+      const response = await apiFetch('/api/ai/images/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        timeoutMs: 140000,
+        signal: controller.signal,
         body: JSON.stringify({
-          prompt: imgPrompt,
+          request_id: requestId,
+          prompt: submittedPrompt,
           width: 1024,
           height: 1024,
+          aspect_ratio: '1:1',
+          style: 'auto',
+          variations: 1,
+          enhance_prompt: true,
           project_id: getPersistedProjectId(),
         })
       });
+      if (activeImageRequestRef.current !== requestId) return;
 
-      let url = '';
-      let source = 'unknown';
-      let data: any = null;
-
-      if (response.ok) {
-        data = await response.json();
-        if (data.success && data.url) {
-          url = data.url;
-          source = data.source || 'pollinations';
-          setImgResult(data);
-        }
-      } else {
-        data = await response.json().catch(() => null);
-        throw new Error(data?.detail || data?.error || `Image request failed with status ${response.status}`);
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.success) {
+        throw new Error(formatAiApiError(data, `Image request failed with status ${response.status}`));
+      }
+      if (data.request_id && data.request_id !== requestId) return;
+      if (data.fallbackUsed || !data.productionQuality) {
+        throw new Error('No real AI image provider returned a production-quality image. Your canvas was not changed.');
       }
 
-      if (!url) {
-        throw new Error('Backend did not return a persisted image URL');
-      }
+      const url = data.result?.imageData || data.result?.imageUrl || data.image_url || data.url || '';
+      if (!url) throw new Error('Backend did not return a persisted image URL');
+      const source = data.source || data.provider || 'AI provider';
 
-      setImgPreview(url);
+      setImgStatus({ ok: false, msg: 'Validating generated image...' });
+      await loadBrowserImage(url);
+      if (activeImageRequestRef.current !== requestId) return;
 
-      const testImg = new Image();
-      testImg.crossOrigin = 'anonymous';
-      testImg.onload = () => {
+      setImgStatus({ ok: false, msg: 'Adding generated image to canvas...' });
+      const objectId = `ai_image_${createAttachmentId()}`;
+      await new Promise<void>((resolve, reject) => {
         fabric.Image.fromURL(url, (img) => {
-          if (!img) { setImgLoading(false); setImgStatus({ ok: false, msg: 'Failed to load image.' }); return; }
+          if (!img || !img.width || !img.height) {
+            reject(new Error('Generated image could not be loaded into the canvas.'));
+            return;
+          }
           const maxDim = Math.min(canvas.getWidth() * 0.6, 400);
           const scale = Math.min(maxDim / (img.width || 512), maxDim / (img.height || 512), 1);
           img.set({
             left: canvas.getWidth() / 2 - ((img.width || 512) * scale) / 2,
             top: canvas.getHeight() / 2 - ((img.height || 512) * scale) / 2,
             scaleX: scale,
-            scaleY: scale
-          });
+            scaleY: scale,
+            name: 'AI generated image',
+            id: objectId,
+            teckstudioAssetType: 'ai-image',
+            teckstudioImageSource: url,
+            teckstudioGeneratedAssetId: data.generation_id || data.result?.generationId || data.asset_id,
+            teckstudioPrompt: submittedPrompt,
+            teckstudioRequestId: requestId,
+            teckstudioGenerationId: data.generation_id || data.result?.generationId || data.asset_id,
+            teckstudioProvider: source,
+          } as any);
           canvas.add(img);
           canvas.setActiveObject(img);
+          useEditorStore.getState().setSelectedObject(img);
           canvas.renderAll();
           useEditorStore.getState().saveHistory();
-          setImgLoading(false);
-          setImgStatus({ ok: true, msg: `AI image generated (${source})! Click to select and resize.` });
-        }, { crossOrigin: 'anonymous' });
-      };
-      testImg.onerror = () => {
-        setImgLoading(false);
-        setImgStatus({ ok: false, msg: 'Image failed to load. Please try again.' });
-      };
-      testImg.src = url;
+          resolve();
+        }, { crossOrigin: url.startsWith('data:') ? undefined : 'anonymous' });
+      });
+      if (activeImageRequestRef.current !== requestId) return;
+
+      setImgResult(data);
+      setImgPreview(url);
+      setImgCanvasObjectId(objectId);
+      setImgStatus({ ok: true, msg: `AI image generated (${source}) and added to the canvas.` });
     } catch (e) {
-      setImgLoading(false);
+      if ((e as Error)?.name === 'AbortError' || activeImageRequestRef.current !== requestId) return;
+      setImgResult(null);
+      setImgPreview('');
+      setImgCanvasObjectId('');
       setImgStatus({ ok: false, msg: e instanceof Error ? e.message : 'AI image generation failed.' });
+    } finally {
+      if (activeImageRequestRef.current === requestId) {
+        setImgLoading(false);
+        imageAbortRef.current = null;
+      }
     }
   };
 
@@ -1261,24 +1476,38 @@ export const AIAssistant: React.FC = () => {
     }
   };
 
-  const insertThumbnailIntoCanvas = async (imageUrl: string, layerName: string) => {
+  const insertThumbnailIntoCanvas = async (
+    imageUrl: string,
+    layerName: string,
+    targetWidth: number,
+    targetHeight: number,
+    metadata: Record<string, unknown> = {},
+  ) => {
     const canvas = getCanvas();
     if (!canvas) {
       throw new Error('Canvas not ready. Open a design first.');
     }
-    await loadBrowserImage(imageUrl);
+    const loadedImage = await loadBrowserImage(imageUrl);
+    if (targetWidth <= 0 || targetHeight <= 0) {
+      throw new Error('Thumbnail dimensions are invalid.');
+    }
+    const objectId = `ai_thumbnail_${createAttachmentId()}`;
     await new Promise<void>((resolve, reject) => {
       fabric.Image.fromURL(imageUrl, (img) => {
         if (!img || !img.width || !img.height) {
           reject(new Error('Thumbnail image could not be loaded into canvas'));
           return;
         }
-        const W = canvas.getWidth();
-        const H = canvas.getHeight();
-        const scale = Math.min((W * 0.92) / img.width, (H * 0.92) / img.height);
+        canvas.getObjects().forEach((object) => {
+          if ((object as any).teckstudioAssetType === 'ai-thumbnail') {
+            canvas.remove(object);
+          }
+        });
+        canvas.setDimensions({ width: targetWidth, height: targetHeight });
+        const scale = Math.min(targetWidth / loadedImage.naturalWidth, targetHeight / loadedImage.naturalHeight);
         img.set({
-          left: W / 2,
-          top: H / 2,
+          left: targetWidth / 2,
+          top: targetHeight / 2,
           originX: 'center',
           originY: 'center',
           scaleX: scale,
@@ -1286,67 +1515,131 @@ export const AIAssistant: React.FC = () => {
           selectable: true,
           evented: true,
           name: layerName,
-        });
+          id: objectId,
+          teckstudioAssetType: 'ai-thumbnail',
+          teckstudioImageSource: imageUrl,
+          teckstudioGeneratedAssetId: String(metadata.generationId || metadata.assetId || ''),
+          teckstudioPrompt: String(metadata.prompt || ''),
+          teckstudioRequestId: String(metadata.requestId || ''),
+          teckstudioGenerationId: String(metadata.generationId || metadata.assetId || ''),
+          teckstudioProvider: String(metadata.provider || ''),
+          teckstudioGeneration: metadata,
+        } as any);
         canvas.add(img);
         canvas.setActiveObject(img);
+        useEditorStore.getState().setSelectedObject(img);
         canvas.renderAll();
         useEditorStore.getState().saveHistory();
         resolve();
       }, { crossOrigin: imageUrl.startsWith('data:') ? undefined : 'anonymous' });
     });
+    return objectId;
   };
 
   const handleGenerateThumbnail = async () => {
-    if (!thumbPrompt.trim() || thumbLoading) return;
+    const submittedPrompt = thumbPrompt.trim();
+    if (!submittedPrompt || thumbLoading) return;
+
+    const requestId = createAttachmentId();
+    const controller = new AbortController();
+    const previousController = thumbnailAbortRef.current;
+    activeThumbnailRequestRef.current = requestId;
+    thumbnailAbortRef.current = controller;
+    previousController?.abort();
+
+    const requestedWidth = Number(thumbWidth) || 1280;
+    const requestedHeight = Number(thumbHeight) || 720;
     setThumbLoading(true);
+    setThumbResult(null);
+    setThumbPreview('');
+    setThumbCanvasObjectId('');
     setThumbStatus({ ok: false, msg: 'Generating AI thumbnail...' });
 
     try {
       const formData = new FormData();
-      formData.append('prompt', thumbPrompt.trim());
+      formData.append('request_id', requestId);
+      formData.append('prompt', submittedPrompt);
       formData.append('title', thumbTitle.trim());
       formData.append('subtitle', thumbSubtitle.trim());
       formData.append('platform', thumbPlatform);
       formData.append('style', thumbStyle);
       formData.append('aspect_ratio', thumbAspect);
-      formData.append('width', String(thumbWidth));
-      formData.append('height', String(thumbHeight));
+      formData.append('width', String(requestedWidth));
+      formData.append('height', String(requestedHeight));
       formData.append('quality', 'high');
       formData.append('output_count', String(thumbVariations));
+      formData.append('enhance_prompt', 'true');
       const persistedProjectId = getPersistedProjectId();
       if (persistedProjectId) formData.append('project_id', persistedProjectId);
       if (thumbReference) formData.append('reference_images', thumbReference, thumbReference.name);
       if (thumbFace) formData.append('face_image', thumbFace, thumbFace.name);
       if (thumbLogo) formData.append('logo', thumbLogo, thumbLogo.name);
 
-      const response = await apiFetch('/api/ai/generate-thumbnail', {
+      const response = await apiFetch('/api/ai/thumbnails/generate', {
         method: 'POST',
         body: formData,
         timeoutMs: 140000,
+        signal: controller.signal,
       });
       const data = await response.json().catch(() => null);
+      if (activeThumbnailRequestRef.current !== requestId) return;
       if (!response.ok || !data?.success) {
-        throw new Error(data?.detail || data?.error || `Thumbnail request failed with status ${response.status}`);
+        throw new Error(formatAiApiError(data, `Thumbnail request failed with status ${response.status}`));
+      }
+      if (data.request_id && data.request_id !== requestId) return;
+
+      if (data.fallbackUsed || !data.productionQuality) {
+        throw new Error('No real AI image provider returned a production-quality thumbnail. Your canvas was not changed.');
       }
 
       const imageUrl = data.thumbnail_url || data.image_url || data.result?.imageData || data.result?.imageUrl;
       if (!imageUrl) throw new Error('Thumbnail image missing from backend response');
-      setThumbResult(data);
+      const resultWidth = Number(data.width || data.result?.width || data.design?.width || requestedWidth);
+      const resultHeight = Number(data.height || data.result?.height || data.design?.height || requestedHeight);
+      if (resultWidth !== requestedWidth || resultHeight !== requestedHeight) {
+        throw new Error(`Thumbnail dimensions mismatch. Expected ${requestedWidth}×${requestedHeight}, received ${resultWidth}×${resultHeight}.`);
+      }
+
       setThumbStatus({ ok: false, msg: 'Validating thumbnail image...' });
-      await loadBrowserImage(imageUrl);
-      setThumbPreview(imageUrl);
+      const loadedImage = await loadBrowserImage(imageUrl);
+      if (activeThumbnailRequestRef.current !== requestId) return;
+      if (loadedImage.naturalWidth !== requestedWidth || loadedImage.naturalHeight !== requestedHeight) {
+        throw new Error(`Browser loaded ${loadedImage.naturalWidth}×${loadedImage.naturalHeight}, expected ${requestedWidth}×${requestedHeight}.`);
+      }
+
       setThumbStatus({ ok: false, msg: 'Adding thumbnail to editor canvas...' });
-      await insertThumbnailIntoCanvas(imageUrl, thumbTitle || data.design?.title || 'AI generated thumbnail');
+      const objectId = await insertThumbnailIntoCanvas(
+        imageUrl,
+        thumbTitle || data.design?.title || 'AI generated thumbnail',
+        requestedWidth,
+        requestedHeight,
+        {
+          requestId,
+          generationId: data.generation_id || data.result?.generationId || data.asset_id,
+          assetId: data.asset_id || data.result?.assetId,
+          prompt: submittedPrompt,
+          provider: data.source || data.provider || 'unknown',
+        },
+      );
+      if (activeThumbnailRequestRef.current !== requestId) return;
+      setThumbResult(data);
+      setThumbPreview(imageUrl);
+      setThumbCanvasObjectId(objectId);
       setThumbStatus({
         ok: true,
-        msg: data.fallbackUsed
-          ? 'AI provider unavailable. Local fallback thumbnail added to the editor.'
-          : `Thumbnail generated with ${data.source || data.provider || 'AI provider'} and added to the editor.`,
+        msg: `Thumbnail generated with ${data.source || data.provider || 'AI provider'} and added to the editor.`,
       });
     } catch (error) {
+      if (activeThumbnailRequestRef.current !== requestId) return;
+      setThumbResult(null);
+      setThumbPreview('');
+      setThumbCanvasObjectId('');
       setThumbStatus({ ok: false, msg: error instanceof Error ? error.message : 'Thumbnail generation failed.' });
     } finally {
-      setThumbLoading(false);
+      if (activeThumbnailRequestRef.current === requestId) {
+        setThumbLoading(false);
+        thumbnailAbortRef.current = null;
+      }
     }
   };
 
@@ -1400,6 +1693,18 @@ export const AIAssistant: React.FC = () => {
     } catch (error) {
       setThumbStatus({ ok: false, msg: error instanceof Error ? error.message : 'Thumbnail download failed.' });
     }
+  };
+
+  const handleEditImage = () => {
+    const src = imgResult?.result?.imageData || imgResult?.result?.imageUrl || imgResult?.url || imgPreview;
+    selectGeneratedLayerForEditing(
+      'ai-image',
+      src,
+      imgCanvasObjectId,
+      imgResult?.asset_id || imgResult?.result?.assetId,
+      setImgStatus,
+      'Generated image layer selected. Image editing controls are open in Effects.',
+    );
   };
 
   const handleOpenImageInEditor = async () => {
@@ -1490,6 +1795,19 @@ export const AIAssistant: React.FC = () => {
   const handleRegeneratePoster = () => {
     debugPosterAction('regenerate-click', { hasPrompt: Boolean(posterPrompt.trim()) });
     void handleGeneratePoster();
+  };
+
+  const handleEditThumbnail = () => {
+    const result = thumbResult?.result || {};
+    const src = result.imageData || result.imageUrl || thumbResult?.thumbnail_url || thumbResult?.image_url || thumbPreview;
+    selectGeneratedLayerForEditing(
+      'ai-thumbnail',
+      src,
+      thumbCanvasObjectId,
+      thumbResult?.asset_id || thumbResult?.result?.assetId,
+      setThumbStatus,
+      'Generated thumbnail layer selected. Image editing controls are open in Effects.',
+    );
   };
 
   const handleOpenThumbnailInEditor = async () => {
@@ -1584,6 +1902,32 @@ export const AIAssistant: React.FC = () => {
       <Section title="AI Chat" icon={<Sparkles className="w-4 h-4" />} defaultOpen={true} accentFrom="from-violet-500/15">
         <p className="text-[10px] text-zinc-400">Ask for layout ideas, poster concepts, image prompts, or design feedback.</p>
 
+        {chatStatus && (
+          <div className={`flex items-start gap-2 rounded-xl border px-3 py-2 text-[11px] leading-relaxed ${
+            chatStatus.ok
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+              : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+          }`}>
+            {chatStatus.ok ? <CheckCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+            <span className="min-w-0 flex-1">
+              {chatStatus.msg}
+              {chatStatus.requestId && (
+                <span className={`mt-1 block text-[9px] ${chatStatus.ok ? 'text-emerald-100/70' : 'text-rose-100/70'}`}>Request ID: {chatStatus.requestId}</span>
+              )}
+              {!chatStatus.ok && lastChatPrompt && (
+                <button
+                  type="button"
+                  onClick={() => handleChat(lastChatPrompt)}
+                  disabled={chatLoading}
+                  className="mt-2 rounded-lg border border-rose-300/30 bg-black/20 px-2 py-1 text-[9px] font-semibold text-rose-100 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Retry
+                </button>
+              )}
+            </span>
+          </div>
+        )}
+
         {chatHistory.length > 0 && (
           <div className="flex flex-col gap-2 max-h-[220px] overflow-y-auto">
             {chatHistory.map((msg, index) => (
@@ -1622,7 +1966,7 @@ export const AIAssistant: React.FC = () => {
             className={`${inputCls} flex-1`}
           />
           <button
-            onClick={handleChat}
+            onClick={() => handleChat()}
             disabled={!chatMessage.trim() || chatLoading}
             className="rounded-xl border border-violet-400/20 bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 py-2 text-[10px] font-semibold text-white shadow-lg shadow-violet-500/10 transition-all hover:from-violet-500 hover:to-fuchsia-500 disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -1785,6 +2129,7 @@ export const AIAssistant: React.FC = () => {
           )}
         </div>
 
+        {classifyPosterGenerationMode(posterPrompt) !== 'single_image_poster' && <>
         <div className="grid grid-cols-2 gap-2">
           <label className="space-y-1">
             <span className="text-[9px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Theme</span>
@@ -1815,6 +2160,13 @@ export const AIAssistant: React.FC = () => {
         <button onClick={handleGenerateEditablePoster} disabled={posterSpecLoading || !posterPrompt.trim()} className={btnPrimary}>
           {posterSpecLoading ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Creating Editable Poster...</> : <><Wand2 className="w-3.5 h-3.5" /> Generate Editable Poster</>}
         </button>
+        </>}
+
+        {posterPrompt.trim() && classifyPosterGenerationMode(posterPrompt) === 'single_image_poster' && (
+          <p className="rounded-lg border border-violet-400/20 bg-violet-500/5 px-3 py-2 text-[10px] text-violet-200">
+            Single visual poster detected. It will be generated as one validated AI image layer.
+          </p>
+        )}
 
         <button
           type="button"
@@ -1830,7 +2182,9 @@ export const AIAssistant: React.FC = () => {
             posterStatus.ok ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400' : 'border-red-500/20 bg-red-500/10 text-red-400'
           }`}>
             {posterStatus.ok ? <CheckCircle className="mt-0.5 w-3.5 h-3.5 shrink-0" /> : <AlertCircle className="mt-0.5 w-3.5 h-3.5 shrink-0" />}
-            <span>{posterStatus.msg}</span>
+            <span className="min-w-0 flex-1">
+              {posterStatus.msg}
+            </span>
           </div>
         )}
 
@@ -1927,6 +2281,9 @@ export const AIAssistant: React.FC = () => {
               onRegenerate={handleRegeneratePoster}
               onEdit={handleEditPoster}
               onOpenInEditor={handleOpenPosterInEditor}
+              downloadDisabled={posterLoading || !posterResult}
+              editDisabled={posterLoading || !posterResult}
+              openDisabled={posterLoading || !posterResult}
               regenerateDisabled={posterLoading || !posterPrompt.trim()}
             />
           </div>
@@ -2086,8 +2443,11 @@ export const AIAssistant: React.FC = () => {
               prompt={thumbPrompt}
               onDownload={handleDownloadThumbnail}
               onRegenerate={handleGenerateThumbnail}
-              onEdit={handleOpenThumbnailInEditor}
+              onEdit={handleEditThumbnail}
               onOpenInEditor={handleOpenThumbnailInEditor}
+              downloadDisabled={thumbLoading || !thumbResult}
+              editDisabled={thumbLoading || !thumbResult}
+              openDisabled={thumbLoading || !thumbResult}
               regenerateDisabled={thumbLoading || !thumbPrompt.trim()}
             />
           </div>
@@ -2130,8 +2490,11 @@ export const AIAssistant: React.FC = () => {
               prompt={imgPrompt}
               onDownload={handleDownloadImage}
               onRegenerate={handleGenerateImage}
-              onEdit={handleOpenImageInEditor}
+              onEdit={handleEditImage}
               onOpenInEditor={handleOpenImageInEditor}
+              downloadDisabled={imgLoading || !imgResult}
+              editDisabled={imgLoading || !imgResult}
+              openDisabled={imgLoading || !imgResult}
               regenerateDisabled={imgLoading || !imgPrompt.trim()}
             />
           </div>

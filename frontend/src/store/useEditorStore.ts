@@ -1,6 +1,24 @@
 import { create } from 'zustand';
 import { fabric } from 'fabric';
 import { apiFetch, getAuthToken } from '../services/apiClient';
+import { CUSTOM_FABRIC_PROPERTIES } from '../utils/editorElementFactory';
+import type { TextSelectionRange } from '../utils/textSelectionStyles';
+import { preloadFontsFromCanvasJson } from '../utils/fontLoader';
+import {
+  applyTextEffect,
+  isTextEffectSource,
+  rehydrateTextEffects,
+  removeGeneratedTextEffectLayers,
+} from '../utils/textEffects';
+import type { TextEffectConfig } from '../types/editorFeatures';
+import {
+  applyTextStylesToSelectionOrObject,
+  captureTextSelection,
+  clampFontSize,
+  getFabricObjectId,
+  isEditableTextObject,
+  readSelectionStyleValue,
+} from '../utils/textSelectionStyles';
 
 
 function getCanvasDimensionsFromProjectData(projectData?: string | null) {
@@ -37,7 +55,191 @@ function getCanvasDimensionsFromProjectData(projectData?: string | null) {
   return null;
 }
 
+type ProjectCanvasPayload = {
+  data?: string | null;
+  width?: number | null;
+  height?: number | null;
+  background_color?: string | null;
+};
 
+const positiveDimension = (value: unknown, fallback: number) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : fallback;
+};
+
+const DEFAULT_VIEWPORT_TRANSFORM: [number, number, number, number, number, number] = [1, 0, 0, 1, 0, 0];
+
+const createEmptyCanvasJson = (width: number, height: number, background = '#ffffff') => JSON.stringify({
+  version: '5.3.0',
+  width,
+  height,
+  viewportTransform: DEFAULT_VIEWPORT_TRANSFORM,
+  objects: [],
+  background,
+});
+
+const normalizeViewportTransform = (value: unknown): [number, number, number, number, number, number] => {
+  if (!Array.isArray(value) || value.length < 6) return [...DEFAULT_VIEWPORT_TRANSFORM];
+  const parsed = value.slice(0, 6).map((item) => Number(item));
+  return parsed.every((item) => Number.isFinite(item))
+    ? parsed as [number, number, number, number, number, number]
+    : [...DEFAULT_VIEWPORT_TRANSFORM];
+};
+
+const ensureCanvasViewport = (canvas: fabric.Canvas) => {
+  const viewportTransform = normalizeViewportTransform(canvas.viewportTransform);
+  canvas.setViewportTransform(viewportTransform);
+};
+
+const isTextType = (type?: string | null) => ['text', 'i-text', 'textbox'].includes(type || '');
+
+const normalizeTextStylesValue = (value: unknown) => (
+  value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+);
+
+function normalizeSerializedTextStyles(parsed: { objects?: unknown[] }) {
+  parsed.objects?.forEach((object) => {
+    if (!object || typeof object !== 'object') return;
+    const fabricObject = object as { type?: string; styles?: unknown };
+    if (isTextType(fabricObject.type)) {
+      fabricObject.styles = normalizeTextStylesValue(fabricObject.styles);
+    }
+  });
+}
+
+function normalizeLoadedTextStyles(canvas: fabric.Canvas) {
+  canvas.getObjects().forEach((object) => {
+    if (!isTextType(object.type)) return;
+    const textObject = object as fabric.Object & { styles?: unknown };
+    textObject.styles = normalizeTextStylesValue(textObject.styles);
+  });
+}
+
+function normalizeProjectCanvasJson(project: ProjectCanvasPayload) {
+  const fallbackWidth = positiveDimension(project.width, 800);
+  const fallbackHeight = positiveDimension(project.height, 800);
+  const fallbackBackground = project.background_color || '#ffffff';
+
+  if (!project.data) {
+    return {
+      json: createEmptyCanvasJson(fallbackWidth, fallbackHeight, fallbackBackground),
+      width: fallbackWidth,
+      height: fallbackHeight,
+    };
+  }
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(project.data);
+  } catch {
+    throw new Error('Project canvas data is invalid JSON. The design cannot be loaded.');
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Project canvas data is not a valid Fabric.js canvas object.');
+  }
+
+  if (parsed.objects === undefined) {
+    parsed.objects = [];
+  }
+  if (!Array.isArray(parsed.objects)) {
+    throw new Error('Project canvas objects are invalid. The design cannot be loaded.');
+  }
+
+  const dataDimensions = getCanvasDimensionsFromProjectData(project.data);
+  const width = positiveDimension(parsed.width, dataDimensions?.width || fallbackWidth);
+  const height = positiveDimension(parsed.height, dataDimensions?.height || fallbackHeight);
+  parsed.version = parsed.version || '5.3.0';
+  parsed.width = width;
+  parsed.height = height;
+  parsed.viewportTransform = normalizeViewportTransform(parsed.viewportTransform);
+  parsed.background = parsed.background || parsed.backgroundColor || fallbackBackground;
+  normalizeSerializedTextStyles(parsed);
+
+  return { json: JSON.stringify(parsed), width, height };
+}
+
+const fallbackObjectName = (object: fabric.Object, index: number) => {
+  const type = object.type || 'layer';
+  return `${type.charAt(0).toUpperCase()}${type.slice(1)} ${index + 1}`;
+};
+
+function prepareCanvasObjects(canvas: fabric.Canvas) {
+  normalizeLoadedTextStyles(canvas);
+  canvas.getObjects().forEach((object, index) => {
+    if (!object.get('id' as keyof fabric.Object)) {
+      object.set({ id: window.crypto?.randomUUID ? window.crypto.randomUUID() : `obj_${Date.now()}_${Math.random().toString(36).slice(2)}` } as Record<string, unknown>);
+    }
+    if (!object.get('name' as keyof fabric.Object)) {
+      object.set({ name: fallbackObjectName(object, index) } as Record<string, unknown>);
+    }
+    if (object.selectable === undefined) object.set('selectable', true);
+    if (object.evented === undefined) object.set('evented', true);
+    object.setCoords();
+  });
+}
+
+function loadCanvasFromJson(canvas: fabric.Canvas, json: string) {
+  return preloadFontsFromCanvasJson(json).then(() => new Promise<string>((resolve, reject) => {
+    try {
+      canvas.loadFromJSON(json, () => {
+        void (async () => {
+          ensureCanvasViewport(canvas);
+          prepareCanvasObjects(canvas);
+          await rehydrateTextEffects(canvas);
+          canvas.discardActiveObject();
+          canvas.renderAll();
+          resolve(JSON.stringify(canvas.toJSON(CUSTOM_FABRIC_PROPERTIES)));
+        })().catch(reject);
+      });
+    } catch (error) {
+      reject(error);
+    }
+  }));
+}
+
+async function applyProjectCanvas(canvas: fabric.Canvas, project: ProjectCanvasPayload) {
+  const normalized = normalizeProjectCanvasJson(project);
+  console.log('[TECKSTUDIO] applyProjectCanvas:', { width: normalized.width, height: normalized.height, hasData: !!normalized.json });
+
+  // Set canvas dimensions without touching viewport
+  canvas.setDimensions({ width: normalized.width, height: normalized.height });
+
+  console.log('[TECKSTUDIO] Canvas dimensions set:', { width: canvas.getWidth(), height: canvas.getHeight(), bgColor: canvas.backgroundColor });
+
+  // Parse JSON but remove viewportTransform so it doesn't override fit-to-view
+  let parsedJson: any;
+  try {
+    parsedJson = JSON.parse(normalized.json);
+  } catch {
+    parsedJson = {};
+  }
+  // Reset viewport transform to identity before loading
+  parsedJson.viewportTransform = [1, 0, 0, 1, 0, 0];
+  const cleanJson = JSON.stringify(parsedJson);
+
+  const loadedJson = await loadCanvasFromJson(canvas, cleanJson);
+  console.log('[TECKSTUDIO] Canvas loaded:', { objects: canvas.getObjects().length, bgColor: canvas.backgroundColor });
+
+  return { json: loadedJson, width: normalized.width, height: normalized.height };
+}
+
+function clearCanvasToProjectSize(canvas: fabric.Canvas, project: ProjectCanvasPayload = {}) {
+  const width = positiveDimension(project.width, 800);
+  const height = positiveDimension(project.height, 800);
+  const background = project.background_color || '#ffffff';
+  ensureCanvasViewport(canvas);
+  canvas.clear();
+  ensureCanvasViewport(canvas);
+  canvas.setDimensions({ width, height });
+  ensureCanvasViewport(canvas);
+  canvas.setBackgroundColor(background, () => {
+    ensureCanvasViewport(canvas);
+    canvas.renderAll();
+  });
+  // Sync store dimensions
+  useEditorStore.getState().setCanvasDimensions(width, height);
+}
 
 
 interface EditorState {
@@ -52,17 +254,29 @@ interface EditorState {
   fontWeight: string; // 'normal' | 'bold'
   fontStyle: string; // 'normal' | 'italic'
   underline: boolean;
-  textAlign: string; // 'left' | 'center' | 'right'
+  textAlign: string; // 'left' | 'center' | 'right' | 'justify'
+  textSelectionRange: TextSelectionRange | null;
   opacity: number;
   projectId: string | null;
   projectName: string;
   projectCreatedAt: string;
   projectUpdatedAt: string;
+  isProjectLoading: boolean;
+  projectLoadError: string;
   editorMode: 'design' | 'dev';
   isPenMode: boolean;
   rulersEnabled: boolean;
   showGuides: boolean;
-  
+
+  // Canvas dimensions (source of truth, synced with fabric.js)
+  canvasWidth: number;
+  canvasHeight: number;
+  canvasBackgroundColor: string;
+  currentPresetId: string | null;
+
+  // Page selection state — true when no element is selected (page is "active")
+  selectedPage: boolean;
+
   // History state
   history: string[];
   historyIndex: number;
@@ -75,21 +289,34 @@ interface EditorState {
   setStrokeWidth: (width: number) => void;
   setFontFamily: (family: string) => void;
   setFontSize: (size: number) => void;
+  applyFontSize: (size: number) => void;
+  increaseFontSize: () => void;
+  decreaseFontSize: () => void;
   setFontWeight: (weight: string) => void;
   setFontStyle: (style: string) => void;
   setUnderline: (underline: boolean) => void;
   setTextAlign: (align: string) => void;
+  captureTextSelection: () => void;
+  applyTextSelectionStyles: (styles: Record<string, unknown>) => boolean;
   setOpacity: (opacity: number) => void;
   setProjectId: (projectId: string) => void;
   setProjectName: (name: string) => void;
   saveProjectMeta: () => void;
   loadProject: (projectId: string) => void;
+  clearProjectLoadError: () => void;
   setEditorMode: (mode: 'design' | 'dev') => void;
   setPenMode: (active: boolean) => void;
   setRulersEnabled: (enabled: boolean) => void;
   setShowGuides: (show: boolean) => void;
   updateObjectName: (objId: string, name: string) => void;
-  
+
+  // Canvas dimensions
+  setCanvasDimensions: (width: number, height: number) => void;
+  setCanvasBackgroundColor: (color: string) => void;
+  setCurrentPreset: (presetId: string | null) => void;
+  resizeCanvas: (width: number, height: number) => void;
+  setSelectedPage: (selected: boolean) => void;
+
   // Operations
   saveHistory: () => void;
   undo: () => void;
@@ -115,16 +342,26 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   fontStyle: 'normal',
   underline: false,
   textAlign: 'left',
+  textSelectionRange: null,
   opacity: 1,
   projectId: null,
   projectName: '',
   projectCreatedAt: '',
   projectUpdatedAt: '',
+  isProjectLoading: false,
+  projectLoadError: '',
   editorMode: 'design',
   isPenMode: false,
   rulersEnabled: true,
   showGuides: true,
-  
+
+  // Canvas dimensions defaults
+  canvasWidth: 800,
+  canvasHeight: 800,
+  canvasBackgroundColor: '#ffffff',
+  currentPresetId: null,
+  selectedPage: true, // Page is selected by default when editor opens
+
   history: [],
   historyIndex: -1,
   
@@ -154,24 +391,41 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   
   setSelectedObject: (selectedObject) => {
     if (!selectedObject) {
-      set({ selectedObject: null });
+      // When no element is selected, the page becomes active
+      set({ selectedObject: null, textSelectionRange: null, selectedPage: true });
       return;
     }
-    
-    // Sync object properties to store state
-    set({
+
+    const capturedRange = captureTextSelection(selectedObject);
+    const selectedFill = readSelectionStyleValue(selectedObject, 'fill', selectedObject.get('fill') || '#8b5cf6', capturedRange);
+    const selectedStroke = readSelectionStyleValue(selectedObject, 'stroke', selectedObject.get('stroke') || '#000000', capturedRange);
+    const selectedFontFamily = readSelectionStyleValue(selectedObject, 'fontFamily', (selectedObject as any).get('fontFamily') || 'Outfit', capturedRange);
+    const selectedFontSize = readSelectionStyleValue(selectedObject, 'fontSize', (selectedObject as any).get('fontSize') || 40, capturedRange);
+    const selectedFontWeight = readSelectionStyleValue(selectedObject, 'fontWeight', (selectedObject as any).get('fontWeight') || 'normal', capturedRange);
+    const selectedFontStyle = readSelectionStyleValue(selectedObject, 'fontStyle', (selectedObject as any).get('fontStyle') || 'normal', capturedRange);
+    const selectedUnderline = readSelectionStyleValue(selectedObject, 'underline', (selectedObject as any).get('underline') || false, capturedRange);
+
+    const selectedObjectId = getFabricObjectId(selectedObject);
+
+    // Sync object properties to store state. Mixed partial selections keep the current UI value.
+    set((state) => {
+      const retainedRange = state.textSelectionRange?.objectId === selectedObjectId ? state.textSelectionRange : null;
+      return {
       selectedObject,
-      fillColor: (selectedObject.get('fill') as string) || '#8b5cf6',
-      strokeColor: (selectedObject.get('stroke') as string) || '#000000',
+      selectedPage: false, // Element is selected, page is not
+      textSelectionRange: capturedRange || retainedRange,
+      fillColor: typeof selectedFill === 'string' && selectedFill !== 'Mixed' ? selectedFill : state.fillColor,
+      strokeColor: typeof selectedStroke === 'string' && selectedStroke !== 'Mixed' ? selectedStroke : state.strokeColor,
       strokeWidth: selectedObject.get('strokeWidth') || 0,
       opacity: selectedObject.get('opacity') || 1,
       // Text properties (if it's a text object)
-      fontFamily: (selectedObject as any).get('fontFamily') || 'Outfit',
-      fontSize: (selectedObject as any).get('fontSize') || 40,
-      fontWeight: (selectedObject as any).get('fontWeight') || 'normal',
-      fontStyle: (selectedObject as any).get('fontStyle') || 'normal',
-      underline: (selectedObject as any).get('underline') || false,
+      fontFamily: typeof selectedFontFamily === 'string' && selectedFontFamily !== 'Mixed' ? selectedFontFamily : state.fontFamily,
+      fontSize: typeof selectedFontSize === 'number' ? selectedFontSize : state.fontSize,
+      fontWeight: selectedFontWeight !== 'Mixed' ? String(selectedFontWeight || 'normal') : state.fontWeight,
+      fontStyle: selectedFontStyle !== 'Mixed' ? String(selectedFontStyle || 'normal') : state.fontStyle,
+      underline: typeof selectedUnderline === 'boolean' ? selectedUnderline : state.underline,
       textAlign: (selectedObject as any).get('textAlign') || 'left',
+    };
     });
   },
   
@@ -181,99 +435,164 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // Limit zoom between 10% and 500%
       const boundedZoom = Math.min(Math.max(zoom, 0.1), 5.0);
       set({ zoom: boundedZoom });
-      
-      const center = canvas.getVpCenter();
-      canvas.zoomToPoint({ x: center.x, y: center.y } as fabric.Point, boundedZoom);
+
+      // Get current viewport transform and update just the scale
+      const vpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+      const oldZoom = vpt[0] || 1;
+      const ratio = boundedZoom / oldZoom;
+
+      // Scale the translate values proportionally
+      const newTranslateX = vpt[4] * ratio;
+      const newTranslateY = vpt[5] * ratio;
+
+      canvas.setViewportTransform([boundedZoom, 0, 0, boundedZoom, newTranslateX, newTranslateY]);
       canvas.renderAll();
     }
   },
   
+  captureTextSelection: () => {
+    const { selectedObject } = get();
+    const range = captureTextSelection(selectedObject);
+    if (range) set({ textSelectionRange: range });
+  },
+
+  applyTextSelectionStyles: (styles) => {
+    const { canvas, selectedObject, textSelectionRange } = get();
+    const result = applyTextStylesToSelectionOrObject(canvas, selectedObject, styles, textSelectionRange);
+    if (!result.applied) return false;
+    if (result.textObject) {
+      set({ selectedObject: result.textObject, textSelectionRange: captureTextSelection(result.textObject) || textSelectionRange });
+    }
+    get().saveHistory();
+    return true;
+  },
+
   setFillColor: (color) => {
     set({ fillColor: color });
-    const { canvas, selectedObject } = get();
+    const { canvas, selectedObject, textSelectionRange } = get();
     if (canvas && selectedObject) {
-      selectedObject.set('fill', color);
-      canvas.renderAll();
+      if (isEditableTextObject(selectedObject)) {
+        const result = applyTextStylesToSelectionOrObject(canvas, selectedObject, { fill: color }, textSelectionRange);
+        if (result.textObject) set({ selectedObject: result.textObject, textSelectionRange: captureTextSelection(result.textObject) || textSelectionRange });
+      } else {
+        selectedObject.set('fill', color);
+        selectedObject.setCoords();
+        canvas.requestRenderAll();
+      }
       get().saveHistory();
     }
   },
   
   setStrokeColor: (color) => {
     set({ strokeColor: color });
-    const { canvas, selectedObject } = get();
+    const { canvas, selectedObject, textSelectionRange } = get();
     if (canvas && selectedObject) {
-      selectedObject.set('stroke', color);
-      canvas.renderAll();
+      if (isEditableTextObject(selectedObject)) {
+        const result = applyTextStylesToSelectionOrObject(canvas, selectedObject, { stroke: color }, textSelectionRange);
+        if (result.textObject) set({ selectedObject: result.textObject, textSelectionRange: captureTextSelection(result.textObject) || textSelectionRange });
+      } else {
+        selectedObject.set('stroke', color);
+        selectedObject.setCoords();
+        canvas.requestRenderAll();
+      }
       get().saveHistory();
     }
   },
   
   setStrokeWidth: (width) => {
     set({ strokeWidth: width });
-    const { canvas, selectedObject } = get();
+    const { canvas, selectedObject, textSelectionRange } = get();
     if (canvas && selectedObject) {
-      selectedObject.set('strokeWidth', width);
-      canvas.renderAll();
+      if (isEditableTextObject(selectedObject)) {
+        const result = applyTextStylesToSelectionOrObject(canvas, selectedObject, { strokeWidth: width }, textSelectionRange);
+        if (result.textObject) set({ selectedObject: result.textObject, textSelectionRange: captureTextSelection(result.textObject) || textSelectionRange });
+      } else {
+        selectedObject.set('strokeWidth', width);
+        selectedObject.setCoords();
+        canvas.requestRenderAll();
+      }
       get().saveHistory();
     }
   },
   
   setFontFamily: (family) => {
     set({ fontFamily: family });
-    const { canvas, selectedObject } = get();
-    if (canvas && selectedObject && (selectedObject.type === 'text' || selectedObject.type === 'i-text' || selectedObject.type === 'textbox')) {
-      (selectedObject as any).set('fontFamily', family);
-      canvas.renderAll();
-      get().saveHistory();
-    }
+    const { canvas, selectedObject, textSelectionRange } = get();
+    const result = applyTextStylesToSelectionOrObject(canvas, selectedObject, { fontFamily: family }, textSelectionRange);
+    if (result.textObject) set({ selectedObject: result.textObject, textSelectionRange: captureTextSelection(result.textObject) || textSelectionRange });
+    if (result.applied) get().saveHistory();
   },
   
-  setFontSize: (size) => {
-    set({ fontSize: size });
-    const { canvas, selectedObject } = get();
-    if (canvas && selectedObject && (selectedObject.type === 'text' || selectedObject.type === 'i-text' || selectedObject.type === 'textbox')) {
-      (selectedObject as any).set('fontSize', size);
-      canvas.renderAll();
-      get().saveHistory();
-    }
+  setFontSize: (size) => get().applyFontSize(size),
+
+  applyFontSize: (size) => {
+    const nextSize = clampFontSize(size);
+    const { canvas, selectedObject, textSelectionRange } = get();
+    const objectCanvas = isEditableTextObject(selectedObject) ? (selectedObject.canvas as fabric.Canvas | undefined) : undefined;
+    const activeCanvas = canvas || objectCanvas || null;
+    const activeObject = activeCanvas?.getActiveObject();
+    const targetObject = isEditableTextObject(activeObject) ? activeObject : selectedObject;
+
+    if (!activeCanvas || !isEditableTextObject(targetObject)) return;
+
+    set({ fontSize: nextSize });
+    const result = applyTextStylesToSelectionOrObject(activeCanvas, targetObject, { fontSize: nextSize }, textSelectionRange);
+    if (result.textObject) set({ selectedObject: result.textObject, textSelectionRange: captureTextSelection(result.textObject) || textSelectionRange });
+    if (result.applied) get().saveHistory();
+  },
+
+  increaseFontSize: () => {
+    const { canvas, selectedObject, fontSize, textSelectionRange } = get();
+    const activeObject = canvas?.getActiveObject();
+    const targetObject = isEditableTextObject(activeObject) ? activeObject : selectedObject;
+    const currentSize = isEditableTextObject(targetObject)
+      ? readSelectionStyleValue<number>(targetObject, 'fontSize', fontSize, textSelectionRange)
+      : fontSize;
+    get().applyFontSize((typeof currentSize === 'number' ? currentSize : fontSize) + 1);
+  },
+
+  decreaseFontSize: () => {
+    const { canvas, selectedObject, fontSize, textSelectionRange } = get();
+    const activeObject = canvas?.getActiveObject();
+    const targetObject = isEditableTextObject(activeObject) ? activeObject : selectedObject;
+    const currentSize = isEditableTextObject(targetObject)
+      ? readSelectionStyleValue<number>(targetObject, 'fontSize', fontSize, textSelectionRange)
+      : fontSize;
+    get().applyFontSize((typeof currentSize === 'number' ? currentSize : fontSize) - 1);
   },
   
   setFontWeight: (weight) => {
     set({ fontWeight: weight });
-    const { canvas, selectedObject } = get();
-    if (canvas && selectedObject && (selectedObject.type === 'text' || selectedObject.type === 'i-text' || selectedObject.type === 'textbox')) {
-      (selectedObject as any).set('fontWeight', weight);
-      canvas.renderAll();
-      get().saveHistory();
-    }
+    const { canvas, selectedObject, textSelectionRange } = get();
+    const result = applyTextStylesToSelectionOrObject(canvas, selectedObject, { fontWeight: weight }, textSelectionRange);
+    if (result.textObject) set({ selectedObject: result.textObject, textSelectionRange: captureTextSelection(result.textObject) || textSelectionRange });
+    if (result.applied) get().saveHistory();
   },
   
   setFontStyle: (style) => {
     set({ fontStyle: style });
-    const { canvas, selectedObject } = get();
-    if (canvas && selectedObject && (selectedObject.type === 'text' || selectedObject.type === 'i-text' || selectedObject.type === 'textbox')) {
-      (selectedObject as any).set('fontStyle', style);
-      canvas.renderAll();
-      get().saveHistory();
-    }
+    const { canvas, selectedObject, textSelectionRange } = get();
+    const result = applyTextStylesToSelectionOrObject(canvas, selectedObject, { fontStyle: style }, textSelectionRange);
+    if (result.textObject) set({ selectedObject: result.textObject, textSelectionRange: captureTextSelection(result.textObject) || textSelectionRange });
+    if (result.applied) get().saveHistory();
   },
   
   setUnderline: (underline) => {
     set({ underline });
-    const { canvas, selectedObject } = get();
-    if (canvas && selectedObject && (selectedObject.type === 'text' || selectedObject.type === 'i-text' || selectedObject.type === 'textbox')) {
-      (selectedObject as any).set('underline', underline);
-      canvas.renderAll();
-      get().saveHistory();
-    }
+    const { canvas, selectedObject, textSelectionRange } = get();
+    const result = applyTextStylesToSelectionOrObject(canvas, selectedObject, { underline }, textSelectionRange);
+    if (result.textObject) set({ selectedObject: result.textObject, textSelectionRange: captureTextSelection(result.textObject) || textSelectionRange });
+    if (result.applied) get().saveHistory();
   },
   
   setTextAlign: (align) => {
     set({ textAlign: align });
     const { canvas, selectedObject } = get();
-    if (canvas && selectedObject && (selectedObject.type === 'text' || selectedObject.type === 'i-text' || selectedObject.type === 'textbox')) {
-      (selectedObject as any).set('textAlign', align);
-      canvas.renderAll();
+    if (canvas && isEditableTextObject(selectedObject)) {
+      selectedObject.set('textAlign', align);
+      selectedObject.initDimensions?.();
+      selectedObject.setCoords();
+      canvas.requestRenderAll();
       get().saveHistory();
     }
   },
@@ -354,100 +673,82 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   loadProject: async (projectId) => {
     console.log('[TECKSTUDIO] loadProject called:', projectId);
+    set({ projectId, isProjectLoading: true, projectLoadError: '' });
 
-    // Always set project metadata first
-    set({ projectId });
+    const failLoad = (message: string, project?: ProjectCanvasPayload) => {
+      const canvas = get().canvas;
+      if (canvas) clearCanvasToProjectSize(canvas, project);
+      set({ isProjectLoading: false, projectLoadError: message, selectedObject: null, history: [], historyIndex: -1 });
+    };
 
-    // Handle localStorage projects
+    const finishLoad = async (project: ProjectCanvasPayload & { name?: string; createdAt?: string; updatedAt?: string }) => {
+      const canvas = get().canvas;
+      set({
+        projectName: project.name || 'Untitled Design',
+        projectCreatedAt: project.createdAt || '',
+        projectUpdatedAt: project.updatedAt || '',
+      });
+
+      if (!canvas) {
+        set({ isProjectLoading: false });
+        return;
+      }
+
+      const loadedJson = await applyProjectCanvas(canvas, project);
+      set({
+        history: [loadedJson.json],
+        historyIndex: 0,
+        selectedObject: null,
+        isProjectLoading: false,
+        projectLoadError: '',
+        canvasWidth: loadedJson.width,
+        canvasHeight: loadedJson.height,
+      });
+    };
+
     if (projectId.startsWith('local_')) {
-      const raw = localStorage.getItem('teckstudio_local_projects');
-      const projects = raw ? JSON.parse(raw) : [];
-      const project = projects.find((p: any) => p.id === projectId);
-      console.log('[TECKSTUDIO] localStorage project found:', project ? 'yes' : 'no');
-      if (project) {
-        set({
-          projectName: project.name,
-          projectCreatedAt: project.createdAt,
-          projectUpdatedAt: project.updatedAt,
-        });
-        const canvas = get().canvas;
-        if (canvas && project.data) {
-          const dataDimensions = getCanvasDimensionsFromProjectData(project.data);
-          const width = dataDimensions?.width || project.width;
-          const height = dataDimensions?.height || project.height;
-          if (width && height) {
-            canvas.setDimensions({ width, height });
-          }
-          canvas.loadFromJSON(project.data, () => {
-            canvas.renderAll();
-            set({ history: [project.data], historyIndex: 0 });
-          });
-        } else if (canvas) {
-          canvas.setBackgroundColor('#ffffff', () => canvas.renderAll());
+      try {
+        const raw = localStorage.getItem('teckstudio_local_projects');
+        const projects = raw ? JSON.parse(raw) : [];
+        const project = projects.find((p: any) => p.id === projectId);
+        console.log('[TECKSTUDIO] localStorage project found:', project ? 'yes' : 'no');
+        if (!project) {
+          failLoad('This local project could not be found. It may have been removed from this browser.');
+          return;
         }
+        await finishLoad(project);
+      } catch (error) {
+        failLoad(error instanceof Error ? error.message : 'Unable to load the local project canvas.');
       }
       return;
     }
 
-    // Try backend
     const token = getAuthToken();
     if (!token) {
-      // No valid token - just show empty canvas
-      const canvas = get().canvas;
-      if (canvas) {
-        canvas.setBackgroundColor('#ffffff', () => canvas.renderAll());
-      }
+      failLoad('Please sign in again to load this design.');
       return;
     }
 
     try {
       const response = await apiFetch(`/api/projects/${projectId}`);
+      const data = await response.json().catch(() => null);
 
       if (!response.ok) {
-        // Token expired or project not found - show empty canvas
-        const canvas = get().canvas;
-        if (canvas) {
-          canvas.setBackgroundColor('#ffffff', () => canvas.renderAll());
-        }
+        failLoad(data?.detail || data?.error || `Unable to load this project (${response.status}).`);
         return;
       }
 
-      const data = await response.json();
-      const project = data.project || data;
+      const project = data?.project || data;
       if (!project?.id) {
-        throw new Error('Backend returned an invalid project payload');
+        throw new Error('Backend returned an invalid project payload.');
       }
-      set({
-        projectName: project.name,
-        projectCreatedAt: project.createdAt,
-        projectUpdatedAt: project.updatedAt,
-      });
-
-      const canvas = get().canvas;
-      if (!canvas) return;
-
-      if (project.data) {
-        const dataDimensions = getCanvasDimensionsFromProjectData(project.data);
-        const width = dataDimensions?.width || project.width;
-        const height = dataDimensions?.height || project.height;
-        if (width && height) {
-          canvas.setDimensions({ width, height });
-        }
-        canvas.loadFromJSON(project.data, () => {
-          canvas.renderAll();
-          set({ history: [project.data], historyIndex: 0 });
-        });
-      } else {
-        canvas.setBackgroundColor('#ffffff', () => canvas.renderAll());
-      }
-    } catch {
-      // Backend not available - show empty canvas
-      const canvas = get().canvas;
-      if (canvas) {
-        canvas.setBackgroundColor('#ffffff', () => canvas.renderAll());
-      }
+      await finishLoad(project);
+    } catch (error) {
+      failLoad(error instanceof Error ? error.message : 'Unable to load the project canvas.');
     }
   },
+
+  clearProjectLoadError: () => set({ projectLoadError: '' }),
   
   setEditorMode: (editorMode) => {
     set({ editorMode });
@@ -473,6 +774,60 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setRulersEnabled: (rulersEnabled) => set({ rulersEnabled }),
   setShowGuides: (showGuides) => set({ showGuides }),
 
+  setSelectedPage: (selected) => {
+    set({ selectedPage: selected });
+    // When selecting the page, deselect any element
+    if (selected) {
+      const { canvas } = get();
+      if (canvas) {
+        canvas.discardActiveObject();
+        canvas.requestRenderAll();
+      }
+      set({ selectedObject: null, textSelectionRange: null });
+    }
+  },
+
+  setCanvasDimensions: (width, height) => {
+    set({ canvasWidth: width, canvasHeight: height });
+  },
+
+  setCanvasBackgroundColor: (color) => {
+    const { canvas } = get();
+    set({ canvasBackgroundColor: color });
+    if (canvas) {
+      canvas.setBackgroundColor(color, () => canvas.renderAll());
+      get().saveHistory();
+    }
+  },
+
+  setCurrentPreset: (presetId) => set({ currentPresetId: presetId }),
+
+  resizeCanvas: (width, height) => {
+    const { canvas } = get();
+    if (!canvas) return;
+    const oldW = canvas.getWidth() || 800;
+    const oldH = canvas.getHeight() || 800;
+    const scaleX = width / oldW;
+    const scaleY = height / oldH;
+    const scale = Math.min(scaleX, scaleY);
+
+    // Scale all objects proportionally
+    canvas.getObjects().forEach((obj) => {
+      const left = (obj.left || 0) * scaleX;
+      const top = (obj.top || 0) * scaleY;
+      obj.set({ left, top });
+      if (obj.scaleX !== undefined) obj.set({ scaleX: (obj.scaleX || 1) * scaleX });
+      if (obj.scaleY !== undefined) obj.set({ scaleY: (obj.scaleY || 1) * scaleY });
+      obj.setCoords();
+    });
+
+    canvas.setWidth(width);
+    canvas.setHeight(height);
+    set({ canvasWidth: width, canvasHeight: height });
+    canvas.renderAll();
+    get().saveHistory();
+  },
+
   updateObjectName: (objId, name) => {
     const { canvas } = get();
     if (!canvas) return;
@@ -488,25 +843,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const canvas = get().canvas;
     if (!canvas) return;
 
-    const json = JSON.stringify(canvas.toJSON([
-      'id',
-      'name',
-      'selectable',
-      'hasControls',
-      'lockMovementX',
-      'lockMovementY',
-      'lockScalingX',
-      'lockScalingY',
-      'lockRotation',
-      'teckstudioObjectType',
-      'posterRole',
-      'posterField',
-      'posterCardIndex',
-      'posterSpec',
-      'posterSpecTheme',
-      'posterSpecCanvasWidth',
-      'posterSpecCanvasHeight',
-    ]));
+    normalizeLoadedTextStyles(canvas);
+    const json = JSON.stringify(canvas.toJSON(CUSTOM_FABRIC_PROPERTIES));
     const { history, historyIndex, projectId, projectName } = get();
     const safeProjectName = projectName.trim() || 'New Design';
 
@@ -574,16 +912,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const prevIndex = historyIndex - 1;
     const state = history[prevIndex];
     
-    canvas.off('object:modified');
-    
-    canvas.loadFromJSON(state, () => {
-      canvas.renderAll();
+    loadCanvasFromJson(canvas, state).then(() => {
       set({ historyIndex: prevIndex, selectedObject: null });
-      
-      // Update draft state in localStorage
       localStorage.setItem('teckstudio_project_draft', state);
-      
-      canvas.on('object:modified', () => get().saveHistory());
+    }).catch((error) => {
+      set({ projectLoadError: error instanceof Error ? error.message : 'Unable to restore undo state.' });
     });
   },
   
@@ -594,16 +927,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const nextIndex = historyIndex + 1;
     const state = history[nextIndex];
     
-    canvas.off('object:modified');
-    
-    canvas.loadFromJSON(state, () => {
-      canvas.renderAll();
+    loadCanvasFromJson(canvas, state).then(() => {
       set({ historyIndex: nextIndex, selectedObject: null });
-      
-      // Update draft state in localStorage
       localStorage.setItem('teckstudio_project_draft', state);
-      
-      canvas.on('object:modified', () => get().saveHistory());
+    }).catch((error) => {
+      set({ projectLoadError: error instanceof Error ? error.message : 'Unable to restore redo state.' });
     });
   },
   
@@ -618,14 +946,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (selectedObject.type === 'activeSelection') {
         const activeSelection = selectedObject as fabric.ActiveSelection;
         activeSelection.forEachObject((obj) => {
+          const sourceId = String(obj.get('id' as keyof fabric.Object) || '');
+          if (sourceId) removeGeneratedTextEffectLayers(canvas, sourceId);
           canvas.remove(obj);
         });
         canvas.discardActiveObject();
       } else {
+        const sourceId = String(selectedObject.get('id' as keyof fabric.Object) || '');
+        if (sourceId) removeGeneratedTextEffectLayers(canvas, sourceId);
         canvas.remove(selectedObject);
       }
       canvas.renderAll();
-      set({ selectedObject: null });
+      set({ selectedObject: null, selectedPage: true });
       get().saveHistory();
     }
   },
@@ -636,11 +968,23 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     
     selectedObject.clone((clonedObj: fabric.Object) => {
       canvas.discardActiveObject();
+      const clonedMetadata = CUSTOM_FABRIC_PROPERTIES.reduce<Record<string, unknown>>((acc, key) => {
+        const value = selectedObject.get(key as keyof fabric.Object);
+        if (value !== undefined) acc[key] = value;
+        return acc;
+      }, {});
       clonedObj.set({
+        ...clonedMetadata,
+        id: window.crypto?.randomUUID ? window.crypto.randomUUID() : `obj_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        name: clonedMetadata.name ? `${String(clonedMetadata.name)} Copy` : selectedObject.get('name' as keyof fabric.Object),
+        effectGroupId: undefined,
+        effectGroupRole: undefined,
+        sourceObjectId: undefined,
+        generatedEffectLayer: false,
         left: (clonedObj.left || 0) + 15,
         top: (clonedObj.top || 0) + 15,
         evented: true,
-      });
+      } as Record<string, unknown>);
       
       if (clonedObj.type === 'activeSelection') {
         // Active selection needs a canvas reference to set active object correctly
@@ -654,9 +998,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         canvas.setActiveObject(clonedObj);
       }
       
-      canvas.requestRenderAll();
-      set({ selectedObject: clonedObj });
-      get().saveHistory();
+      const clonedEffect = clonedObj.get('textEffectConfig' as keyof fabric.Object) as TextEffectConfig | undefined;
+      const finishDuplicate = () => {
+        canvas.requestRenderAll();
+        set({ selectedObject: clonedObj });
+        get().saveHistory();
+      };
+      if (clonedEffect && isTextEffectSource(clonedObj)) {
+        void applyTextEffect(canvas, clonedObj, clonedEffect).then(finishDuplicate).catch((error) => {
+          console.error('[TECKSTUDIO] Unable to duplicate linked text effect:', error);
+          finishDuplicate();
+        });
+      } else {
+        finishDuplicate();
+      }
     });
   },
   

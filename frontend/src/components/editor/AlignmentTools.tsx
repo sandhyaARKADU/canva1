@@ -1,4 +1,5 @@
 import React from 'react';
+import { fabric } from 'fabric';
 import { useEditorStore } from '../../store/useEditorStore';
 import {
   AlignStartVertical,
@@ -9,14 +10,16 @@ import {
   AlignEndHorizontal,
   FlipHorizontal2,
   FlipVertical2,
+  Crosshair,
 } from 'lucide-react';
-
-const CANVAS_SIZE = 800;
+import type { PageAlignment } from '../../utils/textSelectionStyles';
+import { alignObjectToPage } from '../../utils/textSelectionStyles';
 
 interface AlignAction {
   title: string;
   icon: React.ReactNode;
-  action: (obj: any, canvas: any) => void;
+  alignment?: PageAlignment;
+  action?: (obj: fabric.Object) => void;
 }
 
 const btnStyle: React.CSSProperties = {
@@ -35,145 +38,113 @@ const btnStyle: React.CSSProperties = {
 };
 
 const hoverIn = (e: React.MouseEvent<HTMLButtonElement>) => {
-  (e.currentTarget as HTMLButtonElement).style.background = 'rgb(39, 39, 42)';
-  (e.currentTarget as HTMLButtonElement).style.color = '#e4e4e7';
+  e.currentTarget.style.background = 'rgb(39, 39, 42)';
+  e.currentTarget.style.color = '#e4e4e7';
 };
 
 const hoverOut = (e: React.MouseEvent<HTMLButtonElement>) => {
-  (e.currentTarget as HTMLButtonElement).style.background = 'rgb(24, 24, 27)';
-  (e.currentTarget as HTMLButtonElement).style.color = '#a1a1aa';
+  e.currentTarget.style.background = 'rgb(24, 24, 27)';
+  e.currentTarget.style.color = '#a1a1aa';
 };
 
 export const AlignmentTools: React.FC = () => {
   const { canvas, selectedObject, saveHistory } = useEditorStore();
+  const [pageMargin, setPageMargin] = React.useState(0);
 
   if (!canvas || !selectedObject) return null;
 
-  const obj = selectedObject as any;
-
-  /* ---- alignment actions ---- */
   const alignActions: AlignAction[] = [
-    {
-      title: 'Align Left',
-      icon: <AlignStartVertical size={16} />,
-      action: (o) => {
-        o.set('left', 0);
-      },
-    },
-    {
-      title: 'Align Center H',
-      icon: <AlignCenterVertical size={16} />,
-      action: (o) => {
-        const w = o.getScaledWidth();
-        o.set('left', (CANVAS_SIZE - w) / 2);
-      },
-    },
-    {
-      title: 'Align Right',
-      icon: <AlignEndVertical size={16} />,
-      action: (o) => {
-        const w = o.getScaledWidth();
-        o.set('left', CANVAS_SIZE - w);
-      },
-    },
-    {
-      title: 'Align Top',
-      icon: <AlignStartHorizontal size={16} />,
-      action: (o) => {
-        o.set('top', 0);
-      },
-    },
-    {
-      title: 'Align Middle V',
-      icon: <AlignCenterHorizontal size={16} />,
-      action: (o) => {
-        const h = o.getScaledHeight();
-        o.set('top', (CANVAS_SIZE - h) / 2);
-      },
-    },
-    {
-      title: 'Align Bottom',
-      icon: <AlignEndHorizontal size={16} />,
-      action: (o) => {
-        const h = o.getScaledHeight();
-        o.set('top', CANVAS_SIZE - h);
-      },
-    },
+    { title: 'Align Left to Page', icon: <AlignStartVertical size={16} />, alignment: 'left' },
+    { title: 'Align Horizontal Center', icon: <AlignCenterVertical size={16} />, alignment: 'center-horizontal' },
+    { title: 'Align Right to Page', icon: <AlignEndVertical size={16} />, alignment: 'right' },
+    { title: 'Align Top to Page', icon: <AlignStartHorizontal size={16} />, alignment: 'top' },
+    { title: 'Align Vertical Center', icon: <AlignCenterHorizontal size={16} />, alignment: 'center-vertical' },
+    { title: 'Align Bottom to Page', icon: <AlignEndHorizontal size={16} />, alignment: 'bottom' },
+    { title: 'Align to Page Center', icon: <Crosshair size={16} />, alignment: 'center' },
   ];
 
   const flipActions: AlignAction[] = [
     {
       title: 'Flip Horizontal',
       icon: <FlipHorizontal2 size={16} />,
-      action: (o) => {
-        o.set('flipX', !o.get('flipX'));
-      },
+      action: (obj) => obj.set('flipX', !obj.get('flipX')),
     },
     {
       title: 'Flip Vertical',
       icon: <FlipVertical2 size={16} />,
-      action: (o) => {
-        o.set('flipY', !o.get('flipY'));
-      },
+      action: (obj) => obj.set('flipY', !obj.get('flipY')),
     },
   ];
 
   const handleAction = (act: AlignAction) => {
-    act.action(obj, canvas);
-    obj.setCoords();
-    canvas.renderAll();
+    if (act.alignment) {
+      alignObjectToPage(canvas, selectedObject, act.alignment, pageMargin);
+    } else if (act.action) {
+      act.action(selectedObject);
+      selectedObject.setCoords();
+      canvas.requestRenderAll();
+    }
     saveHistory();
   };
 
-  /* ---- render ---- */
   return (
-    <div>
-      {/* Alignment buttons – two rows of 3 */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(3, 1fr)',
-          gap: '6px',
-          justifyItems: 'center',
-        }}
-      >
-        {alignActions.map((a) => (
-          <button
-            key={a.title}
-            title={a.title}
-            onClick={() => handleAction(a)}
-            style={btnStyle}
-            onMouseEnter={hoverIn}
-            onMouseLeave={hoverOut}
+    <div className="space-y-3">
+      <div>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Align to Page</span>
+          <select
+            value={pageMargin}
+            onChange={(event) => setPageMargin(Number(event.target.value))}
+            className="rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-[10px] text-zinc-300 outline-none"
+            title="Page margin"
           >
-            {a.icon}
-          </button>
-        ))}
+            <option value={0}>0px</option>
+            <option value={16}>16px</option>
+            <option value={24}>24px</option>
+            <option value={32}>32px</option>
+          </select>
+        </div>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, 1fr)',
+            gap: '6px',
+            justifyItems: 'center',
+          }}
+        >
+          {alignActions.map((action) => (
+            <button
+              key={action.title}
+              title={action.title}
+              onClick={() => handleAction(action)}
+              style={btnStyle}
+              onMouseEnter={hoverIn}
+              onMouseLeave={hoverOut}
+            >
+              {action.icon}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Divider */}
-      <div
-        style={{
-          height: 1,
-          background: 'rgb(39, 39, 42)',
-          margin: '10px 0',
-        }}
-      />
+      <div className="h-px bg-zinc-800" />
 
-      {/* Flip buttons */}
-      <div style={{ display: 'flex', gap: '6px' }}>
-        {flipActions.map((a) => (
-          <button
-            key={a.title}
-            title={a.title}
-            onClick={() => handleAction(a)}
-            style={btnStyle}
-            onMouseEnter={hoverIn}
-            onMouseLeave={hoverOut}
-          >
-            {a.icon}
-          </button>
-        ))}
+      <div>
+        <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Flip</div>
+        <div style={{ display: 'flex', gap: '6px' }}>
+          {flipActions.map((action) => (
+            <button
+              key={action.title}
+              title={action.title}
+              onClick={() => handleAction(action)}
+              style={btnStyle}
+              onMouseEnter={hoverIn}
+              onMouseLeave={hoverOut}
+            >
+              {action.icon}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );

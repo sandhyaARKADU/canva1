@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -51,7 +51,7 @@ def create_auth_session_record(db: Session, user: User, token: str, request: Req
         token_hash=sha256(token.encode("utf-8")).hexdigest(),
         user_agent=request.headers.get("user-agent", "")[:255],
         ip_address=request.client.host if request.client else None,
-        expires_at=datetime.utcnow() + timedelta(days=settings.JWT_EXPIRY_DAYS),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=settings.JWT_EXPIRY_DAYS),
     )
     db.add(session)
     db.commit()
@@ -132,6 +132,7 @@ def logout(
         AuthSession.revoked_at.is_(None),
     ).first()
     if session:
-        session.revoked_at = datetime.utcnow()
+        session.revoked_at = datetime.now(timezone.utc)
         db.commit()
     return {"message": "Logged out"}
+

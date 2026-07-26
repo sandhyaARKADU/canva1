@@ -37,10 +37,49 @@ CANONICAL_CATEGORIES = [
     "animals",
     "people",
     "minimal",
+    "education",
+    "healthcare",
+    "finance",
+    "marketing",
+    "social-media",
+    "events",
+    "sports",
+    "music",
+    "entertainment",
+    "real-estate",
+    "e-commerce",
+    "startup",
+    "office",
+    "lifestyle",
+    "beauty",
+    "luxury",
+    "automotive",
+    "gaming",
+    "science",
+    "space",
+    "environment",
+    "agriculture",
+    "festivals",
+    "backgrounds",
+    "textures",
+    "patterns",
+    "gradients",
+    "illustrations",
+    "icons",
+    "stickers",
+    "frames",
+    "mockups",
+    "product-images",
+    "ui-elements",
+    "infographics",
+    "charts",
+    "maps",
 ]
 
 
 REFERENCE_MEDIA_DIR = Path(__file__).resolve().parent / "media" / "asset-library"
+REFERENCE_FULL_MEDIA_DIR = Path(__file__).resolve().parent / "media" / "asset-library-full"
+REFERENCE_THUMBNAIL_MEDIA_DIR = Path(__file__).resolve().parent / "media" / "asset-library-thumbnails"
 
 
 REFERENCE_PHOTO_SUBJECTS: dict[str, list[ReferencePhotoAsset]] = {
@@ -355,7 +394,67 @@ CATEGORY_PALETTES: dict[str, list[tuple[str, str, str, str]]] = {
 }
 
 
-ASPECT_RATIOS = [(1200, 800), (900, 1200), (1000, 1000), (1400, 900), (800, 1000), (1600, 900)]
+ADDITIONAL_CATEGORY_SUBJECT_KEYS: dict[str, list[str]] = {
+    "education": ["classroom", "online-course", "books", "graduation", "study-desk", "student", "library", "whiteboard", "school", "tutorial", "learning-app", "certificate"],
+    "healthcare": ["doctor", "clinic", "stethoscope", "hospital", "wellness", "medicine", "nurse", "telehealth", "heart-care", "lab-report", "fitness-health", "pharmacy"],
+    "finance": ["banking", "investment", "stock-chart", "calculator", "budget", "credit-card", "wallet", "report", "coin-stack", "analytics", "insurance", "tax"],
+    "marketing": ["campaign", "brand-board", "analytics", "content-calendar", "megaphone", "social-post", "email", "seo", "creative-team", "launch", "audience", "strategy"],
+    "social-media": ["creator-phone", "likes", "video-post", "influencer", "content-grid", "livestream", "comment-bubbles", "story-template", "camera", "engagement", "feed", "hashtag"],
+    "events": ["conference", "stage", "party", "tickets", "wedding", "workshop", "concert", "festival", "invitation", "podium", "calendar", "celebration"],
+    "sports": ["stadium", "basketball", "football", "tennis", "running-track", "trophy", "team", "training", "cycling", "swimming", "fitness-field", "scoreboard"],
+    "music": ["guitar", "microphone", "piano", "headphones", "studio", "concert-stage", "vinyl", "dj", "sound-wave", "violin", "playlist", "speaker"],
+    "entertainment": ["cinema", "film-camera", "streaming", "popcorn", "stage-lights", "performer", "media-screen", "comedy", "ticket", "spotlight", "television", "red-carpet"],
+    "real-estate": ["modern-home", "for-sale", "interior", "kitchen", "apartment", "floor-plan", "keys", "neighborhood", "luxury-house", "office-space", "agent", "mortgage"],
+    "e-commerce": ["shopping-cart", "product-card", "checkout", "delivery-box", "storefront", "sale-banner", "mobile-shop", "package", "payment", "warehouse", "customer-review", "retail"],
+    "startup": ["pitch-deck", "founders", "rocket-launch", "brainstorm", "growth-chart", "prototype", "innovation", "investor", "team-desk", "mvp", "idea-board", "accelerator"],
+    "office": ["desk-setup", "meeting-room", "notebook", "laptop", "calendar", "task-board", "office-chair", "workspace", "printer", "coffee-break", "documents", "productivity"],
+    "lifestyle": ["morning-routine", "home-corner", "wellness", "coffee-moment", "city-walk", "family-home", "travel-bag", "reading", "self-care", "outdoor-day", "kitchen-life", "weekend"],
+    "beauty": ["cosmetics", "skincare", "makeup-brush", "spa", "perfume", "lipstick", "serum", "salon", "beauty-flatlay", "nail-polish", "haircare", "glow"],
+    "luxury": ["gold-detail", "premium-watch", "marble-room", "jewelry", "luxury-car", "boutique", "champagne", "silk", "black-gold", "designer-bag", "hotel-suite", "elegant-dinner"],
+    "automotive": ["sports-car", "city-drive", "car-interior", "electric-vehicle", "garage", "road-trip", "dashboard", "motorcycle", "showroom", "charging-station", "wheel-detail", "highway"],
+    "gaming": ["controller", "esports-stage", "neon-setup", "console", "keyboard", "headset", "stream-overlay", "arcade", "game-ui", "score-screen", "vr-game", "pixel-badge"],
+    "science": ["microscope", "lab-glassware", "chemistry", "researcher", "dna", "experiment", "molecule", "space-lab", "data-research", "biology", "physics", "robot-lab"],
+    "space": ["galaxy", "planet", "astronaut", "rocket", "nebula", "moon-base", "satellite", "star-field", "cosmic-gradient", "space-station", "mars", "orbit"],
+    "environment": ["solar-panels", "wind-turbine", "recycling", "green-city", "forest-care", "electric-grid", "eco-home", "water-conservation", "sustainability", "clean-energy", "earth", "leaf-icon"],
+    "agriculture": ["crop-field", "tractor", "greenhouse", "harvest", "farm-road", "wheat", "organic-produce", "irrigation", "barn", "soil", "orchard", "market-crate"],
+    "festivals": ["lanterns", "fireworks", "cultural-dance", "holiday-lights", "gift-box", "parade", "celebration-table", "confetti", "festival-stage", "rangoli", "carnival", "decorations"],
+    "backgrounds": ["soft-gradient", "dark-gradient", "paper-backdrop", "studio-wall", "abstract-light", "clean-space", "poster-bg", "neutral-backdrop", "color-wash", "spotlight", "mesh-bg", "minimal-bg"],
+    "textures": ["paper-texture", "marble-texture", "fabric-texture", "wood-grain", "concrete", "grain", "linen", "metal", "stone", "watercolor", "leather", "noise"],
+    "patterns": ["geometric-pattern", "seamless-dots", "stripe-pattern", "wave-pattern", "grid-pattern", "floral-pattern", "abstract-repeat", "checker", "line-pattern", "organic-pattern", "tile", "retro-pattern"],
+    "gradients": ["mesh-gradient", "sunset-gradient", "neon-gradient", "pastel-gradient", "blue-gradient", "warm-gradient", "rainbow-gradient", "duotone", "aurora", "radial-gradient", "soft-blend", "vivid-gradient"],
+    "illustrations": ["editorial-people", "vector-city", "flat-device", "character", "workflow", "hero-illustration", "business-scene", "creative-scene", "education-scene", "health-scene", "startup-scene", "abstract-figure"],
+    "icons": ["outline-icons", "solid-icons", "interface-icons", "business-icons", "social-icons", "arrow-icons", "finance-icons", "health-icons", "education-icons", "media-icons", "badge-icons", "navigation-icons"],
+    "stickers": ["sparkle-sticker", "sale-sticker", "emoji-sticker", "badge-sticker", "arrow-sticker", "heart-sticker", "star-sticker", "label-sticker", "speech-sticker", "fun-sticker", "premium-sticker", "new-sticker"],
+    "frames": ["photo-frame", "poster-border", "polaroid", "decorative-frame", "rounded-frame", "gold-frame", "minimal-frame", "film-frame", "social-frame", "collage-frame", "circle-frame", "label-frame"],
+    "mockups": ["phone-mockup", "laptop-mockup", "poster-mockup", "package-mockup", "tshirt-mockup", "business-card", "tablet-mockup", "book-cover", "billboard", "social-post", "screen-mockup", "product-box"],
+    "product-images": ["bottle-product", "box-product", "shoe-product", "bag-product", "cosmetic-product", "tech-device", "cup-product", "watch-product", "furniture-product", "food-package", "isolated-object", "studio-product"],
+    "ui-elements": ["button-set", "card-ui", "dashboard-widget", "toggle-switch", "form-field", "navbar", "modal", "pricing-card", "progress-bar", "notification", "profile-card", "app-screen"],
+    "infographics": ["timeline", "process-steps", "cycle-diagram", "comparison", "flowchart", "stats-panel", "roadmap", "pyramid", "matrix", "checklist", "funnel", "workflow"],
+    "charts": ["bar-chart", "line-chart", "pie-chart", "dashboard", "growth-graph", "finance-chart", "analytics-board", "kpi-card", "data-grid", "donut-chart", "scatter-plot", "report-chart"],
+    "maps": ["world-map", "city-map", "route-map", "pin-location", "travel-map", "campus-map", "metro-map", "terrain-map", "gps-screen", "delivery-route", "country-map", "navigation-map"],
+}
+
+_palette_cycle = [
+    [("#0f172a", "#2563eb", "#38bdf8", "#dbeafe"), ("#111827", "#7c3aed", "#f0abfc", "#faf5ff"), ("#082f49", "#14b8a6", "#a7f3d0", "#ecfeff")],
+    [("#431407", "#f97316", "#fde68a", "#fff7ed"), ("#831843", "#ec4899", "#f9a8d4", "#fdf2f8"), ("#3b0764", "#a855f7", "#e9d5ff", "#faf5ff")],
+    [("#14532d", "#22c55e", "#bbf7d0", "#f0fdf4"), ("#164e63", "#06b6d4", "#cffafe", "#ecfeff"), ("#365314", "#84cc16", "#ecfccb", "#f7fee7")],
+    [("#1f2937", "#64748b", "#e5e7eb", "#f8fafc"), ("#44403c", "#d6d3d1", "#fafaf9", "#ffffff"), ("#020617", "#475569", "#cbd5e1", "#f8fafc")],
+]
+
+for category_index, (category_slug, keys) in enumerate(ADDITIONAL_CATEGORY_SUBJECT_KEYS.items()):
+    CATEGORY_SUBJECTS.setdefault(category_slug, [
+        AssetSubject(
+            key,
+            key.replace("-", " ").title(),
+            f"{category_slug.replace('-', ' ')} {key.replace('-', ' ')} high quality design asset",
+            tuple(part for part in key.split("-") if part) + (category_slug,),
+        )
+        for key in keys
+    ])
+    CATEGORY_PALETTES.setdefault(category_slug, _palette_cycle[category_index % len(_palette_cycle)])
+
+
+ASPECT_RATIOS = [(2400, 1600), (1800, 2400), (2000, 2000), (2400, 1540), (1600, 2000), (2560, 1440)]
 STYLE_SUFFIXES = ["wide angle", "close-up", "editorial", "flat lay", "clean background", "dynamic crop", "soft light", "high contrast", "studio", "environmental"]
 
 
@@ -429,8 +528,10 @@ def _build_reference_photo_assets(category: str, limit: int) -> list[tuple]:
         title = photo.title if index < len(photo_subjects) else f"{photo.title} Photo Variant {index + 1:03d}"
 
         asset_id = f"cur_img_{category_fragment}_{index + 1:03d}_photo"
-        media_url = f"/media/asset-library/{category}/{media_file.name}"
-        mime_type = "image/jpeg" if media_file.suffix.lower() in {".jpg", ".jpeg"} else "image/png"
+        full_file, thumbnail_file, width, height = _ensure_reference_derivatives(category, media_file)
+        media_url = f"/media/asset-library-full/{category}/{full_file.name}"
+        thumbnail_url = f"/media/asset-library-thumbnails/{category}/{thumbnail_file.name}"
+        mime_type = "image/jpeg" if full_file.suffix.lower() in {".jpg", ".jpeg"} else "image/png"
         tags = ",".join([
             f"category:{category}",
             category,
@@ -440,7 +541,7 @@ def _build_reference_photo_assets(category: str, limit: int) -> list[tuple]:
             "style:photo-reference",
             f"variant:{index + 1:03d}",
         ])
-        local_path = f"local://teckstudio/asset-library/{category}/{media_file.name}"
+        local_path = f"local://teckstudio/asset-library-full/{category}/{full_file.name}"
         assets.append((
             asset_id,
             title,
@@ -454,11 +555,53 @@ def _build_reference_photo_assets(category: str, limit: int) -> list[tuple]:
             None,
             "User-provided reference image cropped into category asset",
             "local-reference-media",
-            900,
-            488,
+            width,
+            height,
             local_path,
+            thumbnail_url,
         ))
     return assets
+
+
+def _ensure_reference_derivatives(category: str, media_file: Path) -> tuple[Path, Path, int, int]:
+    full_dir = REFERENCE_FULL_MEDIA_DIR / category
+    thumbnail_dir = REFERENCE_THUMBNAIL_MEDIA_DIR / category
+    full_dir.mkdir(parents=True, exist_ok=True)
+    thumbnail_dir.mkdir(parents=True, exist_ok=True)
+    full_file = full_dir / media_file.name
+    thumbnail_file = thumbnail_dir / media_file.name
+
+    try:
+        from PIL import Image
+        with Image.open(media_file) as source:
+            source = source.convert("RGB") if source.mode not in {"RGB", "RGBA"} else source.copy()
+            width, height = source.size
+            long_edge = max(width, height)
+            if long_edge < 1800:
+                scale = 1800 / max(long_edge, 1)
+                full_size = (max(1, round(width * scale)), max(1, round(height * scale)))
+            else:
+                full_size = (width, height)
+            full_image = source.resize(full_size, Image.Resampling.LANCZOS) if full_size != source.size else source
+            full_image.save(full_file, quality=96, optimize=True)
+
+            thumb_long_edge = 420
+            thumb_scale = thumb_long_edge / max(full_size)
+            thumb_size = (max(1, round(full_size[0] * thumb_scale)), max(1, round(full_size[1] * thumb_scale)))
+            thumbnail = full_image.resize(thumb_size, Image.Resampling.LANCZOS)
+            thumbnail.save(thumbnail_file, quality=82, optimize=True)
+            return full_file, thumbnail_file, full_size[0], full_size[1]
+    except Exception:
+        return media_file, media_file, *_image_dimensions(media_file)
+
+
+def _image_dimensions(path: Path) -> tuple[int, int]:
+    try:
+        from PIL import Image
+        with Image.open(path) as image:
+            return int(image.width), int(image.height)
+    except Exception:
+        return 1, 1
 
 
 def _slugify(value: str) -> str:

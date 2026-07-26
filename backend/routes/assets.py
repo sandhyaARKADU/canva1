@@ -30,6 +30,43 @@ CANONICAL_IMAGE_CATEGORIES = [
     {"id": "animals", "label": "Animals"},
     {"id": "people", "label": "People"},
     {"id": "minimal", "label": "Minimal"},
+    {"id": "education", "label": "Education"},
+    {"id": "healthcare", "label": "Healthcare"},
+    {"id": "finance", "label": "Finance"},
+    {"id": "marketing", "label": "Marketing"},
+    {"id": "social-media", "label": "Social Media"},
+    {"id": "events", "label": "Events"},
+    {"id": "sports", "label": "Sports"},
+    {"id": "music", "label": "Music"},
+    {"id": "entertainment", "label": "Entertainment"},
+    {"id": "real-estate", "label": "Real Estate"},
+    {"id": "e-commerce", "label": "E-commerce"},
+    {"id": "startup", "label": "Startup"},
+    {"id": "office", "label": "Office"},
+    {"id": "lifestyle", "label": "Lifestyle"},
+    {"id": "beauty", "label": "Beauty"},
+    {"id": "luxury", "label": "Luxury"},
+    {"id": "automotive", "label": "Automotive"},
+    {"id": "gaming", "label": "Gaming"},
+    {"id": "science", "label": "Science"},
+    {"id": "space", "label": "Space"},
+    {"id": "environment", "label": "Environment"},
+    {"id": "agriculture", "label": "Agriculture"},
+    {"id": "festivals", "label": "Festivals"},
+    {"id": "backgrounds", "label": "Backgrounds"},
+    {"id": "textures", "label": "Textures"},
+    {"id": "patterns", "label": "Patterns"},
+    {"id": "gradients", "label": "Gradients"},
+    {"id": "illustrations", "label": "Illustrations"},
+    {"id": "icons", "label": "Icons"},
+    {"id": "stickers", "label": "Stickers"},
+    {"id": "frames", "label": "Frames"},
+    {"id": "mockups", "label": "Mockups"},
+    {"id": "product-images", "label": "Product Images"},
+    {"id": "ui-elements", "label": "UI Elements"},
+    {"id": "infographics", "label": "Infographics"},
+    {"id": "charts", "label": "Charts"},
+    {"id": "maps", "label": "Maps"},
 ]
 
 
@@ -42,6 +79,20 @@ def normalize_image_category(value: Optional[str]) -> Optional[str]:
         "food-and-drink": "food-drink",
         "food-drinks": "food-drink",
         "food": "food-drink",
+        "social": "social-media",
+        "socialmedia": "social-media",
+        "realestate": "real-estate",
+        "realty": "real-estate",
+        "ecommerce": "e-commerce",
+        "commerce": "e-commerce",
+        "product": "product-images",
+        "products": "product-images",
+        "ui": "ui-elements",
+        "interface": "ui-elements",
+        "graphic": "illustrations",
+        "graphics": "illustrations",
+        "map": "maps",
+        "chart": "charts",
     }
     normalized = aliases.get(normalized, normalized)
     valid = {category["id"] for category in CANONICAL_IMAGE_CATEGORIES}
@@ -183,6 +234,9 @@ class AssetSearchItem(BaseModel):
     description: Optional[str] = None
     imageUrl: str
     thumbnailUrl: str
+    previewUrl: str
+    sourceUrl: str
+    originalUrl: str
     localStoragePath: Optional[str] = None
     width: int
     height: int
@@ -271,6 +325,9 @@ def to_search_item(asset: Asset, request: Optional[Request] = None) -> AssetSear
         description=asset.description,
         imageUrl=image_url,
         thumbnailUrl=thumbnail_url,
+        previewUrl=image_url,
+        sourceUrl=image_url,
+        originalUrl=image_url,
         localStoragePath=asset.local_storage_path,
         width=width,
         height=height,

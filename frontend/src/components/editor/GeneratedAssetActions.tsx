@@ -12,7 +12,10 @@ type GeneratedAssetActionsProps = {
   onRegenerate: () => void;
   onEdit: () => void;
   onOpenInEditor: () => void;
+  downloadDisabled?: boolean;
   regenerateDisabled?: boolean;
+  editDisabled?: boolean;
+  openDisabled?: boolean;
 };
 
 const assetLabels: Record<GeneratedAssetType, string> = {
@@ -34,7 +37,10 @@ export function GeneratedAssetActions({
   onRegenerate,
   onEdit,
   onOpenInEditor,
+  downloadDisabled = false,
   regenerateDisabled = false,
+  editDisabled = false,
+  openDisabled = false,
 }: GeneratedAssetActionsProps) {
   const editLabel = assetLabels[assetType];
   const metadataLabel = [width && height ? `${width}×${height}` : '', prompt ? 'Prompt ready' : '']
@@ -50,7 +56,7 @@ export function GeneratedAssetActions({
       title={metadataLabel || undefined}
     >
       <div className="grid grid-cols-2 gap-2">
-        <button type="button" onClick={onDownload} disabled={!imageSource} className="flex min-h-9 items-center justify-center gap-1.5 rounded-xl border border-fuchsia-400/20 bg-fuchsia-600 px-2.5 py-1.5 text-[10px] font-semibold text-white transition-colors hover:bg-fuchsia-500 disabled:cursor-not-allowed disabled:opacity-40">
+        <button type="button" onClick={onDownload} disabled={!imageSource || downloadDisabled} className="flex min-h-9 items-center justify-center gap-1.5 rounded-xl border border-fuchsia-400/20 bg-fuchsia-600 px-2.5 py-1.5 text-[10px] font-semibold text-white transition-colors hover:bg-fuchsia-500 disabled:cursor-not-allowed disabled:opacity-40">
           <Download className="h-3.5 w-3.5" />
           Download
         </button>
@@ -58,11 +64,11 @@ export function GeneratedAssetActions({
           <RefreshCw className="h-3.5 w-3.5" />
           Regenerate
         </button>
-        <button type="button" onClick={onEdit} disabled={!imageSource} className="flex min-h-9 items-center justify-center gap-1.5 rounded-xl border border-violet-400/20 bg-violet-600 px-2.5 py-1.5 text-[10px] font-semibold text-white transition-colors hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40">
+        <button type="button" onClick={onEdit} disabled={!imageSource || editDisabled} className="flex min-h-9 items-center justify-center gap-1.5 rounded-xl border border-violet-400/20 bg-violet-600 px-2.5 py-1.5 text-[10px] font-semibold text-white transition-colors hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40">
           <Pencil className="h-3.5 w-3.5" />
           {editLabel}
         </button>
-        <button type="button" onClick={onOpenInEditor} disabled={!imageSource} className={secondaryButton}>
+        <button type="button" onClick={onOpenInEditor} disabled={!imageSource || openDisabled} className={secondaryButton}>
           <ExternalLink className="h-3.5 w-3.5" />
           Open in Editor
         </button>

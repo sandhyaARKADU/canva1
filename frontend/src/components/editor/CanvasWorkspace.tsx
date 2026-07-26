@@ -5,12 +5,25 @@ import { useSmartGuides } from '../../hooks/useSmartGuides';
 import { useDistanceMeasurement } from '../../hooks/useDistanceMeasurement';
 import { usePenTool } from '../../hooks/usePenTool';
 import { useLassoSelection } from '../../hooks/useLassoSelection';
+import {
+  addObjectToCanvas,
+  createElementObjectFromPayload,
+  createFrameClipPathForObject,
+  getFrameClipBoundsForObject,
+  isFrameElementObject,
+} from '../../utils/editorElementFactory';
+import { isEditableTextObject } from '../../utils/textSelectionStyles';
+import { addStickerToCanvas } from '../../utils/stickerCanvas';
+import type { StickerItem } from '../../types/editorFeatures';
+import { installTextEffectSynchronization } from '../../utils/textEffects';
+import type { EditorElement, ElementMetadata } from '../../types/elements';
+import { PageSelectionOverlay } from './PageSelectionOverlay';
 
 export const CanvasWorkspace: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fabricRef = useRef<fabric.Canvas | null>(null);
-  const { setCanvas, setSelectedObject, saveHistory, setZoom, editorMode } = useEditorStore();
+  const { setCanvas, setSelectedObject, saveHistory, setZoom, editorMode, projectId, isProjectLoading, projectLoadError, loadProject, clearProjectLoadError, canvasWidth, canvasHeight } = useEditorStore();
 
   useSmartGuides(fabricRef.current);
   useDistanceMeasurement(fabricRef.current);
@@ -40,7 +53,11 @@ export const CanvasWorkspace: React.FC = () => {
       height: 800,
       backgroundColor: '#ffffff',
       preserveObjectStacking: true,
+      enableRetinaScaling: true,
+      imageSmoothingEnabled: true,
     });
+
+    console.log('[TECKSTUDIO] Canvas created:', { width: fc.getWidth(), height: fc.getHeight(), backgroundColor: fc.backgroundColor });
 
     fabricRef.current = fc;
     (canvasRef.current as any).__fabric = fc;
@@ -48,16 +65,86 @@ export const CanvasWorkspace: React.FC = () => {
     ((fc as any).upperCanvasEl as HTMLCanvasElement | undefined)?.setAttribute('data-fabric-canvas', 'upper');
     if ((fc as any).lowerCanvasEl) ((fc as any).lowerCanvasEl as any).__fabric = fc;
     if ((fc as any).upperCanvasEl) ((fc as any).upperCanvasEl as any).__fabric = fc;
+    const removeTextEffectSynchronization = installTextEffectSynchronization(fc);
     setCanvas(fc);
 
-    setTimeout(() => {
-      const cw = containerRef.current?.clientWidth || 0;
-      const ch = containerRef.current?.clientHeight || 0;
-      setZoom(Math.min((cw - 120) / 800, (ch - 120) / 800, 1.0));
-    }, 100);
+    // Sync canvas dimensions with store
+    useEditorStore.getState().setCanvasDimensions(fc.getWidth(), fc.getHeight());
+
+    // Fit-to-view helper: applies viewport transform to center and scale the canvas
+    const fitCanvasToView = () => {
+      const containerEl = containerRef.current;
+      if (!containerEl) return;
+
+      const containerWidth = containerEl.clientWidth;
+      const containerHeight = containerEl.clientHeight;
+      const store = useEditorStore.getState();
+      const canvasW = store.canvasWidth || fc.getWidth() || 800;
+      const canvasH = store.canvasHeight || fc.getHeight() || 800;
+
+      // Calculate ideal zoom with padding
+      const padding = 80;
+      const scaleX = (containerWidth - padding) / canvasW;
+      const scaleY = (containerHeight - padding) / canvasH;
+      const idealZoom = Math.min(scaleX, scaleY, 1.0);
+
+      // Calculate centering offset
+      const scaledWidth = canvasW * idealZoom;
+      const scaledHeight = canvasH * idealZoom;
+      const offsetX = (containerWidth - scaledWidth) / 2;
+      const offsetY = (containerHeight - scaledHeight) / 2;
+
+      // Apply viewport transform
+      fc.setViewportTransform([idealZoom, 0, 0, idealZoom, offsetX, offsetY]);
+      store.setZoom(idealZoom);
+      fc.renderAll();
+      console.log('[TECKSTUDIO] fitCanvasToView:', { containerWidth, containerHeight, canvasW, canvasH, idealZoom, offsetX, offsetY });
+    };
+
+    // Initial fit-to-view after a short delay for layout to settle
+    setTimeout(fitCanvasToView, 500);
 
     const syncSelection = (e: fabric.IEvent) => {
       setSelectedObject(e.selected && e.selected.length > 0 ? e.selected[0] : null);
+    };
+
+    const syncActiveTextObject = () => {
+      const activeObject = fc.getActiveObject();
+      setSelectedObject(activeObject || null);
+      if (activeObject && isEditableTextObject(activeObject)) {
+        useEditorStore.getState().captureTextSelection();
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const activeObject = fc.getActiveObject();
+      if (!isEditableTextObject(activeObject)) return;
+
+      const isMod = event.metaKey || event.ctrlKey;
+      if (event.key === 'Escape' && activeObject.isEditing) {
+        event.preventDefault();
+        activeObject.exitEditing?.();
+        fc.requestRenderAll();
+        return;
+      }
+
+      if (!isMod) return;
+      const store = useEditorStore.getState();
+      store.captureTextSelection();
+
+      if (event.key.toLowerCase() === 'b') {
+        event.preventDefault();
+        store.setFontWeight(store.fontWeight === 'bold' || store.fontWeight === '700' ? 'normal' : 'bold');
+      } else if (event.key.toLowerCase() === 'i') {
+        event.preventDefault();
+        store.setFontStyle(store.fontStyle === 'italic' ? 'normal' : 'italic');
+      } else if (event.key.toLowerCase() === 'u') {
+        event.preventDefault();
+        store.setUnderline(!store.underline);
+      } else if (event.shiftKey && event.key.toLowerCase() === 'c') {
+        event.preventDefault();
+        window.dispatchEvent(new CustomEvent('teckstudio:open-text-color'));
+      }
     };
 
     fc.on('selection:created', syncSelection);
@@ -65,14 +152,88 @@ export const CanvasWorkspace: React.FC = () => {
     fc.on('selection:cleared', () => setSelectedObject(null));
     fc.on('object:modified', () => saveHistory());
     fc.on('object:added', (e) => { if (e.target) assignObjectId(e.target as fabric.Object); });
+    fc.on('text:selection:changed', syncActiveTextObject);
+    fc.on('text:editing:entered', syncActiveTextObject);
+    fc.on('text:editing:exited', syncActiveTextObject);
+    fc.on('text:changed', () => saveHistory());
+    window.addEventListener('keydown', handleKeyDown);
+
+    // Re-fit canvas on window resize
+    const handleResize = () => {
+      const containerEl = containerRef.current;
+      if (!containerEl) return;
+
+      const containerWidth = containerEl.clientWidth;
+      const containerHeight = containerEl.clientHeight;
+      const store = useEditorStore.getState();
+      const canvasW = store.canvasWidth || fc.getWidth() || 800;
+      const canvasH = store.canvasHeight || fc.getHeight() || 800;
+
+      const padding = 80;
+      const scaleX = (containerWidth - padding) / canvasW;
+      const scaleY = (containerHeight - padding) / canvasH;
+      const idealZoom = Math.min(scaleX, scaleY, 1.0);
+
+      const scaledWidth = canvasW * idealZoom;
+      const scaledHeight = canvasH * idealZoom;
+      const offsetX = (containerWidth - scaledWidth) / 2;
+      const offsetY = (containerHeight - scaledHeight) / 2;
+
+      fc.setViewportTransform([idealZoom, 0, 0, idealZoom, offsetX, offsetY]);
+      store.setZoom(idealZoom);
+      fc.renderAll();
+    };
+    window.addEventListener('resize', handleResize);
 
     return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('resize', handleResize);
+      removeTextEffectSynchronization();
       fc.dispose();
       fabricRef.current = null;
       setCanvas(null);
       setSelectedObject(null);
     };
   }, []);
+
+  // Re-fit canvas when project load completes or dimensions change
+  useEffect(() => {
+    if (!fabricRef.current || isProjectLoading) return;
+
+    console.log('[TECKSTUDIO] Re-fit triggered:', { isProjectLoading, canvasWidth, canvasHeight });
+
+    // Small delay to ensure layout is settled after project load
+    const timer = setTimeout(() => {
+      const containerEl = containerRef.current;
+      if (!containerEl || !fabricRef.current) return;
+
+      const containerWidth = containerEl.clientWidth;
+      const containerHeight = containerEl.clientHeight;
+      const store = useEditorStore.getState();
+      const canvasW = store.canvasWidth || fabricRef.current.getWidth() || 800;
+      const canvasH = store.canvasHeight || fabricRef.current.getHeight() || 800;
+
+      console.log('[TECKSTUDIO] Re-fit executing:', { containerWidth, containerHeight, canvasW, canvasH });
+
+      const padding = 80;
+      const scaleX = (containerWidth - padding) / canvasW;
+      const scaleY = (containerHeight - padding) / canvasH;
+      const idealZoom = Math.min(scaleX, scaleY, 1.0);
+
+      const scaledWidth = canvasW * idealZoom;
+      const scaledHeight = canvasH * idealZoom;
+      const offsetX = (containerWidth - scaledWidth) / 2;
+      const offsetY = (containerHeight - scaledHeight) / 2;
+
+      console.log('[TECKSTUDIO] Re-fit applying:', { idealZoom, offsetX, offsetY });
+
+      fabricRef.current.setViewportTransform([idealZoom, 0, 0, idealZoom, offsetX, offsetY]);
+      store.setZoom(idealZoom);
+      fabricRef.current.renderAll();
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [isProjectLoading, canvasWidth, canvasHeight]);
 
   useEffect(() => {
     if (!fabricRef.current) return;
@@ -101,14 +262,94 @@ export const CanvasWorkspace: React.FC = () => {
       const fc = fabricRef.current;
       if (!fc) return;
       const ptr = fc.getPointer(e as any);
-      const imageSrc = e.dataTransfer?.getData('imageSrc');
-      const imageName = e.dataTransfer?.getData('imageName') || 'Uploaded image';
+      const stickerPayloadRaw = e.dataTransfer?.getData('application/x-teckstudio-sticker');
+      if (stickerPayloadRaw) {
+        try {
+          const sticker = JSON.parse(stickerPayloadRaw) as StickerItem;
+          void addStickerToCanvas(fc, sticker, ptr).then((object) => {
+            useEditorStore.getState().setSelectedObject(object);
+            useEditorStore.getState().saveHistory();
+          }).catch((error) => {
+            console.error('[TECKSTUDIO] Unable to add dragged sticker:', error);
+          });
+        } catch (error) {
+          console.error('[TECKSTUDIO] Invalid dragged sticker payload:', error);
+        }
+        return;
+      }
+      const elementPayloadRaw = e.dataTransfer?.getData('application/x-teckstudio-element');
+      if (elementPayloadRaw) {
+        try {
+          const payload = JSON.parse(elementPayloadRaw);
+          const object = createElementObjectFromPayload(payload, {
+            fill: useEditorStore.getState().fillColor,
+            stroke: useEditorStore.getState().strokeColor,
+            strokeWidth: useEditorStore.getState().strokeWidth,
+          });
+          if (object) {
+            addObjectToCanvas(fc, object, ptr);
+            useEditorStore.getState().saveHistory();
+          }
+        } catch (error) {
+          console.error('[TECKSTUDIO] Unable to add dragged element:', error);
+        }
+        return;
+      }
 
-      const addImageAtPointer = (src: string, name: string) => {
+      const photoPayloadRaw = e.dataTransfer?.getData('application/x-teckstudio-photo');
+      let photoPayload: EditorElement | null = null;
+      if (photoPayloadRaw) {
+        try {
+          const parsed = JSON.parse(photoPayloadRaw) as EditorElement;
+          if (parsed.kind === 'photo' && parsed.sourceUrl) photoPayload = parsed;
+        } catch (error) {
+          console.error('[TECKSTUDIO] Invalid dragged photo payload:', error);
+        }
+      }
+      const imageSrc = photoPayload?.sourceUrl || e.dataTransfer?.getData('imageSrc');
+      const imageName = photoPayload ? `Photo — ${photoPayload.name}` : e.dataTransfer?.getData('imageName') || 'Uploaded image';
+
+      const findFrameAtPointer = () => {
+        const point = new fabric.Point(ptr.x, ptr.y);
+        return fc.getObjects().slice().reverse().find((object) => (
+          isFrameElementObject(object) &&
+          object.visible !== false &&
+          object.containsPoint(point)
+        ));
+      };
+
+      const addImageAtPointer = (src: string, name: string, metadata?: Partial<EditorElement>) => {
         fabric.Image.fromURL(src, (img) => {
           const maxWidth = Math.min(420, fc.getWidth() * 0.6);
           const maxHeight = Math.min(420, fc.getHeight() * 0.6);
           const scale = img.width && img.height ? Math.min(maxWidth / img.width, maxHeight / img.height, 1) : 1;
+          const elementMetadata: ElementMetadata | undefined = metadata?.kind === 'photo' ? {
+            id: window.crypto?.randomUUID ? `photo-${window.crypto.randomUUID()}` : `photo_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+            elementId: metadata.id || 'photo',
+            elementKind: 'photo',
+            displayName: metadata.name || name.replace(/^Photo\s+—\s+/, ''),
+            category: metadata.category || 'Photos',
+            subcategory: metadata.subcategory,
+            sourceUrl: src,
+            thumbnailUrl: metadata.thumbnailUrl,
+            previewUrl: metadata.previewUrl,
+            isPremium: metadata.isPremium,
+            editable: true,
+            provider: metadata.provider || 'asset-library',
+            licence: metadata.licence || 'Project asset licence',
+            photoConfig: {
+              ...(metadata.photoConfig || {}),
+              alt: metadata.name || name.replace(/^Photo\s+—\s+/, ''),
+              naturalWidth: metadata.width,
+              naturalHeight: metadata.height,
+            },
+            config: {
+              ...(metadata.photoConfig || {}),
+              alt: metadata.name || name.replace(/^Photo\s+—\s+/, ''),
+              naturalWidth: metadata.width,
+              naturalHeight: metadata.height,
+            },
+          } : undefined;
           img.set({
             left: ptr.x,
             top: ptr.y,
@@ -117,7 +358,27 @@ export const CanvasWorkspace: React.FC = () => {
             scaleX: scale,
             scaleY: scale,
             name,
-            id: window.crypto?.randomUUID ? window.crypto.randomUUID() : `img_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+            id: elementMetadata?.id || (window.crypto?.randomUUID ? window.crypto.randomUUID() : `img_${Date.now()}_${Math.random().toString(36).slice(2)}`),
+            displayName: elementMetadata?.displayName || name,
+            objectType: metadata?.kind === 'photo' ? 'photo' : 'image',
+            elementId: metadata?.id,
+            elementKind: metadata?.kind,
+            elementCategory: metadata?.category,
+            elementTags: metadata?.tags,
+            elementEditable: true,
+            elementProvider: metadata?.provider,
+            elementLicence: metadata?.licence,
+            elementConfig: elementMetadata?.config,
+            photoConfig: elementMetadata?.photoConfig,
+            elementMetadata,
+            sourceUrl: src,
+            thumbnailUrl: metadata?.thumbnailUrl,
+            provider: metadata?.provider,
+            licence: metadata?.licence,
+            naturalWidth: img.width || metadata?.width,
+            naturalHeight: img.height || metadata?.height,
+            mediaMimeType: metadata?.mimeType,
+            staticExportSupported: true,
           } as any);
           fc.add(img);
           fc.setActiveObject(img);
@@ -126,8 +387,72 @@ export const CanvasWorkspace: React.FC = () => {
         }, { crossOrigin: 'anonymous' });
       };
 
+      const addImageToFrame = (frameObject: fabric.Object, src: string, name: string, metadata?: Partial<EditorElement>) => {
+        fabric.Image.fromURL(src, (img) => {
+          if (!img.width || !img.height) {
+            console.error('[TECKSTUDIO] Unable to fill frame because image has no dimensions.');
+            return;
+          }
+          const frameId = String(frameObject.get('id' as keyof fabric.Object) || frameObject.get('elementId' as keyof fabric.Object) || `frame_${Date.now()}`);
+          const clipBounds = getFrameClipBoundsForObject(frameObject);
+          const scale = Math.max(clipBounds.width / img.width, clipBounds.height / img.height);
+          const oldFrameImages = fc.getObjects().filter((object) => (
+            object.get('frameRole' as keyof fabric.Object) === 'content' &&
+            object.get('frameId' as keyof fabric.Object) === frameId
+          ));
+          oldFrameImages.forEach((object) => fc.remove(object));
+          img.set({
+            left: clipBounds.left + clipBounds.width / 2,
+            top: clipBounds.top + clipBounds.height / 2,
+            originX: 'center',
+            originY: 'center',
+            scaleX: scale,
+            scaleY: scale,
+            clipPath: createFrameClipPathForObject(frameObject),
+            name: `Framed Photo — ${metadata?.name || name.replace(/^Photo\s+—\s+/, '')}`,
+            id: window.crypto?.randomUUID ? `frame-photo-${window.crypto.randomUUID()}` : `frame_photo_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+            displayName: metadata?.name || name,
+            objectType: 'photo',
+            elementKind: 'photo',
+            elementEditable: true,
+            elementId: metadata?.id || 'framed-photo',
+            elementCategory: metadata?.category || 'Photos',
+            elementTags: metadata?.tags || [],
+            elementProvider: metadata?.provider || 'asset-library',
+            elementLicence: metadata?.licence || 'Project asset licence',
+            sourceUrl: src,
+            thumbnailUrl: metadata?.thumbnailUrl,
+            originalWidth: img.width || metadata?.width,
+            originalHeight: img.height || metadata?.height,
+            naturalWidth: img.width || metadata?.width,
+            naturalHeight: img.height || metadata?.height,
+            mediaMimeType: metadata?.mimeType,
+            frameId,
+            frameRole: 'content',
+            clipRole: 'image',
+            frameConfig: frameObject.get('frameConfig' as keyof fabric.Object),
+            photoConfig: {
+              ...(metadata?.photoConfig || {}),
+              alt: metadata?.name || name,
+              naturalWidth: img.width || metadata?.width,
+              naturalHeight: img.height || metadata?.height,
+              imageScale: scale,
+            },
+            staticExportSupported: true,
+          } as Record<string, unknown>);
+          fc.add(img);
+          frameObject.bringToFront();
+          fc.setActiveObject(img);
+          fc.requestRenderAll();
+          useEditorStore.getState().setSelectedObject(img);
+          useEditorStore.getState().saveHistory();
+        }, { crossOrigin: 'anonymous' });
+      };
+
       if (imageSrc) {
-        addImageAtPointer(imageSrc, imageName);
+        const targetFrame = findFrameAtPointer();
+        if (targetFrame) addImageToFrame(targetFrame, imageSrc, imageName, photoPayload || undefined);
+        else addImageAtPointer(imageSrc, imageName, photoPayload || undefined);
         return;
       }
 
@@ -136,7 +461,11 @@ export const CanvasWorkspace: React.FC = () => {
         const reader = new FileReader();
         reader.onload = (event) => {
           const dataUrl = event.target?.result;
-          if (typeof dataUrl === 'string') addImageAtPointer(dataUrl, droppedFile.name);
+          if (typeof dataUrl === 'string') {
+            const targetFrame = findFrameAtPointer();
+            if (targetFrame) addImageToFrame(targetFrame, dataUrl, droppedFile.name);
+            else addImageAtPointer(dataUrl, droppedFile.name);
+          }
         };
         reader.readAsDataURL(droppedFile);
         return;
@@ -167,14 +496,39 @@ export const CanvasWorkspace: React.FC = () => {
   return (
     <div
       ref={containerRef}
-      className="flex-1 h-full w-full bg-[#18181b] overflow-auto flex items-center justify-center relative select-none"
+      className="flex-1 h-full w-full bg-[#18181b] overflow-auto relative select-none"
+      data-canvas-area
       style={{
         backgroundImage: 'radial-gradient(#27272a 1px, transparent 1px)',
         backgroundSize: '24px 24px',
       }}
     >
+      {isProjectLoading && (
+        <div className="absolute top-5 left-1/2 z-20 -translate-x-1/2 rounded-2xl border border-violet-400/30 bg-zinc-950/95 px-4 py-2 text-xs font-semibold text-violet-100 shadow-xl shadow-black/30">
+          Loading design canvas…
+        </div>
+      )}
+
+      {projectLoadError && (
+        <div className="absolute top-5 left-1/2 z-30 w-[min(520px,calc(100%-2rem))] -translate-x-1/2 rounded-2xl border border-rose-500/30 bg-rose-950/95 p-4 text-sm text-rose-50 shadow-xl shadow-black/40">
+          <div className="font-bold">Canvas could not load</div>
+          <div className="mt-1 text-xs leading-5 text-rose-100/80">{projectLoadError}</div>
+          <div className="mt-3 flex gap-2">
+            {projectId && (
+              <button type="button" onClick={() => loadProject(projectId)} className="rounded-xl bg-rose-200 px-3 py-1.5 text-xs font-bold text-rose-950 hover:bg-white">
+                Retry
+              </button>
+            )}
+            <button type="button" onClick={clearProjectLoadError} className="rounded-xl border border-rose-200/30 px-3 py-1.5 text-xs font-bold text-rose-100 hover:bg-rose-500/10">
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="canvas-container shadow-2xl relative">
         <canvas ref={canvasRef} />
+        <PageSelectionOverlay />
       </div>
     </div>
   );

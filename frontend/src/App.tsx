@@ -41,30 +41,30 @@ const SharedViewPage: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#09090b] flex items-center justify-center">
-        <div className="text-zinc-400 text-sm">Loading design...</div>
+      <div className="min-h-screen flex items-center justify-center" style={{ background: '#08080D' }}>
+        <div className="text-sm" style={{ color: '#A8A8B8' }}>Loading design...</div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="min-h-screen bg-[#09090b] flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center" style={{ background: '#08080D' }}>
         <div className="text-center">
-          <p className="text-zinc-400 text-sm mb-4">{error}</p>
-          <a href="/" className="text-violet-400 text-sm hover:underline">Go to TECKSTUDIO</a>
+          <p className="text-sm mb-4" style={{ color: '#A8A8B8' }}>{error}</p>
+          <a href="/" className="text-sm hover:underline" style={{ color: '#C4B5FD' }}>Go to TECKSTUDIO</a>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#09090b] flex flex-col items-center justify-center p-8">
-      <h1 className="text-xl font-bold text-zinc-100 mb-2">{projectData?.project_name}</h1>
-      <p className="text-zinc-500 text-sm mb-6">Shared via TECKSTUDIO</p>
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8 text-center max-w-md">
-        <p className="text-zinc-400 text-sm">This design can be viewed in the editor.</p>
-        <a href={`/editor/${projectData?.project_id}`} className="mt-4 inline-block bg-violet-600 hover:bg-violet-500 text-white px-4 py-2 rounded-lg text-sm font-semibold">
+    <div className="min-h-screen flex flex-col items-center justify-center p-8" style={{ background: '#08080D' }}>
+      <h1 className="text-xl font-bold mb-2" style={{ color: '#F8FAFC' }}>{projectData?.project_name}</h1>
+      <p className="text-sm mb-6" style={{ color: '#71717F' }}>Shared via TECKSTUDIO</p>
+      <div className="rounded-xl p-8 text-center max-w-md" style={{ background: '#12121B', border: '1px solid rgba(255, 255, 255, 0.10)' }}>
+        <p className="text-sm" style={{ color: '#A8A8B8' }}>This design can be viewed in the editor.</p>
+        <a href={`/editor/${projectData?.project_id}`} className="mt-4 inline-block text-white px-4 py-2 rounded-lg text-sm font-semibold" style={{ background: 'linear-gradient(135deg, #7C3AED, #A855F7)' }}>
           Open in Editor
         </a>
       </div>

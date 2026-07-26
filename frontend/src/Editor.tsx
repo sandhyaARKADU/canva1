@@ -11,12 +11,20 @@ import { ZoomController } from './components/editor/ZoomController';
 import { KeyboardShortcutsModal } from './components/editor/KeyboardShortcutsModal';
 import { SmartResize } from './components/editor/SmartResize';
 import { EffectsPanel } from './components/editor/EffectsPanel';
+import { DesignQualityPanel } from './components/editor/DesignQualityPanel';
+import { ElementToolbar } from './components/editor/ElementToolbar';
+import { ContextMenu } from './components/editor/ContextMenu';
+import { ColorPaletteGenerator } from './components/editor/ColorPaletteGenerator';
+import { TextStylesPanel } from './components/editor/TextStylesPanel';
+import { EnhancedExportPanel } from './components/editor/EnhancedExportPanel';
+import { SaveAsTemplate } from './components/editor/SaveAsTemplate';
+import { BackgroundPatterns } from './components/editor/BackgroundPatterns';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useEditorStore } from './store/useEditorStore';
-import { Sparkles, Image, Layers, Palette, Wand2, Maximize } from 'lucide-react';
+import { Sparkles, Image, Layers, Palette, Wand2, Maximize, ShieldCheck, Type, Download, Bookmark, Grid3x3 } from 'lucide-react';
 
-type RightPanel = 'ai' | 'assets' | 'brand' | 'properties' | 'effects' | 'resize';
-const RIGHT_PANELS: RightPanel[] = ['ai', 'assets', 'brand', 'properties', 'effects', 'resize'];
+type RightPanel = 'ai' | 'assets' | 'brand' | 'properties' | 'effects' | 'resize' | 'audit' | 'colors' | 'text-styles' | 'export' | 'templates' | 'patterns';
+const RIGHT_PANELS: RightPanel[] = ['ai', 'assets', 'brand', 'properties', 'effects', 'resize', 'audit', 'colors', 'text-styles', 'export', 'templates', 'patterns'];
 
 const App: React.FC = () => {
   // Initialize canvas-level keyboard listeners
@@ -68,8 +76,26 @@ const App: React.FC = () => {
     return () => window.removeEventListener('teckstudio:open-panel', handleOpenPanel);
   }, []);
 
+  useEffect(() => {
+    if (localStorage.getItem('teckstudio_pending_brand_kit')) {
+      setRightPanel('brand');
+      return;
+    }
+
+    const pendingPanel = sessionStorage.getItem('teckstudio_pending_editor_panel');
+    if (!pendingPanel) return;
+    try {
+      const payload = JSON.parse(pendingPanel) as { panel?: RightPanel };
+      if (payload.panel && RIGHT_PANELS.includes(payload.panel)) {
+        setRightPanel(payload.panel);
+      }
+    } finally {
+      sessionStorage.removeItem('teckstudio_pending_editor_panel');
+    }
+  }, []);
+
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#09090b] text-zinc-100 overflow-hidden font-sans">
+    <div className="h-screen w-screen flex flex-col bg-[#08080D] text-zinc-100 overflow-hidden font-sans">
       {/* Top action toolbar */}
       <Toolbar />
 
@@ -81,6 +107,8 @@ const App: React.FC = () => {
         {/* Center: Interactive design canvas */}
         <div className="flex-1 h-full relative flex flex-col overflow-hidden">
           <CanvasWorkspace />
+          {/* Floating selection toolbar — appears above selected elements */}
+          <ElementToolbar />
           {/* Floating zoom widgets inside canvas workspace */}
           <ZoomController />
         </div>
@@ -88,13 +116,19 @@ const App: React.FC = () => {
         {/* Right Side: Properties, AI Tools, and Assets */}
         <div className="w-80 flex flex-col border-l border-zinc-800 min-h-0">
           {/* Panel Tabs */}
-          <div className="flex border-b border-zinc-800 shrink-0">
+          <div className="flex border-b border-zinc-800 shrink-0 overflow-x-auto">
             {[
-              { id: 'ai' as RightPanel, label: 'AI Studio', icon: Sparkles, active: 'text-violet-400 border-b-2 border-violet-400 bg-violet-500/5' },
+              { id: 'ai' as RightPanel, label: 'AI', icon: Sparkles, active: 'text-violet-400 border-b-2 border-violet-400 bg-violet-500/5' },
+              { id: 'colors' as RightPanel, label: 'Colors', icon: Palette, active: 'text-orange-400 border-b-2 border-orange-400 bg-orange-500/5' },
+              { id: 'text-styles' as RightPanel, label: 'Text', icon: Type, active: 'text-blue-400 border-b-2 border-blue-400 bg-blue-500/5' },
               { id: 'assets' as RightPanel, label: 'Assets', icon: Image, active: 'text-cyan-400 border-b-2 border-cyan-400 bg-cyan-500/5' },
               { id: 'effects' as RightPanel, label: 'Effects', icon: Wand2, active: 'text-fuchsia-400 border-b-2 border-fuchsia-400 bg-fuchsia-500/5' },
+              { id: 'patterns' as RightPanel, label: 'Pattern', icon: Grid3x3, active: 'text-emerald-400 border-b-2 border-emerald-400 bg-emerald-500/5' },
               { id: 'resize' as RightPanel, label: 'Resize', icon: Maximize, active: 'text-cyan-400 border-b-2 border-cyan-400 bg-cyan-500/5' },
               { id: 'brand' as RightPanel, label: 'Brand', icon: Palette, active: 'text-pink-400 border-b-2 border-pink-400 bg-pink-500/5' },
+              { id: 'templates' as RightPanel, label: 'Template', icon: Bookmark, active: 'text-amber-400 border-b-2 border-amber-400 bg-amber-500/5' },
+              { id: 'export' as RightPanel, label: 'Export', icon: Download, active: 'text-emerald-400 border-b-2 border-emerald-400 bg-emerald-500/5' },
+              { id: 'audit' as RightPanel, label: 'Audit', icon: ShieldCheck, active: 'text-emerald-400 border-b-2 border-emerald-400 bg-emerald-500/5' },
               { id: 'properties' as RightPanel, label: 'Props', icon: Layers, active: 'text-amber-400 border-b-2 border-amber-400 bg-amber-500/5' },
             ].map((tab) => {
               const Icon = tab.icon;
@@ -102,7 +136,7 @@ const App: React.FC = () => {
                 <button
                   key={tab.id}
                   onClick={() => setRightPanel(tab.id)}
-                  className={`flex items-center justify-center gap-1 py-2 px-2 text-[9px] font-semibold transition-all cursor-pointer whitespace-nowrap ${
+                  className={`flex items-center justify-center gap-1 py-2 px-1.5 text-[9px] font-semibold transition-all cursor-pointer whitespace-nowrap ${
                     rightPanel === tab.id
                       ? tab.active
                       : 'text-zinc-500 hover:text-zinc-300 border-b-2 border-transparent'
@@ -122,10 +156,30 @@ const App: React.FC = () => {
                 <AIAssistant />
               </div>
             )}
+            {rightPanel === 'colors' && (
+              <div className="h-full overflow-y-auto">
+                <ColorPaletteGenerator />
+              </div>
+            )}
+            {rightPanel === 'text-styles' && (
+              <div className="h-full overflow-y-auto">
+                <TextStylesPanel />
+              </div>
+            )}
             {rightPanel === 'assets' && <RoyaltyFreeAssets />}
+            {rightPanel === 'audit' && (
+              <div className="h-full overflow-y-auto">
+                <DesignQualityPanel />
+              </div>
+            )}
             {rightPanel === 'effects' && (
               <div className="h-full overflow-y-auto p-4">
                 <EffectsPanel />
+              </div>
+            )}
+            {rightPanel === 'patterns' && (
+              <div className="h-full overflow-y-auto">
+                <BackgroundPatterns />
               </div>
             )}
             {rightPanel === 'resize' && (
@@ -134,6 +188,16 @@ const App: React.FC = () => {
               </div>
             )}
             {rightPanel === 'brand' && <BrandKit />}
+            {rightPanel === 'templates' && (
+              <div className="h-full overflow-y-auto p-3">
+                <SaveAsTemplate />
+              </div>
+            )}
+            {rightPanel === 'export' && (
+              <div className="h-full overflow-y-auto">
+                <EnhancedExportPanel />
+              </div>
+            )}
             {rightPanel === 'properties' && (
               <div className="h-full overflow-y-auto">
                 <PropertiesPanel />
@@ -148,6 +212,9 @@ const App: React.FC = () => {
         isOpen={showShortcuts}
         onClose={() => setShowShortcuts(false)}
       />
+
+      {/* Right-click context menu */}
+      <ContextMenu />
     </div>
   );
 };

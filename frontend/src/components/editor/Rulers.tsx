@@ -104,17 +104,17 @@ export const Rulers: React.FC<RulersProps> = ({ visible = true }) => {
   return (
     <>
       {/* Horizontal Ruler */}
-      <div className="absolute top-0 left-[20px] right-0 h-[20px] bg-[#121214] border-b border-zinc-800 z-20 overflow-hidden">
+      <div className="absolute top-0 left-[20px] right-0 h-[20px] bg-[#101018] border-b border-zinc-800 z-20 overflow-hidden">
         <canvas ref={horizontalRulerRef} className="h-full" />
       </div>
 
       {/* Vertical Ruler */}
-      <div className="absolute top-[20px] left-0 bottom-0 w-[20px] bg-[#121214] border-r border-zinc-800 z-20 overflow-hidden">
+      <div className="absolute top-[20px] left-0 bottom-0 w-[20px] bg-[#101018] border-r border-zinc-800 z-20 overflow-hidden">
         <canvas ref={verticalRulerRef} className="w-full" />
       </div>
 
       {/* Ruler corner */}
-      <div className="absolute top-0 left-0 w-[20px] h-[20px] bg-[#121214] border-b border-r border-zinc-800 z-30" />
+      <div className="absolute top-0 left-0 w-[20px] h-[20px] bg-[#101018] border-b border-r border-zinc-800 z-30" />
     </>
   );
 };

@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, String, Text, DateTime, ForeignKey, Integer, Boolean, JSON, inspect, text
+from sqlalchemy import create_engine, Column, String, Text, DateTime, ForeignKey, Integer, Boolean, JSON, UniqueConstraint, inspect, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -30,9 +30,13 @@ class User(Base):
     projects = relationship("Project", back_populates="owner", cascade="all, delete-orphan")
     brand_kits = relationship("BrandKit", back_populates="owner", cascade="all, delete-orphan")
     favorites = relationship("Favorite", back_populates="user", cascade="all, delete-orphan")
+    template_favourites = relationship("TemplateFavourite", back_populates="user", cascade="all, delete-orphan")
+    template_usages = relationship("TemplateUsage", back_populates="user", cascade="all, delete-orphan")
     shared_designs = relationship("SharedDesign", back_populates="shared_by_user", foreign_keys="SharedDesign.shared_by")
     auth_sessions = relationship("AuthSession", back_populates="user", cascade="all, delete-orphan")
     assets = relationship("Asset", back_populates="owner", cascade="all, delete-orphan")
+    font_assets = relationship("FontAsset", back_populates="owner", cascade="all, delete-orphan")
+    processed_images = relationship("ProcessedImage", back_populates="owner", cascade="all, delete-orphan")
 
 
 class AuthSession(Base):
@@ -96,19 +100,32 @@ class Template(Base):
 
     id = Column(String(50), primary_key=True)
     name = Column(String(200), nullable=False)
+    slug = Column(String(160), unique=True, nullable=True)
     description = Column(Text, nullable=True)
     category_id = Column(String(50), ForeignKey("categories.id"), nullable=True)
+    subcategory_id = Column(String(50), ForeignKey("template_subcategories.id"), nullable=True)
+    template_type = Column(String(80), nullable=True)
     data = Column(Text, nullable=True)  # Fabric.js JSON template
-    thumbnail = Column(String(500), nullable=True)  # Preview image URL
+    thumbnail = Column(String(500), nullable=True)  # Backward-compatible preview image URL
+    thumbnail_url = Column(Text, nullable=True)
+    preview_url = Column(Text, nullable=True)
     width = Column(Integer, default=800)
     height = Column(Integer, default=800)
     tags = Column(Text, nullable=True)  # JSON array of tags
     is_premium = Column(Boolean, default=False)
+    is_featured = Column(Boolean, default=False)
+    sort_weight = Column(Integer, default=0)
+    status = Column(String(30), default="published")
+    metadata_json = Column(JSON, nullable=True)
+    created_by = Column(String(50), ForeignKey("users.id"), nullable=True)
     use_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     category = relationship("Category", back_populates="templates")
+    subcategory = relationship("TemplateSubcategory", back_populates="templates")
+    favourites = relationship("TemplateFavourite", back_populates="template", cascade="all, delete-orphan")
+    usages = relationship("TemplateUsage", back_populates="template", cascade="all, delete-orphan")
 
 
 class Category(Base):
@@ -124,6 +141,50 @@ class Category(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     templates = relationship("Template", back_populates="category")
+    subcategories = relationship("TemplateSubcategory", back_populates="category", cascade="all, delete-orphan")
+
+
+class TemplateSubcategory(Base):
+    __tablename__ = "template_subcategories"
+    __table_args__ = (UniqueConstraint("category_id", "slug", name="uq_template_subcategories_category_slug"),)
+
+    id = Column(String(50), primary_key=True)
+    category_id = Column(String(50), ForeignKey("categories.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(100), nullable=False)
+    slug = Column(String(100), nullable=False)
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    category = relationship("Category", back_populates="subcategories")
+    templates = relationship("Template", back_populates="subcategory")
+
+
+class TemplateFavourite(Base):
+    __tablename__ = "template_favourites"
+    __table_args__ = (UniqueConstraint("user_id", "template_id", name="uq_template_favourites_user_template"),)
+
+    id = Column(String(50), primary_key=True)
+    user_id = Column(String(50), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    template_id = Column(String(50), ForeignKey("templates.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="template_favourites")
+    template = relationship("Template", back_populates="favourites")
+
+
+class TemplateUsage(Base):
+    __tablename__ = "template_usage"
+
+    id = Column(String(50), primary_key=True)
+    user_id = Column(String(50), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    template_id = Column(String(50), ForeignKey("templates.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(String(50), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
+    action = Column(String(50), default="use")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="template_usages")
+    template = relationship("Template", back_populates="usages")
+    project = relationship("Project")
 
 
 class BrandKit(Base):
@@ -131,6 +192,10 @@ class BrandKit(Base):
 
     id = Column(String(50), primary_key=True)
     name = Column(String(100), nullable=False)
+    company_name = Column(String(150), nullable=True)
+    description = Column(Text, nullable=True)
+    industry = Column(String(100), nullable=True)
+    website = Column(String(255), nullable=True)
     user_id = Column(String(50), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -148,6 +213,9 @@ class BrandColor(Base):
     brand_kit_id = Column(String(50), ForeignKey("brand_kits.id", ondelete="CASCADE"), nullable=False)
     name = Column(String(100), nullable=False)
     hex_value = Column(String(20), nullable=False)
+    role = Column(String(50), default="custom")
+    description = Column(Text, nullable=True)
+    is_primary = Column(Boolean, default=False)
     sort_order = Column(Integer, default=0)
 
     brand_kit = relationship("BrandKit", back_populates="colors")
@@ -161,6 +229,9 @@ class BrandFont(Base):
     name = Column(String(100), nullable=False)
     family = Column(String(100), nullable=False)
     weight = Column(String(50), default="normal")
+    role = Column(String(50), default="body")
+    style = Column(String(50), nullable=True)
+    fallback = Column(String(100), nullable=True)
     sort_order = Column(Integer, default=0)
 
     brand_kit = relationship("BrandKit", back_populates="fonts")
@@ -174,6 +245,10 @@ class BrandLogo(Base):
     name = Column(String(200), nullable=False)
     file_data = Column(Text, nullable=False)  # Base64 encoded image
     file_type = Column(String(50), default="image/png")
+    role = Column(String(50), default="primary")
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    file_size = Column(Integer, nullable=True)
     sort_order = Column(Integer, default=0)
 
     brand_kit = relationship("BrandKit", back_populates="logos")
@@ -272,6 +347,58 @@ class GeneratedAsset(Base):
     project = relationship("Project", back_populates="generated_assets")
 
 
+class ElementCategory(Base):
+    __tablename__ = "element_categories"
+
+    id = Column(String(50), primary_key=True)
+    name = Column(String(100), nullable=False)
+    slug = Column(String(100), nullable=False, unique=True, index=True)
+    parent_id = Column(String(50), ForeignKey("element_categories.id", ondelete="SET NULL"), nullable=True)
+    display_order = Column(Integer, default=0)
+    icon = Column(String(100), nullable=True)
+    status = Column(String(30), default="active")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ElementFavorite(Base):
+    __tablename__ = "element_favorites"
+
+    id = Column(String(50), primary_key=True)
+    user_id = Column(String(50), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    element_id = Column(String(100), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ElementRecentItem(Base):
+    __tablename__ = "element_recent_items"
+
+    id = Column(String(50), primary_key=True)
+    user_id = Column(String(50), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    element_id = Column(String(100), nullable=False, index=True)
+    usage_count = Column(Integer, default=1)
+    last_used_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ElementCollection(Base):
+    __tablename__ = "element_collections"
+
+    id = Column(String(50), primary_key=True)
+    user_id = Column(String(50), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(150), nullable=False)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ElementCollectionItem(Base):
+    __tablename__ = "element_collection_items"
+
+    id = Column(String(50), primary_key=True)
+    collection_id = Column(String(50), ForeignKey("element_collections.id", ondelete="CASCADE"), nullable=False, index=True)
+    element_id = Column(String(100), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class UploadedAsset(Base):
     __tablename__ = "uploaded_assets"
 
@@ -284,6 +411,54 @@ class UploadedAsset(Base):
     storage_path = Column(String(500), nullable=False)
     public_url = Column(String(500), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class FontAsset(Base):
+    __tablename__ = "font_assets"
+
+    id = Column(String(50), primary_key=True)
+    user_id = Column(String(50), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    family = Column(String(150), nullable=False)
+    display_name = Column(String(150), nullable=False)
+    category = Column(String(80), nullable=False, default="uploaded")
+    source = Column(String(30), nullable=False, default="uploaded")
+    filename = Column(String(255), nullable=False)
+    mime_type = Column(String(100), nullable=False)
+    file_size = Column(Integer, nullable=False)
+    storage_path = Column(String(500), nullable=False)
+    public_url = Column(String(500), nullable=False)
+    weights = Column(JSON, nullable=True)
+    styles = Column(JSON, nullable=True)
+    is_premium = Column(Boolean, default=False)
+    is_variable = Column(Boolean, default=False)
+    licence = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    owner = relationship("User", back_populates="font_assets")
+
+
+class ProcessedImage(Base):
+    __tablename__ = "processed_images"
+
+    id = Column(String(50), primary_key=True)
+    user_id = Column(String(50), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    operation = Column(String(80), nullable=False)
+    provider = Column(String(100), nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    original_storage_path = Column(String(500), nullable=False)
+    processed_storage_path = Column(String(500), nullable=False)
+    mask_storage_path = Column(String(500), nullable=True)
+    original_url = Column(String(500), nullable=False)
+    processed_url = Column(String(500), nullable=False)
+    mask_url = Column(String(500), nullable=True)
+    mime_type = Column(String(100), nullable=False, default="image/png")
+    width = Column(Integer, nullable=False)
+    height = Column(Integer, nullable=False)
+    metadata_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    owner = relationship("User", back_populates="processed_images")
 
 
 class ChatSession(Base):
@@ -324,6 +499,60 @@ class DeletedItem(Base):
     item_id = Column(String(50), nullable=False)
     metadata_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id = Column(String(50), primary_key=True)
+    user_id = Column(String(50), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String(200), nullable=False)
+    message = Column(Text, nullable=False)
+    type = Column(String(50), default="info")
+    is_read = Column(Boolean, default=False)
+    action_url = Column(String(500), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ContentCalendarEvent(Base):
+    __tablename__ = "content_calendar_events"
+
+    id = Column(String(50), primary_key=True)
+    user_id = Column(String(50), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(String(50), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
+    title = Column(String(200), nullable=False)
+    platform = Column(String(50), nullable=False)  # instagram, facebook, linkedin, twitter, etc.
+    scheduled_at = Column(DateTime, nullable=False)
+    status = Column(String(50), default="scheduled")  # scheduled, published, draft
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id = Column(String(50), primary_key=True)
+    user_id = Column(String(50), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    action = Column(String(100), nullable=False)
+    resource_type = Column(String(50), nullable=True)
+    resource_id = Column(String(50), nullable=True)
+    ip_address = Column(String(100), nullable=True)
+    user_agent = Column(String(255), nullable=True)
+    details_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class FeatureFlag(Base):
+    __tablename__ = "feature_flags"
+
+    id = Column(String(50), primary_key=True)
+    name = Column(String(100), nullable=False)
+    key = Column(String(100), unique=True, nullable=False)
+    description = Column(Text, nullable=True)
+    is_enabled = Column(Boolean, default=True)
+    rules_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 
 
 class RecentHistory(Base):
@@ -368,6 +597,17 @@ class ExportMetadata(Base):
 
 
 # ─── Create tables ────────────────────────────────
+def _has_active_public_assets() -> bool:
+    try:
+        with engine.connect() as conn:
+            count = conn.execute(text(
+                "SELECT COUNT(*) FROM assets WHERE user_id IS NULL AND is_active = 1 LIMIT 1"
+            )).scalar()
+            return bool(count and int(count) > 0)
+    except Exception:
+        return False
+
+
 def init_db():
     """Create database if not exists, then create tables."""
     # Connect without database to create it if needed
@@ -387,9 +627,14 @@ def init_db():
     _ensure_schema_columns()
     print(f"Database '{settings.DB_NAME}' initialized with tables.")
 
-    # Seed default categories
+    # Seed default categories. Public asset seeding is intentionally skipped when
+    # active public assets already exist, because reseeding thousands of image
+    # records on every dev restart can block startup and exhaust MySQL temp disk.
     _seed_default_categories()
-    _seed_default_assets()
+    if _has_active_public_assets():
+        print("Asset seed skipped: active public assets already exist.")
+    else:
+        _seed_default_assets()
 
 
 def _ensure_schema_columns():
@@ -445,6 +690,52 @@ def _ensure_schema_columns():
             for column_name, ddl in asset_additions.items():
                 if column_name not in asset_columns:
                     conn.execute(text(f"ALTER TABLE assets ADD COLUMN {column_name} {ddl}"))
+
+        if "brand_kits" in inspector.get_table_names():
+            brand_kit_columns = {column["name"] for column in inspector.get_columns("brand_kits")}
+            brand_kit_additions = {
+                "company_name": "VARCHAR(150) NULL",
+                "description": "TEXT NULL",
+                "industry": "VARCHAR(100) NULL",
+                "website": "VARCHAR(255) NULL",
+            }
+            for column_name, ddl in brand_kit_additions.items():
+                if column_name not in brand_kit_columns:
+                    conn.execute(text(f"ALTER TABLE brand_kits ADD COLUMN {column_name} {ddl}"))
+
+        if "brand_colors" in inspector.get_table_names():
+            brand_color_columns = {column["name"] for column in inspector.get_columns("brand_colors")}
+            brand_color_additions = {
+                "role": "VARCHAR(50) DEFAULT 'custom'",
+                "description": "TEXT NULL",
+                "is_primary": "BOOLEAN DEFAULT 0",
+            }
+            for column_name, ddl in brand_color_additions.items():
+                if column_name not in brand_color_columns:
+                    conn.execute(text(f"ALTER TABLE brand_colors ADD COLUMN {column_name} {ddl}"))
+
+        if "brand_fonts" in inspector.get_table_names():
+            brand_font_columns = {column["name"] for column in inspector.get_columns("brand_fonts")}
+            brand_font_additions = {
+                "role": "VARCHAR(50) DEFAULT 'body'",
+                "style": "VARCHAR(50) NULL",
+                "fallback": "VARCHAR(100) NULL",
+            }
+            for column_name, ddl in brand_font_additions.items():
+                if column_name not in brand_font_columns:
+                    conn.execute(text(f"ALTER TABLE brand_fonts ADD COLUMN {column_name} {ddl}"))
+
+        if "brand_logos" in inspector.get_table_names():
+            brand_logo_columns = {column["name"] for column in inspector.get_columns("brand_logos")}
+            brand_logo_additions = {
+                "role": "VARCHAR(50) DEFAULT 'primary'",
+                "width": "INT NULL",
+                "height": "INT NULL",
+                "file_size": "INT NULL",
+            }
+            for column_name, ddl in brand_logo_additions.items():
+                if column_name not in brand_logo_columns:
+                    conn.execute(text(f"ALTER TABLE brand_logos ADD COLUMN {column_name} {ddl}"))
 
 
 def _seed_default_categories():
@@ -802,16 +1093,24 @@ def _seed_default_assets(category_slug: str | None = None, limit_per_category: i
                 height = 100 if category == "elements" else None
                 local_storage_path = None
             else:
-                (
-                    asset_id, name, category, tags, file_data, file_type,
-                    source, source_url, asset_license, license_url,
-                    attribution, provider, width, height, local_storage_path,
-                ) = asset
+                thumbnail_override = None
+                if len(asset) == 16:
+                    (
+                        asset_id, name, category, tags, file_data, file_type,
+                        source, source_url, asset_license, license_url,
+                        attribution, provider, width, height, local_storage_path, thumbnail_override,
+                    ) = asset
+                else:
+                    (
+                        asset_id, name, category, tags, file_data, file_type,
+                        source, source_url, asset_license, license_url,
+                        attribution, provider, width, height, local_storage_path,
+                    ) = asset
 
             title = name
             description = f"{name} asset for {category} designs."
             image_url = file_data
-            thumbnail_url = file_data
+            thumbnail_url = thumbnail_override or file_data
             mime_type = file_type
             orientation = (
                 "landscape" if width and height and width > height

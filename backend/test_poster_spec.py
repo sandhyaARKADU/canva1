@@ -9,6 +9,7 @@ from routes.ai import (
     normalize_poster_spec_payload,
     normalize_poster_spec_theme,
 )
+from routes import ai_poster
 
 
 def test_theme_normalization() -> None:
@@ -66,6 +67,32 @@ def test_normalize_partial_provider_payload() -> None:
     assert [card.number for card in spec.cards] == [1, 2, 3, 4, 5]
     assert spec.cards[0].title == "Prompting"
     assert spec.cta.text == "Start now"
+
+
+def test_poster_artifact_rejects_local_placeholder(monkeypatch) -> None:
+    monkeypatch.setattr(
+        ai_poster,
+        "generate_image",
+        lambda *_args, **_kwargs: {
+            "success": True,
+            "url": "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=",
+            "source": "local-svg",
+            "width": 800,
+            "height": 1000,
+        },
+    )
+
+    result = ai_poster.generate_poster_artifact(
+        prompt="A colourful flat illustration poster featuring a lion, elephant, giraffe and zebra.",
+        width=800,
+        height=1000,
+        aspect_ratio="4:5",
+    )
+
+    assert result["success"] is False
+    assert result["image_url"] == ""
+    assert result["provider"] == "none"
+    assert result["fallbackReason"] == "All configured real image providers failed or were unavailable"
 
 
 if __name__ == "__main__":
