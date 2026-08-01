@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Type, Save, Trash2, Check, Plus, Wand2 } from 'lucide-react';
+import { Type, Save, Trash2, Wand2 } from 'lucide-react';
 import { fabric } from 'fabric';
 import { useEditorStore } from '../../store/useEditorStore';
 
@@ -66,31 +66,35 @@ function saveCustomPresets(presets: TextStylePreset[]) {
 }
 
 function readTextStyle(obj: fabric.Object): Partial<TextStylePreset> {
+  const textObject = obj as fabric.Textbox;
   return {
-    fontFamily: (obj.get('fontFamily') as string) || 'Inter',
-    fontSize: (obj.get('fontSize') as number) || 16,
-    fontWeight: String(obj.get('fontWeight') || 'normal'),
-    fontStyle: String(obj.get('fontStyle') || 'normal'),
-    fill: typeof obj.get('fill') === 'string' ? obj.get('fill') as string : '#ffffff',
-    textAlign: (obj.get('textAlign') as string) || 'left',
-    lineHeight: (obj.get('lineHeight') as number) || 1.4,
-    letterSpacing: (obj.get('charSpacing') as number) || 0,
-    underline: Boolean(obj.get('underline')),
+    fontFamily: textObject.fontFamily || 'Inter',
+    fontSize: textObject.fontSize || 16,
+    fontWeight: String(textObject.fontWeight || 'normal'),
+    fontStyle: String(textObject.fontStyle || 'normal'),
+    fill: typeof textObject.fill === 'string' ? textObject.fill : '#ffffff',
+    textAlign: textObject.textAlign || 'left',
+    lineHeight: textObject.lineHeight || 1.4,
+    letterSpacing: textObject.charSpacing || 0,
+    underline: Boolean(textObject.underline),
   };
 }
 
 function applyTextStyle(obj: fabric.Object, style: Partial<TextStylePreset>) {
-  if (style.fontFamily) obj.set('fontFamily', style.fontFamily);
-  if (style.fontSize) obj.set('fontSize', style.fontSize);
-  if (style.fontWeight) obj.set('fontWeight', style.fontWeight);
-  if (style.fontStyle) obj.set('fontStyle', style.fontStyle);
-  if (style.fill) obj.set('fill', style.fill);
-  if (style.textAlign) obj.set('textAlign', style.textAlign);
-  if (style.lineHeight !== undefined) obj.set('lineHeight', style.lineHeight);
-  if (style.letterSpacing !== undefined) obj.set('charSpacing', style.letterSpacing);
-  if (style.underline !== undefined) obj.set('underline', style.underline);
-  obj.initDimensions?.();
-  obj.setCoords();
+  const textObject = obj as fabric.Textbox;
+  textObject.set({
+    ...(style.fontFamily ? { fontFamily: style.fontFamily } : {}),
+    ...(style.fontSize ? { fontSize: style.fontSize } : {}),
+    ...(style.fontWeight ? { fontWeight: style.fontWeight } : {}),
+    ...(style.fontStyle ? { fontStyle: style.fontStyle } : {}),
+    ...(style.fill ? { fill: style.fill } : {}),
+    ...(style.textAlign ? { textAlign: style.textAlign } : {}),
+    ...(style.lineHeight !== undefined ? { lineHeight: style.lineHeight } : {}),
+    ...(style.letterSpacing !== undefined ? { charSpacing: style.letterSpacing } : {}),
+    ...(style.underline !== undefined ? { underline: style.underline } : {}),
+  } as fabric.ITextboxOptions);
+  textObject.initDimensions();
+  textObject.setCoords();
 }
 
 export const TextStylesPanel: React.FC = () => {

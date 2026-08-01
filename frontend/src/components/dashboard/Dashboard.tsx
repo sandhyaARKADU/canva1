@@ -422,6 +422,7 @@ export const Dashboard: React.FC = () => {
           width: _width,
           height: _height,
           data: templateData || undefined,
+          background_color: '#000000',
         })
       });
       const data = await response.json().catch(() => null);

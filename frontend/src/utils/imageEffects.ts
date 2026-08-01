@@ -43,7 +43,10 @@ const clamp = (value: number, min: number, max: number) => Math.min(max, Math.ma
 
 export const readImageEffectConfig = (image: fabric.Image | null): Required<ImageEffectConfig> => {
   if (!image) return { ...DEFAULT_IMAGE_EFFECTS };
-  const saved = image.get('imageEffectConfig' as keyof fabric.Image) as ImageEffectConfig | undefined;
+  const saved = (
+    image.get('imageEffectConfig' as keyof fabric.Image)
+    || image.get('filtersConfig' as keyof fabric.Image)
+  ) as ImageEffectConfig | undefined;
   if (saved) return { ...DEFAULT_IMAGE_EFFECTS, ...saved };
   const legacy = image.get('teckstudioEffects' as keyof fabric.Image) as Record<string, number> | undefined;
   if (!legacy) return { ...DEFAULT_IMAGE_EFFECTS };
@@ -100,6 +103,7 @@ export const applyImageEffectConfig = (image: fabric.Image, config: ImageEffectC
   image.filters = filters;
   image.set({
     imageEffectConfig: normalized,
+    filtersConfig: normalized,
     teckstudioEffects: {
       brightness: normalized.brightness + 100,
       contrast: normalized.contrast + 100,

@@ -1,0 +1,486 @@
+import { fabric } from 'fabric';
+import type {
+  EditorPage,
+  FabricObjectAnimation,
+  FabricObjectAnimationConfig,
+  TimelineClip,
+  TimelineKeyframe,
+  TimelineProject,
+  TimelineTransition,
+} from '../types/timeline';
+import { getPosterTrack } from '../types/timeline';
+import {
+  evaluateKeyframeValue,
+  evaluateObjectAnimationAtTime,
+  evaluateSceneAtTime,
+  evaluateTransitionAtTime,
+  normalizeObjectAnimation,
+} from './animationEvaluator';
+import { preloadFontsFromCanvasJson } from './fontLoader';
+import { DEFAULT_ASSET_FALLBACK_SVG, preloadImageAsset, resolveAssetUrl } from './assetUrlResolver';
+import type { SceneTimelineRenderer } from './masterTimelineManager';
+import { renderConnectorAnimationsAtTime } from './connectorAnimationManager';
+
+const editorOnly = (object: fabric.Object) => (
+  object.get('editorOnly' as keyof fabric.Object) === true
+  || object.get('excludeFromExport' as keyof fabric.Object) === true
+  || object.get('teckstudioObjectType' as keyof fabric.Object) === 'editorGuide'
+);
+
+export const isRenderableImageElement = (object: fabric.Object): boolean => {
+  if (object.type !== 'image') return false;
+  if (object.visible === false) return false;
+  if (Number(object.opacity ?? 1) <= 0) return false;
+
+  const role = String(object.get('role' as any) || object.get('objectType' as any) || '');
+  if (role === 'ocr-hotspot' || role === 'thumbnail-helper' || role === 'editor-only' || role === 'debug') {
+    return false;
+  }
+
+  if (
+    object.get('editorOnly' as any) === true
+    || object.get('excludeFromExport' as any) === true
+    || object.get('teckstudioObjectType' as any) === 'editorGuide'
+  ) {
+    return false;
+  }
+
+  return true;
+};
+
+const parseDimensions = (data: string, fallbackWidth: number, fallbackHeight: number) => {
+  try {
+    const parsed = JSON.parse(data);
+    return {
+      width: Math.max(Number(parsed.width) || fallbackWidth, 1),
+      height: Math.max(Number(parsed.height) || fallbackHeight, 1),
+    };
+  } catch {
+    return { width: fallbackWidth, height: fallbackHeight };
+  }
+};
+
+type BaseObjectState = {
+  left: number;
+  top: number;
+  scaleX: number;
+  scaleY: number;
+  angle: number;
+  opacity: number;
+  visible: boolean;
+  text?: string;
+  strokeDashArray?: number[];
+};
+
+const objectValue = (object: fabric.Object, key: string) => (
+  object.get(key as keyof fabric.Object) as unknown
+);
+
+class PreparedFabricScene {
+  readonly canvas: fabric.StaticCanvas;
+  readonly element: HTMLCanvasElement;
+  private baseStates = new Map<fabric.Object, BaseObjectState>();
+
+  constructor(canvas: fabric.StaticCanvas, element: HTMLCanvasElement) {
+    this.canvas = canvas;
+    this.element = element;
+    canvas.getObjects().forEach((object) => {
+      const animationConfig = objectValue(object, 'animationConfig') as FabricObjectAnimationConfig | undefined;
+      const savedFullText = animationConfig?.fullText;
+      this.baseStates.set(object, {
+        left: object.left || 0,
+        top: object.top || 0,
+        scaleX: object.scaleX || 1,
+        scaleY: object.scaleY || 1,
+        angle: object.angle || 0,
+        opacity: object.opacity ?? 1,
+        visible: object.visible !== false,
+        text: 'text' in object
+          ? String(savedFullText ?? (object as fabric.Text).text ?? '')
+          : undefined,
+        strokeDashArray: object.strokeDashArray ? [...object.strokeDashArray] : undefined,
+      });
+    });
+  }
+
+  renderAtTime(localTimeMs: number) {
+    const localTimeSeconds = Math.max(localTimeMs, 0) / 1000;
+    this.baseStates.forEach((base, object) => {
+      object.set(base);
+      const startSeconds = Number(objectValue(object, 'timelineStart') || 0);
+      const endValue = objectValue(object, 'timelineEnd');
+      const endSeconds = endValue === undefined ? Number.POSITIVE_INFINITY : Number(endValue);
+      object.set('visible', base.visible && localTimeSeconds >= startSeconds && localTimeSeconds <= endSeconds);
+      const keyframes = objectValue(object, 'timelineKeyframes') as TimelineKeyframe[] | undefined;
+      this.applyDeterministicElementAnimations(
+        object,
+        base,
+        localTimeMs - (startSeconds * 1000),
+      );
+      if (keyframes?.length) {
+        const objectTimeSeconds = localTimeSeconds - startSeconds;
+        const properties = Array.from(new Set(keyframes.map((keyframe) => keyframe.property)));
+        properties.forEach((property) => {
+          const value = evaluateKeyframeValue(
+            keyframes.filter((keyframe) => keyframe.property === property),
+            objectTimeSeconds,
+          );
+          if (value !== undefined) object.set(property as keyof fabric.Object, value as never);
+        });
+      }
+      object.setCoords();
+    });
+    this.canvas.renderAll();
+    const context = this.element.getContext('2d');
+    if (context) {
+      renderConnectorAnimationsAtTime(context, this.canvas, localTimeMs);
+    }
+    return this.element;
+  }
+
+  restore() {
+    this.baseStates.forEach((base, object) => {
+      object.set(base);
+      object.setCoords();
+    });
+  }
+
+  dispose() {
+    this.baseStates.clear();
+    this.canvas.dispose();
+  }
+
+  private applyDeterministicElementAnimations(
+    object: fabric.Object,
+    base: BaseObjectState,
+    localTimeMs: number,
+  ) {
+    const objectId = String(objectValue(object, 'id') || '');
+    const configuredAnimations = objectValue(object, 'objectAnimations') as FabricObjectAnimation[] | undefined;
+    const legacyConfig = objectValue(object, 'animationConfig') as FabricObjectAnimationConfig | undefined;
+    const animations = (
+      configuredAnimations?.length ? configuredAnimations : [legacyConfig]
+    ).flatMap((config) => {
+      const normalized = normalizeObjectAnimation(config, objectId);
+      return normalized ? [normalized] : [];
+    });
+    if (animations.length === 0) return;
+
+    let opacity = base.opacity;
+    let left = base.left;
+    let top = base.top;
+    let scaleX = base.scaleX;
+    let scaleY = base.scaleY;
+    let angle = base.angle;
+    let visibleTextLength: number | undefined;
+    let strokeProgress: number | undefined;
+
+    animations.forEach((animation) => {
+      const evaluation = evaluateObjectAnimationAtTime({
+        animation,
+        localTimeMs,
+        width: this.canvas.getWidth(),
+        height: this.canvas.getHeight(),
+        textLength: base.text?.length || 0,
+      });
+      opacity *= evaluation.opacity;
+      left += evaluation.translateX;
+      top += evaluation.translateY;
+      scaleX *= evaluation.scaleX;
+      scaleY *= evaluation.scaleY;
+      angle += evaluation.rotation;
+      if (evaluation.visibleTextLength !== undefined) {
+        visibleTextLength = visibleTextLength === undefined
+          ? evaluation.visibleTextLength
+          : Math.min(visibleTextLength, evaluation.visibleTextLength);
+      }
+      if (evaluation.strokeProgress !== undefined) strokeProgress = evaluation.strokeProgress;
+    });
+
+    object.set({ opacity, left, top, scaleX, scaleY, angle });
+    if (base.text !== undefined && visibleTextLength !== undefined) {
+      (object as fabric.Text).set('text', base.text.slice(0, visibleTextLength));
+    }
+    if (strokeProgress !== undefined) {
+      object.set('strokeDashArray', [Math.max(strokeProgress * 1000, 0.001), 1000]);
+    }
+  }
+}
+
+const prepareFabricScene = async (
+  page: EditorPage,
+  fallbackWidth: number,
+  fallbackHeight: number,
+) => {
+  if (!page.data) throw new Error(`${page.name} has no saved canvas data.`);
+  await preloadFontsFromCanvasJson(page.data);
+  if ('fonts' in document) await document.fonts.ready;
+  const dimensions = parseDimensions(page.data, fallbackWidth, fallbackHeight);
+  const element = document.createElement('canvas');
+  const staticCanvas = new fabric.StaticCanvas(element, {
+    width: dimensions.width,
+    height: dimensions.height,
+    enableRetinaScaling: false,
+    renderOnAddRemove: false,
+  });
+  await new Promise<void>((resolve, reject) => {
+    try {
+      staticCanvas.loadFromJSON(page.data, () => resolve());
+    } catch (error) {
+      reject(error);
+    }
+  });
+
+  staticCanvas.getObjects().filter(editorOnly).forEach((object) => staticCanvas.remove(object));
+  staticCanvas.getObjects().forEach((object, index) => {
+    if (!objectValue(object, 'id')) {
+      object.set('id' as keyof fabric.Object, `${page.id}-object-${index + 1}` as never);
+    }
+  });
+
+  // Asynchronously preload and decode all renderable image objects on this page
+  const imageObjects = staticCanvas.getObjects().filter(isRenderableImageElement) as fabric.Image[];
+  await Promise.all(
+    imageObjects.map(async (imgObj) => {
+      const primaryUrl = (imgObj.get('sourceUrl' as any) || imgObj.get('assetUrl' as any) || (imgObj as any).src || '') as string;
+      const resolvedUrl = resolveAssetUrl(primaryUrl);
+      if (resolvedUrl) {
+        try {
+          const loadedImg = await preloadImageAsset(resolvedUrl);
+          imgObj.setElement(loadedImg);
+          if (imgObj.filters?.length) {
+            imgObj.applyFilters();
+          }
+        } catch (err) {
+          console.warn(`[TECKSTUDIO Preloader] Failed loading image for page ${page.name}, object ${imgObj.get('id' as any)} (${resolvedUrl}). Using fallback SVG.`, err);
+          try {
+            const fallbackImg = await preloadImageAsset(DEFAULT_ASSET_FALLBACK_SVG);
+            imgObj.setElement(fallbackImg);
+          } catch {
+            // Non-fatal
+          }
+        }
+      }
+    })
+  );
+
+  staticCanvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+  staticCanvas.renderAll();
+
+  const missingImage = staticCanvas.getObjects().filter(isRenderableImageElement).find((object) => {
+    const imageElement = (object as fabric.Image).getElement() as HTMLImageElement;
+    return !imageElement || !imageElement.complete || imageElement.naturalWidth === 0;
+  });
+
+  if (missingImage) {
+    const failedId = (missingImage.get('id' as any) || 'unknown') as string;
+    const failedUrl = (missingImage.get('sourceUrl' as any) || missingImage.get('assetUrl' as any) || (missingImage as any).src || '') as string;
+    console.warn(`[TECKSTUDIO Preloader] Non-fatal un-decoded image on ${page.name} (Element: ${failedId}, URL: ${failedUrl}).`);
+  }
+
+  return new PreparedFabricScene(staticCanvas, element);
+};
+
+export const renderPageToCanvas = async (
+  page: EditorPage,
+  fallbackWidth: number,
+  fallbackHeight: number,
+) => {
+  const scene = await prepareFabricScene(page, fallbackWidth, fallbackHeight);
+  const dimensions = parseDimensions(page.data, fallbackWidth, fallbackHeight);
+  const output = document.createElement('canvas');
+  output.width = dimensions.width;
+  output.height = dimensions.height;
+  const context = output.getContext('2d');
+  if (!context) {
+    scene.dispose();
+    throw new Error('Canvas rendering is unavailable.');
+  }
+  context.drawImage(scene.renderAtTime(0), 0, 0, output.width, output.height);
+  scene.restore();
+  scene.dispose();
+  return output;
+};
+
+type SceneTransform = ReturnType<typeof evaluateSceneAtTime>;
+
+const drawScene = (
+  context: CanvasRenderingContext2D,
+  scene: CanvasImageSource,
+  transform: SceneTransform,
+  width: number,
+  height: number,
+  clip?: { x: number; y: number; width: number; height: number },
+) => {
+  context.save();
+  if (clip) {
+    context.beginPath();
+    context.rect(clip.x, clip.y, clip.width, clip.height);
+    context.clip();
+  }
+  context.globalAlpha = transform.opacity;
+  context.translate((width / 2) + transform.translateX, (height / 2) + transform.translateY);
+  context.rotate((transform.rotation * Math.PI) / 180);
+  context.scale(transform.scaleX, transform.scaleY);
+  context.drawImage(scene, -width / 2, -height / 2, width, height);
+  context.restore();
+};
+
+export class PosterSceneRenderer implements SceneTimelineRenderer {
+  private cache = new Map<string, PreparedFabricScene>();
+  private output: HTMLCanvasElement;
+  private getState: () => {
+    pages: EditorPage[];
+    timeline: TimelineProject;
+    width: number;
+    height: number;
+  };
+
+  constructor(
+    output: HTMLCanvasElement,
+    getState: () => {
+      pages: EditorPage[];
+      timeline: TimelineProject;
+      width: number;
+      height: number;
+    },
+  ) {
+    this.output = output;
+    this.getState = getState;
+  }
+
+  async prepare() {
+    const { pages, timeline, width, height } = this.getState();
+    const pageIds = new Set(getPosterTrack(timeline).clips.map((clip) => clip.pageId));
+    await Promise.all(pages.filter((page) => pageIds.has(page.id)).map(async (page) => {
+      const cacheKey = `${page.id}:${page.updatedAt || page.data.length}`;
+      if (this.cache.has(cacheKey)) return;
+      const scene = await prepareFabricScene(page, width, height);
+      Array.from(this.cache.entries())
+        .filter(([key]) => key.startsWith(`${page.id}:`))
+        .forEach(([key, staleScene]) => {
+          staleScene.dispose();
+          this.cache.delete(key);
+        });
+      this.cache.set(cacheKey, scene);
+    }));
+  }
+
+  render(timeMs: number) {
+    const { pages, timeline, width, height } = this.getState();
+    if (this.output.width !== width) this.output.width = width;
+    if (this.output.height !== height) this.output.height = height;
+    const context = this.output.getContext('2d');
+    if (!context) return;
+    context.clearRect(0, 0, width, height);
+    context.fillStyle = '#000000';
+    context.fillRect(0, 0, width, height);
+    const clips = getPosterTrack(timeline).clips.filter((clip) => clip.visible);
+    const getScene = (clip: TimelineClip) => {
+      const page = pages.find((candidate) => candidate.id === clip.pageId);
+      if (!page) return null;
+      return this.cache.get(`${page.id}:${page.updatedAt || page.data.length}`) || null;
+    };
+    const activeTransition = evaluateTransitionAtTime(timeline, clips, timeMs);
+    if (activeTransition) {
+      this.drawTransition(
+        context,
+        activeTransition.transition,
+        activeTransition.fromClip,
+        activeTransition.toClip,
+        activeTransition.progress,
+        getScene,
+        width,
+        height,
+        timeMs,
+      );
+      return;
+    }
+    const clip = [...clips].reverse().find((candidate) => (
+      timeMs >= candidate.startMs && timeMs <= candidate.startMs + candidate.durationMs
+    ));
+    if (!clip) return;
+    const scene = getScene(clip);
+    if (!scene) return;
+    const sceneCanvas = scene.renderAtTime(timeMs - clip.startMs);
+    drawScene(
+      context,
+      sceneCanvas,
+      evaluateSceneAtTime({ clip, globalTimeMs: timeMs, width, height }),
+      width,
+      height,
+    );
+    scene.restore();
+  }
+
+  clear() {
+    const context = this.output.getContext('2d');
+    context?.clearRect(0, 0, this.output.width, this.output.height);
+  }
+
+  dispose() {
+    this.cache.forEach((scene) => scene.dispose());
+    this.cache.clear();
+    this.clear();
+  }
+
+  private drawTransition(
+    context: CanvasRenderingContext2D,
+    transition: TimelineTransition,
+    fromClip: TimelineClip,
+    toClip: TimelineClip,
+    progress: number,
+    getScene: (clip: TimelineClip) => PreparedFabricScene | null,
+    width: number,
+    height: number,
+    timeMs: number,
+  ) {
+    const fromScene = getScene(fromClip);
+    const toScene = getScene(toClip);
+    if (!fromScene || !toScene) return;
+    const fromCanvas = fromScene.renderAtTime(timeMs - fromClip.startMs);
+    const toCanvas = toScene.renderAtTime(timeMs - toClip.startMs);
+    const fromTransform = evaluateSceneAtTime({ clip: fromClip, globalTimeMs: timeMs, width, height });
+    const toTransform = evaluateSceneAtTime({ clip: toClip, globalTimeMs: timeMs, width, height });
+    const opaqueFrom = { ...fromTransform, opacity: 1 };
+    const opaqueTo = { ...toTransform, opacity: 1 };
+
+    if (transition.type === 'fade' || transition.type === 'crossfade') {
+      drawScene(context, fromCanvas, { ...opaqueFrom, opacity: 1 - progress }, width, height);
+      drawScene(context, toCanvas, { ...opaqueTo, opacity: progress }, width, height);
+    } else if (transition.type === 'slide-left' || transition.type === 'slide-right') {
+      const direction = transition.type === 'slide-left' ? -1 : 1;
+      drawScene(context, fromCanvas, { ...opaqueFrom, translateX: direction * width * progress }, width, height);
+      drawScene(context, toCanvas, { ...opaqueTo, translateX: -direction * width * (1 - progress) }, width, height);
+    } else if (transition.type === 'slide-up' || transition.type === 'slide-down') {
+      const direction = transition.type === 'slide-up' ? -1 : 1;
+      drawScene(context, fromCanvas, { ...opaqueFrom, translateY: direction * height * progress }, width, height);
+      drawScene(context, toCanvas, { ...opaqueTo, translateY: -direction * height * (1 - progress) }, width, height);
+    } else if (transition.type === 'zoom') {
+      drawScene(context, fromCanvas, { ...opaqueFrom, opacity: 1 - progress, scaleX: 1 + (0.12 * progress), scaleY: 1 + (0.12 * progress) }, width, height);
+      drawScene(context, toCanvas, { ...opaqueTo, opacity: progress, scaleX: 0.88 + (0.12 * progress), scaleY: 0.88 + (0.12 * progress) }, width, height);
+    } else if (transition.type === 'wipe-left' || transition.type === 'wipe-right') {
+      drawScene(context, fromCanvas, opaqueFrom, width, height);
+      const wipeWidth = width * progress;
+      const clip = transition.type === 'wipe-left'
+        ? { x: width - wipeWidth, y: 0, width: wipeWidth, height }
+        : { x: 0, y: 0, width: wipeWidth, height };
+      drawScene(context, toCanvas, opaqueTo, width, height, clip);
+    } else {
+      drawScene(context, progress < 1 ? fromCanvas : toCanvas, progress < 1 ? opaqueFrom : opaqueTo, width, height);
+    }
+    fromScene.restore();
+    toScene.restore();
+  }
+}
+
+export const canvasToPngBlob = (canvas: HTMLCanvasElement) => new Promise<Blob>((resolve, reject) => {
+  try {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error('The poster frame could not be converted to PNG.'));
+    }, 'image/png');
+  } catch {
+    reject(new Error('A cross-origin image prevents video export. Re-upload that asset through TECKSTUDIO.'));
+  }
+});

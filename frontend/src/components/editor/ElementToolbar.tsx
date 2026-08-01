@@ -25,24 +25,50 @@ import {
   Sparkles,
   RotateCcw,
   RotateCw,
+  Replace,
+  WandSparkles,
+  Loader2,
+  Crop,
+  Pencil,
 } from 'lucide-react';
 import { useEditorStore } from '../../store/useEditorStore';
 import { fabric } from 'fabric';
 import { alignObjectToPage } from '../../utils/textSelectionStyles';
 import type { PageAlignment } from '../../utils/textSelectionStyles';
+import { uploadImageAsset } from '../../services/uploadsApi';
+import { replaceFabricImageAsset } from '../../utils/uploadedImageCanvas';
+import { UPLOAD_IMAGE_RULES } from '../../config/uploads';
+import { enterInlineTextEditing, isEditableTextObject } from '../../utils/textSelectionStyles';
+import { enterPosterTextEditing, isPosterEditableText } from '../../utils/posterConversionCanvas';
+import { MediaFittingControls } from './MediaFittingControls';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // FLOATING TOOLBAR — positioned near the selected element
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const ElementToolbar: React.FC = () => {
-  const { canvas, selectedObject, deleteSelected, duplicateSelected, saveHistory } = useEditorStore();
+  const {
+    canvas,
+    selectedObject,
+    deleteSelected,
+    duplicateSelected,
+    saveHistory,
+    projectId,
+    setSelectedObject,
+    setFillColor: applyFillColor,
+    setStrokeColor: applyStrokeColor,
+    setStrokeWidth: applyStrokeWidth,
+    setOpacity: applyOpacity,
+  } = useEditorStore();
   const [fillColor, setFillColor] = useState('#8b5cf6');
   const [strokeColor, setStrokeColor] = useState('#000000');
   const [strokeWidth, setStrokeWidth] = useState(1);
   const [opacity, setOpacity] = useState(1);
   const [isLocked, setIsLocked] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [imageAction, setImageAction] = useState('');
+  const [imageMessage, setImageMessage] = useState('');
+  const replaceInputRef = useRef<HTMLInputElement>(null);
 
   // Floating toolbar positioning
   const [toolbarPos, setToolbarPos] = useState<{ left: number; top: number } | null>(null);
@@ -62,13 +88,20 @@ export const ElementToolbar: React.FC = () => {
     const currentStroke = (selectedObject.get('stroke') as string) || '#000000';
     const currentStrokeWidth = (selectedObject.get('strokeWidth') as number) || 0;
     const currentOpacity = selectedObject.get('opacity') ?? 1;
-    const locked = !!(selectedObject.lockMovementX && selectedObject.lockMovementY);
+    const locked = Boolean(
+      selectedObject.lockMovementX
+      || selectedObject.lockMovementY
+      || selectedObject.lockScalingX
+      || selectedObject.lockScalingY
+      || selectedObject.lockRotation
+    );
 
     setFillColor(typeof currentFill === 'string' ? currentFill : '#8b5cf6');
     setStrokeColor(typeof currentStroke === 'string' ? currentStroke : '#000000');
     setStrokeWidth(currentStrokeWidth);
     setOpacity(currentOpacity);
     setIsLocked(locked);
+    setImageMessage('');
   }, [selectedObject]);
 
   // ─── Track text editing state ────────────────────────────────────────────
@@ -103,7 +136,7 @@ export const ElementToolbar: React.FC = () => {
     const centerX = canvasRect.left + (bounds.left + bounds.width / 2) * zoom + vpt[4];
     const topY = canvasRect.top + bounds.top * zoom + vpt[5];
 
-    const toolbarWidth = 480;
+    const toolbarWidth = selectedObject.type === 'image' ? 660 : 480;
     const gap = 10;
 
     let left = centerX - toolbarWidth / 2;
@@ -179,6 +212,10 @@ export const ElementToolbar: React.FC = () => {
 
   const handleFillChange = (color: string) => {
     setFillColor(color);
+    if (isEditableTextObject(selectedObject)) {
+      applyFillColor(color);
+      return;
+    }
     selectedObject.set('fill', color);
     canvas.renderAll();
     saveHistory();
@@ -186,6 +223,10 @@ export const ElementToolbar: React.FC = () => {
 
   const handleStrokeChange = (color: string) => {
     setStrokeColor(color);
+    if (isEditableTextObject(selectedObject)) {
+      applyStrokeColor(color);
+      return;
+    }
     selectedObject.set('stroke', color);
     canvas.renderAll();
     saveHistory();
@@ -193,6 +234,10 @@ export const ElementToolbar: React.FC = () => {
 
   const handleStrokeWidthChange = (width: number) => {
     setStrokeWidth(width);
+    if (isEditableTextObject(selectedObject)) {
+      applyStrokeWidth(width);
+      return;
+    }
     selectedObject.set('strokeWidth', width);
     canvas.renderAll();
     saveHistory();
@@ -200,6 +245,10 @@ export const ElementToolbar: React.FC = () => {
 
   const handleOpacityChange = (val: number) => {
     setOpacity(val);
+    if (isEditableTextObject(selectedObject)) {
+      applyOpacity(val);
+      return;
+    }
     selectedObject.set('opacity', val);
     canvas.renderAll();
     saveHistory();
@@ -226,7 +275,8 @@ export const ElementToolbar: React.FC = () => {
       lockScalingX: nextLock,
       lockScalingY: nextLock,
       lockRotation: nextLock,
-    });
+      locked: nextLock,
+    } as Record<string, unknown>);
     canvas.renderAll();
     saveHistory();
     setShowOverflow(false);
@@ -242,6 +292,31 @@ export const ElementToolbar: React.FC = () => {
     canvas.sendBackwards(selectedObject);
     canvas.renderAll();
     saveHistory();
+  };
+
+  const handleReplaceImage = async (file: File) => {
+    if (!canvas || selectedObject.type !== 'image') return;
+    setImageAction('replace');
+    setImageMessage('');
+    try {
+      const asset = await uploadImageAsset(file, projectId);
+      await replaceFabricImageAsset(selectedObject as fabric.Image, asset);
+      canvas.setActiveObject(selectedObject);
+      canvas.requestRenderAll();
+      setSelectedObject(selectedObject);
+      saveHistory();
+      window.dispatchEvent(new Event('teckstudio:uploads-changed'));
+      setImageMessage('Image replaced');
+    } catch (error) {
+      setImageMessage(error instanceof Error ? error.message : 'Image replacement failed.');
+    } finally {
+      setImageAction('');
+    }
+  };
+
+  const openCropMode = () => {
+    window.dispatchEvent(new CustomEvent('teckstudio:open-panel', { detail: { panel: 'properties' } }));
+    window.setTimeout(() => window.dispatchEvent(new Event('teckstudio:start-image-crop')), 0);
   };
 
   // ─── Three-dot menu handlers ─────────────────────────────────────────────
@@ -362,6 +437,17 @@ export const ElementToolbar: React.FC = () => {
     setShowOverflow(false);
   };
 
+  const handleEditText = () => {
+    if (!isEditableTextObject(selectedObject)) return;
+    const entered = isPosterEditableText(selectedObject)
+      ? enterPosterTextEditing(canvas, selectedObject)
+      : enterInlineTextEditing(canvas, selectedObject);
+    if (entered) {
+      setSelectedObject(selectedObject);
+      window.dispatchEvent(new CustomEvent('teckstudio:open-panel', { detail: { panel: 'text-styles' } }));
+    }
+  };
+
   const handleDuplicate = () => {
     duplicateSelected();
     setShowOverflow(false);
@@ -394,6 +480,65 @@ export const ElementToolbar: React.FC = () => {
         style={{ left: toolbarPos.left, top: toolbarPos.top }}
         className="fixed z-50 flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 rounded-xl px-2.5 py-1.5 shadow-2xl text-xs text-zinc-200 select-none"
       >
+        {isEditableTextObject(selectedObject) && (
+          <>
+            <button
+              type="button"
+              onClick={handleEditText}
+              className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[9px] font-bold text-blue-300 hover:bg-blue-500/10"
+              title="Edit text"
+            >
+              <Pencil className="h-3.5 w-3.5" /> Edit Text
+            </button>
+            <div className="h-5 w-px bg-zinc-800" />
+          </>
+        )}
+        {selectedObject.type === 'image' && (
+          <>
+            <input
+              ref={replaceInputRef}
+              type="file"
+              accept={UPLOAD_IMAGE_RULES.acceptAttribute}
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void handleReplaceImage(file);
+                event.target.value = '';
+              }}
+            />
+            <button
+              type="button"
+              disabled={Boolean(imageAction)}
+              onClick={() => replaceInputRef.current?.click()}
+              className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[9px] font-bold text-cyan-300 hover:bg-cyan-500/10 disabled:opacity-40"
+              title="Replace image while preserving its transform"
+            >
+              {imageAction === 'replace' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Replace className="h-3.5 w-3.5" />}
+              Replace
+            </button>
+            <button
+              type="button"
+              disabled={Boolean(imageAction)}
+              onClick={openCropMode}
+              className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[9px] font-bold text-violet-300 hover:bg-violet-500/10 disabled:opacity-40"
+              title="Open non-destructive crop controls"
+            >
+              <Crop className="h-3.5 w-3.5" /> Crop
+            </button>
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new CustomEvent('teckstudio:open-panel', { detail: { panel: 'effects' } }))}
+              className="rounded-md p-1 text-fuchsia-300 hover:bg-fuchsia-500/10"
+              title="Open image filters and background tools"
+            >
+              <WandSparkles className="h-3.5 w-3.5" />
+            </button>
+            <MediaFittingControls object={selectedObject} compact />
+            {imageMessage && <span role="status" className="max-w-28 truncate text-[8px] text-zinc-500" title={imageMessage}>{imageMessage}</span>}
+            <div className="h-5 w-px bg-zinc-800" title={imageMessage} />
+          </>
+        )}
+
         {/* Fill Color */}
         <div className="flex items-center gap-1 border-r border-zinc-800 pr-2">
           <input

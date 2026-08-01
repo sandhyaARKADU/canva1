@@ -778,7 +778,7 @@ export const AIAssistant: React.FC = () => {
     const data = JSON.stringify({
       version: '5.3.0',
       objects,
-      background: '#ffffff',
+      background: '#000000',
       generationMetadata: {
         assetType,
         prompt,
@@ -793,7 +793,7 @@ export const AIAssistant: React.FC = () => {
       data,
       width: canvasWidth,
       height: canvasHeight,
-      background_color: '#ffffff',
+      background_color: '#000000',
       design_type: `ai_${assetType}`,
       generated_asset_id: assetId,
       prompt,
@@ -1203,7 +1203,7 @@ export const AIAssistant: React.FC = () => {
 
           const scale = Math.max(W / (img.width || W), H / (img.height || H));
           canvas.clear();
-          canvas.setBackgroundColor('#ffffff', () => {});
+          canvas.setBackgroundColor('#000000', () => {});
           img.set({
             left: W / 2,
             top: H / 2,

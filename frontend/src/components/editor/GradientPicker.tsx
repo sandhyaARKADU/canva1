@@ -89,7 +89,7 @@ export const GradientPicker: React.FC = () => {
     if (bgRect) {
       canvas.remove(bgRect);
     }
-    canvas.setBackgroundColor('#ffffff', () => canvas.renderAll());
+    canvas.setBackgroundColor('#000000', () => canvas.renderAll());
     saveHistory();
   };
 

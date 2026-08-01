@@ -35,6 +35,8 @@ class User(Base):
     shared_designs = relationship("SharedDesign", back_populates="shared_by_user", foreign_keys="SharedDesign.shared_by")
     auth_sessions = relationship("AuthSession", back_populates="user", cascade="all, delete-orphan")
     assets = relationship("Asset", back_populates="owner", cascade="all, delete-orphan")
+    uploaded_assets = relationship("UploadedAsset", back_populates="owner", cascade="all, delete-orphan")
+    poster_analysis_jobs = relationship("PosterAnalysisJob", back_populates="owner", cascade="all, delete-orphan")
     font_assets = relationship("FontAsset", back_populates="owner", cascade="all, delete-orphan")
     processed_images = relationship("ProcessedImage", back_populates="owner", cascade="all, delete-orphan")
 
@@ -63,7 +65,7 @@ class Project(Base):
     thumbnail = Column(Text, nullable=True)  # Base64 thumbnail
     width = Column(Integer, default=800)
     height = Column(Integer, default=800)
-    background_color = Column(String(20), default="#ffffff")
+    background_color = Column(String(20), default="#000000")
     design_type = Column(String(50), nullable=True)
     generated_asset_id = Column(String(50), nullable=True)
     prompt = Column(Text, nullable=True)
@@ -403,14 +405,47 @@ class UploadedAsset(Base):
     __tablename__ = "uploaded_assets"
 
     id = Column(String(50), primary_key=True)
-    user_id = Column(String(50), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(String(50), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     project_id = Column(String(50), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
     filename = Column(String(255), nullable=False)
     mime_type = Column(String(100), nullable=False)
     file_size = Column(Integer, nullable=False)
     storage_path = Column(String(500), nullable=False)
     public_url = Column(String(500), nullable=False)
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    thumbnail_storage_path = Column(String(500), nullable=True)
+    thumbnail_url = Column(String(500), nullable=True)
+    metadata_json = Column(JSON, nullable=True)
+    asset_role = Column(String(50), nullable=False, default="upload", index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    owner = relationship("User", back_populates="uploaded_assets")
+
+
+class PosterAnalysisJob(Base):
+    __tablename__ = "poster_analysis_jobs"
+
+    id = Column(String(50), primary_key=True)
+    user_id = Column(String(50), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    asset_id = Column(String(50), ForeignKey("uploaded_assets.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(String(50), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
+    mode = Column(String(20), nullable=False, default="quick")
+    language = Column(String(40), nullable=False, default="auto")
+    status = Column(String(30), nullable=False, default="queued", index=True)
+    stage = Column(String(100), nullable=False, default="Preparing image")
+    progress = Column(Integer, nullable=False, default=0)
+    result_json = Column(JSON, nullable=True)
+    error_message = Column(Text, nullable=True)
+    cancel_requested = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    owner = relationship("User", back_populates="poster_analysis_jobs")
+    asset = relationship("UploadedAsset")
+    project = relationship("Project")
 
 
 class FontAsset(Base):
@@ -594,6 +629,34 @@ class ExportMetadata(Base):
     storage_path = Column(String(500), nullable=True)
     metadata_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class VideoRenderJob(Base):
+    __tablename__ = "video_render_jobs"
+
+    id = Column(String(50), primary_key=True)
+    user_id = Column(String(50), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(String(50), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    format = Column(String(10), nullable=False)
+    status = Column(String(30), nullable=False, default="queued")
+    progress = Column(Integer, nullable=False, default=0)
+    stage = Column(String(160), nullable=False, default="Preparing project")
+    width = Column(Integer, nullable=False)
+    height = Column(Integer, nullable=False)
+    fps = Column(Integer, nullable=False)
+    quality = Column(String(20), nullable=False)
+    render_mode = Column(String(30), nullable=False, default="frame_sequence")
+    total_frames = Column(Integer, nullable=False, default=0)
+    rendered_frames = Column(Integer, nullable=False, default=0)
+    timeline_json = Column(JSON, nullable=False)
+    output_path = Column(String(500), nullable=True)
+    file_name = Column(String(255), nullable=True)
+    mime_type = Column(String(100), nullable=True)
+    error_message = Column(Text, nullable=True)
+    cancel_requested = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
 
 
 # ─── Create tables ────────────────────────────────

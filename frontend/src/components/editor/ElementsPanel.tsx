@@ -5,8 +5,10 @@ import {
   Music, Mic, BoxIcon, Zap, FileSpreadsheet, LayoutGrid,
   RectangleHorizontal, Circle, Plus,
   Paintbrush, Frame,
-  TrendingUp, PieChart,
   Smartphone, Monitor,
+  UserRound, Globe2, Database, MessageSquare, Cpu, Cloud, Server,
+  ShieldCheck, Radio, ListTree, Gauge, Workflow,
+  ArrowRight, Network,
 } from 'lucide-react';
 import { apiFetch } from '../../services/apiClient';
 import { useEditorStore } from '../../store/useEditorStore';
@@ -34,9 +36,29 @@ import {
   type FormCategory,
 } from '../../utils/formsRegistry';
 import {
-  CHART_ELEMENTS, ELEMENT_SECTIONS,
-  type EditorElement,
+  CHART_ELEMENTS, ELEMENT_SECTIONS, createChartElement,
 } from '../../utils/editorElementFactory';
+import type { EditorElement } from '../../types/elements';
+import {
+  createArchitectureCard,
+  createSegmentedHeaderBars,
+  createStandaloneArchitectureSymbol,
+  createStandaloneArchitectureChip,
+  createStandaloneStatusDot,
+  createStageTracker,
+} from '../../utils/architectureDiagram';
+import { createStandaloneDiagramArrow } from '../../utils/diagramConnectors';
+import {
+  ARCHITECTURE_ANIMATED_FLOW_PRESETS,
+  ARCHITECTURE_ARROW_PRESETS,
+  ARCHITECTURE_BOX_PRESETS,
+  ARCHITECTURE_LIBRARY_CATEGORIES,
+  ARCHITECTURE_SYMBOLS,
+} from '../../utils/architectureLibrary';
+import {
+  getConnectorAnimationPreset,
+} from '../../utils/architectureDiagramTypes';
+import type { ArchitectureIconName } from '../../utils/architectureDiagramTypes';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -125,6 +147,11 @@ const CATEGORY_CONFIGS: CategoryConfig[] = [
     type: 'unsupported',
   },
   {
+    id: 'architecture', label: 'Architecture', icon: Network,
+    gradient: 'from-cyan-500/30 to-emerald-500/30', iconColor: 'text-cyan-400',
+    type: 'interactive',
+  },
+  {
     id: 'shapes', label: 'Shapes', icon: Shapes,
     gradient: 'from-teal-500/30 to-cyan-500/30', iconColor: 'text-teal-400',
     type: 'interactive',
@@ -194,21 +221,18 @@ const GRID_ITEMS = [
   { name: 'Collage', layout: '2x2' as const, cells: 4 },
 ];
 
-const CHART_ITEMS = [
-  { name: 'Bar Chart', type: 'bar', icon: BarChart3 },
-  { name: 'Line Chart', type: 'line', icon: TrendingUp },
-  { name: 'Pie Chart', type: 'pie', icon: PieChart },
-  { name: 'Doughnut', type: 'doughnut', icon: PieChart },
-  { name: 'Area Chart', type: 'area', icon: TrendingUp },
-  { name: 'Progress', type: 'progress', icon: BarChart3 },
-];
-
 const TABLE_ITEMS = [
   { name: '3×3 Table', rows: 3, cols: 3 },
   { name: '4×4 Table', rows: 4, cols: 4 },
   { name: 'Pricing Table', rows: 3, cols: 4 },
   { name: 'Schedule', rows: 5, cols: 3 },
 ];
+
+const createElementInstanceId = (prefix: string) => (
+  window.crypto?.randomUUID
+    ? `${prefix}_${window.crypto.randomUUID()}`
+    : `${prefix}_${Math.random().toString(36).slice(2)}`
+);
 
 const CODE_ITEMS = [
   { name: 'Code Block', type: 'code-block', icon: BoxIcon },
@@ -224,6 +248,24 @@ function Terminal(props: { className?: string }) {
     </svg>
   );
 }
+
+const ARCHITECTURE_ICON_COMPONENTS: Record<ArchitectureIconName, React.ElementType> = {
+  member: UserRound,
+  globe: Globe2,
+  gateway: Workflow,
+  database: Database,
+  chat: MessageSquare,
+  router: Network,
+  event: ListTree,
+  chip: Cpu,
+  workers: Layers,
+  server: Server,
+  cloud: Cloud,
+  auth: ShieldCheck,
+  stream: Radio,
+  queue: ListTree,
+  analytics: Gauge,
+};
 
 const GENERATE_MODES: { value: GenerateMode; label: string }[] = [
   { value: 'search', label: 'Search' },
@@ -253,6 +295,10 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
   const [shapesSeeAll, setShapesSeeAll] = useState<ShapeCategory | null>(null);
   const [shapesSearch, setShapesSearch] = useState('');
   const shapesSearchDebounced = useDebouncedValue(shapesSearch, 200);
+
+  const [architectureSearch, setArchitectureSearch] = useState('');
+  const [architectureCategory, setArchitectureCategory] = useState('All');
+  const architectureSearchDebounced = useDebouncedValue(architectureSearch, 150);
 
   // Animations "See All" sub-view
   const [animSeeAll, setAnimSeeAll] = useState<AnimationCategory | null>(null);
@@ -440,6 +486,8 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
     setSearchQuery('');
     setShapesSeeAll(null);
     setShapesSearch('');
+    setArchitectureSearch('');
+    setArchitectureCategory('All');
     setAnimSeeAll(null);
     setAnimSearch('');
     setPhotoMode('search'); setPhotoPrompt(''); setPhotoError(''); setPhotoOrientation(null);
@@ -451,6 +499,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
     if (shapesSeeAll) { setShapesSeeAll(null); return; }
     if (animSeeAll) { setAnimSeeAll(null); return; }
     setView('launcher'); setActiveCategory(null); setActiveSubcategory(null); setSearchQuery('');
+    setArchitectureSearch(''); setArchitectureCategory('All');
     setPhotoMode('search'); setPhotoPrompt(''); setPhotoError(''); setPhotoOrientation(null);
     setGfxSeeAll(null); setGfxSearch('');
     setFormSeeAll(null); setFormSearch('');
@@ -504,7 +553,6 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
   const handleAddChart = (chartId: string) => {
     if (!canvas) return;
     try {
-      const { createChartElement } = require('../../utils/editorElementFactory');
       const chartObj = createChartElement(chartId);
       chartObj.set({
         left: (canvas.width || 800) / 2 - 180,
@@ -541,7 +589,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
     }
     const group = new fabric.Group(objects, {
       left: (canvas.width || 800) / 2 - tableW / 2, top: (canvas.height || 800) / 2 - tableH / 2,
-      id: `table_${rows}x${cols}_${Date.now()}`, name: `${rows}×${cols} Table`,
+      id: createElementInstanceId(`table_${rows}x${cols}`), name: `${rows}×${cols} Table`,
     } as any);
     canvas.add(group); canvas.setActiveObject(group); canvas.renderAll(); saveHistory();
   };
@@ -557,7 +605,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
     });
     const group = new fabric.Group([bg, title, code], {
       left: (canvas.width || 800) / 2 - 180, top: (canvas.height || 800) / 2 - 120,
-      id: `code_${type}_${Date.now()}`, name: `${type} code block`,
+      id: createElementInstanceId(`code_${type}`), name: `${type} code block`,
     } as any);
     canvas.add(group); canvas.setActiveObject(group); canvas.renderAll(); saveHistory();
   };
@@ -647,6 +695,272 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
       </button>
     </div>
   );
+
+  const addArchitectureObject = (object: fabric.Object) => {
+    if (!canvas) return;
+    object.set({
+      left: canvas.getWidth() / 2 - object.getScaledWidth() / 2,
+      top: canvas.getHeight() / 2 - object.getScaledHeight() / 2,
+    });
+    object.setCoords();
+    canvas.add(object);
+    canvas.setActiveObject(object);
+    canvas.requestRenderAll();
+    saveHistory();
+  };
+
+  const renderArchitectureLibrary = () => {
+    const query = architectureSearchDebounced.trim().toLowerCase();
+    const matches = (name: string, keywords: string[], category = '') => (
+      !query ||
+      name.toLowerCase().includes(query) ||
+      category.toLowerCase().includes(query) ||
+      keywords.some((keyword) => keyword.toLowerCase().includes(query))
+    );
+    const symbols = ARCHITECTURE_SYMBOLS.filter((item) => (
+      (architectureCategory === 'All' || item.category === architectureCategory) &&
+      matches(item.name, item.keywords, item.category)
+    ));
+    const boxes = ARCHITECTURE_BOX_PRESETS.filter((item) => (
+      architectureCategory === 'All' &&
+      matches(item.name, item.keywords, 'architecture box card node')
+    ));
+    const arrows = ARCHITECTURE_ARROW_PRESETS.filter((item) => (
+      architectureCategory === 'All' &&
+      matches(item.name, item.keywords, 'arrows connectors flow')
+    ));
+    const animatedFlows = ARCHITECTURE_ANIMATED_FLOW_PRESETS.filter((item) => (
+      architectureCategory === 'All' &&
+      matches(item.name, item.keywords, 'animated flow arrows connectors')
+    ));
+    const components = [
+      {
+        id: 'component-status-dot',
+        name: 'Status Dot',
+        keywords: ['status', 'dot', 'node', 'endpoint'],
+        icon: Circle,
+        color: '#43D68A',
+        create: () => createStandaloneStatusDot('#43D68A', 20),
+      },
+      {
+        id: 'component-chip',
+        name: 'Label Chip',
+        keywords: ['chip', 'label', 'session', 'tools'],
+        icon: BoxIcon,
+        color: '#F2C94C',
+        create: () => createStandaloneArchitectureChip('SESSION', '#F2C94C'),
+      },
+      {
+        id: 'component-stage-flow',
+        name: 'Stage Flow',
+        keywords: ['stage', 'flow', 'request', 'context', 'infer', 'stream'],
+        icon: Workflow,
+        color: '#43D68A',
+        create: () => createStageTracker({ left: 120, top: 180, width: 700, glow: true }),
+      },
+      {
+        id: 'component-segments',
+        name: 'Segmented Lines',
+        keywords: ['segments', 'header', 'colored lines'],
+        icon: Layers,
+        color: '#55A6FF',
+        create: () => createSegmentedHeaderBars(700, 180),
+      },
+    ].filter((item) => (
+      architectureCategory === 'All' &&
+      matches(item.name, item.keywords, 'diagram components')
+    ));
+
+    return (
+      <div className="space-y-4">
+        <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3">
+          <div className="flex items-center gap-2 text-xs font-bold text-cyan-200">
+            <Network className="h-4 w-4" />
+            Diagram Symbols & Components
+          </div>
+          <p className="mt-1 text-[9px] leading-relaxed text-zinc-500">
+            Vector symbols, editable architecture boxes and reusable arrow marks. Select an item, then recolor, rotate, flip, duplicate or group it normally.
+          </p>
+        </div>
+
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+          <input
+            type="text"
+            value={architectureSearch}
+            onChange={(event) => setArchitectureSearch(event.target.value)}
+            placeholder="Search user, API, GPU, queue, arrow..."
+            className="w-full rounded-lg border border-white/[0.08] bg-[#12121B] py-2 pl-8 pr-8 text-[11px] text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-cyan-500"
+          />
+          {architectureSearch && (
+            <button type="button" onClick={() => setArchitectureSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300">
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+
+        <div className="flex gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {['All', ...ARCHITECTURE_LIBRARY_CATEGORIES].map((category) => (
+            <button
+              key={category}
+              type="button"
+              onClick={() => setArchitectureCategory(category)}
+              className={`shrink-0 rounded-md border px-2 py-1 text-[9px] font-semibold ${
+                architectureCategory === category
+                  ? 'border-cyan-500/50 bg-cyan-500/15 text-cyan-200'
+                  : 'border-white/[0.08] text-zinc-500 hover:text-zinc-300'
+              }`}
+            >
+              {category}
+            </button>
+          ))}
+        </div>
+
+        {components.length > 0 && (
+          <div>
+            <h4 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Diagram Components</h4>
+            <div className="grid grid-cols-2 gap-2">
+              {components.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    aria-label={`Add ${item.name}`}
+                    onClick={() => addArchitectureObject(item.create())}
+                    className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-[#11151D] p-2 text-left transition-all hover:border-cyan-500/50"
+                  >
+                    <Icon className="h-5 w-5 shrink-0" style={{ color: item.color }} />
+                    <span className="text-[9px] font-semibold text-zinc-400">{item.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {symbols.length > 0 && (
+          <div>
+            <h4 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Vector Symbols</h4>
+            <div className="grid grid-cols-3 gap-2">
+              {symbols.map((item) => {
+                const Icon = ARCHITECTURE_ICON_COMPONENTS[item.icon];
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    aria-label={`Add ${item.name}`}
+                    onClick={() => addArchitectureObject(createStandaloneArchitectureSymbol(item.icon, item.color, 74, item.name))}
+                    className="flex aspect-square flex-col items-center justify-center gap-1 rounded-xl border border-white/[0.08] bg-[#11151D] p-2 transition-all hover:scale-[1.03] hover:border-cyan-500/50"
+                  >
+                    <Icon className="h-7 w-7" style={{ color: item.color }} />
+                    <span className="line-clamp-2 text-center text-[9px] font-semibold leading-tight text-zinc-400">{item.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {boxes.length > 0 && (
+          <div>
+            <h4 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Architecture Boxes</h4>
+            <div className="grid grid-cols-2 gap-2">
+              {boxes.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-label={`Add ${item.name}`}
+                  onClick={() => addArchitectureObject(createArchitectureCard(item.config))}
+                  className="rounded-xl border border-white/[0.08] bg-[#11151D] p-2 text-left transition-all hover:border-emerald-500/50"
+                  style={{ borderLeftColor: item.config.accentColor || '#43D68A', borderLeftWidth: 4 }}
+                >
+                  <span className="block truncate text-[9px] font-black text-zinc-200">{item.config.title}</span>
+                  <span className="block truncate text-[8px] text-zinc-500">{item.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {arrows.length > 0 && (
+          <div>
+            <h4 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Arrow Marks</h4>
+            <div className="grid grid-cols-2 gap-2">
+              {arrows.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-label={`Add ${item.name}`}
+                  onClick={() => addArchitectureObject(createStandaloneDiagramArrow({ ...item, color: '#55A6FF' }))}
+                  className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-[#11151D] p-2 text-left transition-all hover:border-blue-500/50"
+                >
+                  <ArrowRight
+                    className="h-6 w-8 shrink-0 text-blue-400"
+                    style={{
+                      transform: `rotate(${item.angle || 0}deg)`,
+                      strokeWidth: item.width && item.width > 4 ? 3 : 1.8,
+                    }}
+                  />
+                  <span className="text-[9px] font-semibold leading-tight text-zinc-400">{item.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {animatedFlows.length > 0 && (
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <h4 className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">Animated Flow</h4>
+              <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 text-[7px] font-bold text-emerald-300">LIVE</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {animatedFlows.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-label={`Add ${item.name}`}
+                  onClick={() => {
+                    const preset = item.presetId ? getConnectorAnimationPreset(item.presetId) : undefined;
+                    const presetConfig = preset?.connector || {};
+                    addArchitectureObject(createStandaloneDiagramArrow({
+                      ...presetConfig,
+                      ...item.config,
+                      name: item.name,
+                      color: item.config.color || presetConfig.color || '#43D68A',
+                      animation: {
+                        ...presetConfig.animation,
+                        ...item.config.animation,
+                        enabled: true,
+                      },
+                    }));
+                  }}
+                  className="group rounded-xl border border-emerald-500/20 bg-gradient-to-br from-emerald-500/10 to-[#11151D] p-2 text-left transition-all hover:border-emerald-400/60"
+                >
+                  <div className="mb-1.5 flex items-center gap-1">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400 shadow-[0_0_8px_#43D68A]" />
+                    <div className="h-px flex-1 border-t border-dashed border-emerald-400/70" />
+                    <ArrowRight className="h-3 w-3 text-emerald-400" />
+                  </div>
+                  <span className="block text-[9px] font-semibold leading-tight text-zinc-400 group-hover:text-emerald-200">{item.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {symbols.length === 0 && boxes.length === 0 && arrows.length === 0 && animatedFlows.length === 0 && components.length === 0 && (
+          <div className="py-8 text-center">
+            <p className="text-xs text-zinc-400">No matching architecture elements</p>
+            <button type="button" onClick={() => { setArchitectureSearch(''); setArchitectureCategory('All'); }} className="mt-2 text-[10px] text-cyan-400">
+              Clear filters
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // ═══════════════════════════════════════════════════════════════════════════
   // RENDER: SHAPES (interactive)
@@ -1260,6 +1574,24 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
   const insertAnimation = (def: AnimationDefinition) => {
     if (!canvas) return;
     const obj = def.create();
+    const fullText = ['text', 'i-text', 'textbox'].includes(obj.type || '')
+      ? String((obj as fabric.Text).text || '')
+      : undefined;
+    obj.set({
+      animationConfig: {
+        format: 'teckstudio-timestamp-v1',
+        animationType: def.preset,
+        durationMs: def.durationMs,
+        delayMs: 0,
+        easing: 'ease-in-out',
+        loop: def.loop,
+        sourceAnimationId: def.id,
+        fullText,
+      },
+      isAnimated: true,
+      animatedExportSupported: true,
+      timelineBaseVisible: obj.visible !== false,
+    } as Record<string, unknown>);
     canvas.add(obj);
     canvas.setActiveObject(obj);
     canvas.renderAll();
@@ -1795,6 +2127,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
     if (cat.id === 'graphics') return renderGraphics();
     if (cat.type === 'interactive') {
       switch (cat.id) {
+        case 'architecture': return renderArchitectureLibrary();
         case 'shapes': return renderShapes();
         case 'frames': return renderFrames();
         case 'grids': return renderGrids();
@@ -1857,12 +2190,19 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
     <div className="space-y-2">
       <div className="relative">
         <input type="text" value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') { generateMode === 'search' ? setSearchQuery(aiPrompt) : handleGenerateAIElement(); } }}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter') return;
+            if (generateMode === 'search') setSearchQuery(aiPrompt);
+            else handleGenerateAIElement();
+          }}
           placeholder="Describe the element you want"
           className="w-full bg-[#12121B] border border-white/[0.08] focus:border-violet-500 rounded-xl pl-3 pr-20 py-2.5 text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none transition-all" />
         <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-1">
           {aiPrompt && <button onClick={() => { setAiPrompt(''); setSearchQuery(''); }} className="p-1 text-zinc-500 hover:text-zinc-300 transition-colors"><X className="w-3.5 h-3.5" /></button>}
-          <button onClick={() => { generateMode === 'search' ? setSearchQuery(aiPrompt) : handleGenerateAIElement(); }}
+          <button onClick={() => {
+            if (generateMode === 'search') setSearchQuery(aiPrompt);
+            else handleGenerateAIElement();
+          }}
             disabled={aiLoading || !aiPrompt.trim()}
             className="p-1.5 bg-violet-600 hover:bg-violet-500 rounded-lg text-white disabled:opacity-40 transition-all cursor-pointer disabled:cursor-not-allowed">
             {aiLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : generateMode === 'search' ? <Search className="w-3.5 h-3.5" /> : <Sparkles className="w-3.5 h-3.5" />}
@@ -1921,7 +2261,6 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
     if (!canvas) return;
     const chartId = 'chart-data-start';
     try {
-      const { createChartElement } = require('../../utils/editorElementFactory');
       const chartObj = createChartElement(chartId);
       chartObj.set({
         left: (canvas.width || 800) / 2 - 180,

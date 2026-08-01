@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Copy, Trash2, Lock, Unlock, Eye, EyeOff, ArrowUp, ArrowDown,
-  ArrowUpToLine, ArrowDownToLine, Layers, FlipHorizontal,
+  ArrowUpToLine, ArrowDownToLine, FlipHorizontal,
   FlipVertical, RotateCcw, RotateCw, Group, Ungroup,
-  Clipboard, ClipboardPaste, SquareDashedBottom,
+  Clipboard, ClipboardPaste,
   AlignStartVertical, AlignCenterVertical, AlignEndVertical,
   AlignStartHorizontal, AlignCenterHorizontal, AlignEndHorizontal,
   ChevronRight,
@@ -109,7 +109,7 @@ export const ContextMenu: React.FC = () => {
         canvas.renderAll();
       });
       saveHistory();
-    });
+    }, 'fabric');
     setVisible(false);
   };
 

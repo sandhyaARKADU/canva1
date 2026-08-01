@@ -1,9 +1,14 @@
 import React, { useState, useCallback } from 'react';
+import { fabric } from 'fabric';
 import {
   Download, FileImage, FileText, FileCode, Loader2,
-  Settings, Check, AlertCircle, Layers,
+  Check, AlertCircle, Film, Braces,
 } from 'lucide-react';
 import { useEditorStore } from '../../store/useEditorStore';
+import { beginStaticConnectorExport } from '../../utils/connectorAnimationManager';
+import {
+  createTeckStudioTimelineSchema,
+} from '../../utils/timelineExport';
 
 interface ExportSettings {
   format: 'png' | 'jpg' | 'svg' | 'pdf';
@@ -27,7 +32,7 @@ const DPI_PRESETS = [
 
 const FORMAT_OPTIONS = [
   { format: 'png' as const, label: 'PNG', description: 'Best for web (Transparent)', icon: FileImage },
-  { format: 'jpg' as const, label: 'JPG', description: 'Good for photos (White bg)', icon: FileImage },
+  { format: 'jpg' as const, label: 'JPG', description: 'Good for photos (Black bg)', icon: FileImage },
   { format: 'svg' as const, label: 'SVG', description: 'Scalable vector graphics', icon: FileCode },
   { format: 'pdf' as const, label: 'PDF', description: 'Print-ready document', icon: FileText },
 ];
@@ -39,7 +44,7 @@ export const EnhancedExportPanel: React.FC = () => {
     quality: 0.95,
     multiplier: 2,
     dpi: 150,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#000000',
     transparent: false,
     bleedMarks: false,
     watermark: false,
@@ -73,10 +78,23 @@ export const EnhancedExportPanel: React.FC = () => {
     setExporting(true);
     setError('');
     setExported(false);
+    const activeObject = canvas.getActiveObject();
+    const viewportTransform = canvas.viewportTransform
+      ? [...canvas.viewportTransform]
+      : [1, 0, 0, 1, 0, 0];
+    const editorOnlyObjects = canvas.getObjects().filter((object) => (
+      object.get('editorOnly' as keyof fabric.Object) === true ||
+      object.get('teckstudioObjectType' as keyof fabric.Object) === 'editorGuide' ||
+      object.get('excludeFromExport' as keyof fabric.Object) === true
+    ));
+    const editorOnlyVisibility = editorOnlyObjects.map((object) => object.visible);
+    const restoreConnectorAnimation = beginStaticConnectorExport(canvas);
 
     try {
-      const activeObject = canvas.getActiveObject();
       canvas.discardActiveObject();
+      editorOnlyObjects.forEach((object) => object.set('visible', false));
+      canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+      canvas.renderAll();
 
       // Wait a frame for the canvas to render without selection
       await new Promise((r) => setTimeout(r, 50));
@@ -113,14 +131,14 @@ export const EnhancedExportPanel: React.FC = () => {
         triggerDownload(dataURL, `${fileName}.jpg`);
 
         // Restore original background
-        canvas.setBackgroundColor(oldBg || '#ffffff', () => {});
+        canvas.setBackgroundColor(oldBg || '#000000', () => {});
         canvas.renderAll();
       } else if (settings.format === 'svg') {
         const svgContent = canvas.toSVG();
         const blob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         triggerDownload(url, `${fileName}.svg`);
-        URL.revokeObjectURL(url);
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
       } else if (settings.format === 'pdf') {
         // Use jsPDF for PDF export
         const { default: jsPDF } = await import('jspdf');
@@ -147,18 +165,31 @@ export const EnhancedExportPanel: React.FC = () => {
         });
       }
 
-      // Restore selection
-      if (activeObject) {
-        canvas.setActiveObject(activeObject);
-        canvas.renderAll();
-      }
-
       setExported(true);
       setTimeout(() => setExported(false), 3000);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Export failed');
     } finally {
+      restoreConnectorAnimation();
+      editorOnlyObjects.forEach((object, index) => object.set('visible', editorOnlyVisibility[index]));
+      canvas.setViewportTransform(viewportTransform);
+      if (activeObject) canvas.setActiveObject(activeObject);
+      canvas.renderAll();
       setExporting(false);
+    }
+  };
+
+  const handleTimelineJsonExport = () => {
+    if (!canvas) return;
+    setError('');
+    try {
+      const schema = createTeckStudioTimelineSchema(canvas);
+      const blob = new Blob([JSON.stringify(schema, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      triggerDownload(url, `${projectName || 'design'}.timeline.json`);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Timeline JSON export failed.');
     }
   };
 
@@ -235,6 +266,39 @@ export const EnhancedExportPanel: React.FC = () => {
             );
           })}
         </div>
+      </div>
+
+      <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-2.5">
+        <div className="mb-2 flex items-center gap-2">
+          <Film className="h-3.5 w-3.5 text-cyan-400" />
+          <div>
+            <p className="text-[10px] font-bold text-cyan-200">Timeline Export</p>
+            <p className="text-[8px] text-zinc-500">Records live canvas video, animation, and unlocked audio.</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-1.5">
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent('teckstudio:open-video-export', { detail: { format: 'mp4' } }))}
+            disabled={!canvas}
+            className="flex items-center justify-center gap-1.5 rounded-lg bg-cyan-600 px-2 py-2 text-[9px] font-bold text-white hover:bg-cyan-500 disabled:opacity-40"
+          >
+            <Film className="h-3 w-3" />
+            Video Export
+          </button>
+          <button
+            type="button"
+            onClick={handleTimelineJsonExport}
+            disabled={!canvas}
+            className="flex items-center justify-center gap-1.5 rounded-lg border border-zinc-700 px-2 py-2 text-[9px] font-bold text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+          >
+            <Braces className="h-3 w-3" />
+            Timeline JSON
+          </button>
+        </div>
+        <p className="mt-2 text-[8px] leading-4 text-zinc-600">
+          MP4 uses server-side H.264 encoding; WebM uses VP9.
+        </p>
       </div>
 
       {/* DPI / Quality */}

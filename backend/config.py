@@ -49,6 +49,24 @@ class Settings(BaseSettings):
     ENABLE_POLLINATIONS_FALLBACK: bool = True
     ENABLE_FAKE_AI_FALLBACK: bool = False
 
+    # User image uploads
+    MAX_UPLOAD_IMAGE_MB: int = 15
+    MAX_UPLOAD_IMAGE_PIXELS: int = 24_000_000
+    UPLOAD_THUMBNAIL_SIZE: int = 420
+    OCR_PROVIDER: str = "apple-vision"
+    OCR_FALLBACK_PROVIDER: str = "gemini,openai"
+    OCR_MODEL: str = "gemini-2.0-flash"
+    OCR_CONFIDENCE_THRESHOLD: float = 0.55
+    POSTER_ANALYSIS_MAX_REGIONS: int = 10
+    POSTER_TEXT_MASK_PADDING: int = 8
+    POSTER_REGION_MIN_PERCENTAGE: float = 2.0
+
+    # Background video rendering
+    FFMPEG_BINARY: str = "ffmpeg"
+    VIDEO_RENDER_RETENTION_HOURS: int = 24
+    VIDEO_RENDER_TIMEOUT_SECONDS: int = 900
+    MAX_VIDEO_RENDER_SCENES: int = 100
+
     # Server
     HOST: str = "0.0.0.0"
     PORT: int = 5001

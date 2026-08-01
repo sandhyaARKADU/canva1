@@ -43,7 +43,6 @@ export const PageSelectionOverlay: React.FC = () => {
 
       // Calculate the scale factor between overlay pixels and CSS pixels
       const cssWidth = parseFloat(overlay.style.width) || overlay.width;
-      const cssHeight = parseFloat(overlay.style.height) || overlay.height;
       const pixelScale = overlay.width / cssWidth;
 
       // Calculate page bounds in overlay pixel coordinates

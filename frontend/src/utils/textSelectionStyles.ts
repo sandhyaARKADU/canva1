@@ -7,6 +7,8 @@ export type EditableTextObject = fabric.Textbox & {
   hiddenTextarea?: HTMLTextAreaElement | null;
   enterEditing?: () => void;
   exitEditing?: () => void;
+  selectAll?: () => void;
+  setCursorByClick?: (event: Event) => void;
   setSelectionStyles?: (styles: Record<string, unknown>, start?: number, end?: number) => void;
   getSelectionStyles?: (start?: number, end?: number, complete?: boolean) => Array<Record<string, unknown>>;
   initDimensions?: () => void;
@@ -65,6 +67,43 @@ export function isTextObjectLocked(object: fabric.Object | null | undefined) {
     object.lockScalingY === true ||
     object.lockRotation === true
   );
+}
+
+export function enterInlineTextEditing(
+  canvas: fabric.Canvas,
+  object: fabric.Object | null | undefined,
+  options: { selectAll?: boolean; pointerEvent?: Event; forceUnlock?: boolean } = {},
+) {
+  if (!isEditableTextObject(object) || typeof object.enterEditing !== 'function') return false;
+
+  object.set({
+    selectable: true,
+    evented: true,
+    editable: true,
+    hasControls: true,
+    ...(options.forceUnlock ? {
+      locked: false,
+      lockMovementX: false,
+      lockMovementY: false,
+      lockScalingX: false,
+      lockScalingY: false,
+      lockRotation: false,
+    } : {}),
+  } as fabric.ITextboxOptions & Record<string, unknown>);
+  canvas.setActiveObject(object);
+  object.enterEditing();
+
+  if (options.selectAll) {
+    object.selectAll?.();
+  } else if (options.pointerEvent) {
+    object.setCursorByClick?.(options.pointerEvent);
+  }
+
+  object.hiddenTextarea?.focus();
+  object.setCoords();
+  canvas.requestRenderAll();
+  window.requestAnimationFrame(() => object.hiddenTextarea?.focus());
+  return true;
 }
 
 export function getFabricObjectId(object: fabric.Object | null | undefined) {

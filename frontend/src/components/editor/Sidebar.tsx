@@ -9,9 +9,9 @@ import {
   Search,
   FileText,
   History,
-  Heart,
   X,
   Loader2,
+  Network,
 } from 'lucide-react';
 import { useEditorStore } from '../../store/useEditorStore';
 import { fabric } from 'fabric';
@@ -26,8 +26,14 @@ import { apiFetch } from '../../services/apiClient';
 import { applyTemplateToProject } from '../../services/templatesApi';
 import { isTemplateCompatible, getTemplateOrientation } from '../../utils/templateCompatibility';
 import { TEMPLATE_TYPE_OPTIONS } from '../templates/templateConstants';
+import { EDITORIAL_TECH_TEMPLATE_NAME, applyEditorialTechPoster } from '../../utils/editorialPoster';
+import { ArchitectureDiagramPanel } from './ArchitectureDiagramPanel';
+import { AI_ARCHITECTURE_TEMPLATE_NAME } from '../../utils/architectureDiagramTypes';
+import { applyAIChatArchitectureTemplate, fitArchitectureCanvasToWorkspace } from '../../utils/architectureDiagram';
+import { removeConnectorsForNode } from '../../utils/diagramConnectors';
+import { UploadsPanel } from './uploads/UploadsPanel';
 
-type Tab = 'templates' | 'elements' | 'text' | 'draw' | 'uploads' | 'layers' | 'pages' | 'history';
+type Tab = 'templates' | 'elements' | 'diagram' | 'text' | 'draw' | 'uploads' | 'layers' | 'pages' | 'history';
 
 interface BackendTemplate {
   id: string;
@@ -46,7 +52,6 @@ export const Sidebar: React.FC = () => {
 
   // Local state for layers list
   const [layers, setLayers] = useState<fabric.Object[]>([]);
-  const [uploadedImages, setUploadedImages] = useState<Array<{ id: string; src: string; name: string }>>([]);
   const [layerSearchQuery, setLayerSearchQuery] = useState('');
   const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
   const [backendTemplates, setBackendTemplates] = useState<BackendTemplate[]>([]);
@@ -55,7 +60,6 @@ export const Sidebar: React.FC = () => {
   const [templateSearch, setTemplateSearch] = useState('');
   const [templateTypeFilter, setTemplateTypeFilter] = useState('all');
   const [applyingTemplateId, setApplyingTemplateId] = useState<string | null>(null);
-  const [templateFavourites, setTemplateFavourites] = useState<Set<string>>(new Set());
 
   const getStableLayerId = useCallback((obj: fabric.Object) => {
     let id = obj.get('id' as any) as string | undefined;
@@ -73,7 +77,10 @@ export const Sidebar: React.FC = () => {
     }
     canvas.getObjects().forEach((obj) => getStableLayerId(obj));
     setLayers([
-      ...canvas.getObjects().filter((object) => object.get('generatedEffectLayer' as keyof fabric.Object) !== true),
+      ...canvas.getObjects().filter((object) => (
+        object.get('generatedEffectLayer' as keyof fabric.Object) !== true
+        && object.get('excludeFromLayers' as keyof fabric.Object) !== true
+      )),
     ].reverse());
   }, [canvas, getStableLayerId]);
 
@@ -87,6 +94,7 @@ export const Sidebar: React.FC = () => {
     canvas.on('object:added', refreshLayers);
     canvas.on('object:removed', refreshLayers);
     canvas.on('object:modified', refreshLayers);
+    canvas.on('text:changed', refreshLayers);
     canvas.on('selection:created', refreshLayers);
     canvas.on('selection:updated', refreshLayers);
     canvas.on('selection:cleared', refreshLayers);
@@ -95,6 +103,7 @@ export const Sidebar: React.FC = () => {
       canvas.off('object:added', refreshLayers);
       canvas.off('object:removed', refreshLayers);
       canvas.off('object:modified', refreshLayers);
+      canvas.off('text:changed', refreshLayers);
       canvas.off('selection:created', refreshLayers);
       canvas.off('selection:updated', refreshLayers);
       canvas.off('selection:cleared', refreshLayers);
@@ -169,53 +178,6 @@ export const Sidebar: React.FC = () => {
       canvas.off('path:created', handlePathCreated);
     };
   }, [activeTab, canvas, brushColor, brushWidth, saveHistory, isPenMode, setPenMode]);
-
-  // Handle image uploads
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !canvas) return;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const dataUrl = event.target?.result as string;
-      const uploadId = `${file.name}-${Date.now()}`;
-
-      fabric.Image.fromURL(dataUrl, (img) => {
-        // Center image and fit inside canvas (e.g. max 400px width/height)
-        const maxWidth = 400;
-        const maxHeight = 400;
-        let scale = 1;
-
-        if (img.width && img.height) {
-          const scaleX = maxWidth / img.width;
-          const scaleY = maxHeight / img.height;
-          scale = Math.min(scaleX, scaleY, 1);
-        }
-
-        img.set({
-          left: 200,
-          top: 200,
-          scaleX: scale,
-          scaleY: scale,
-          name: file.name,
-          id: uploadId,
-        } as any);
-
-        canvas.add(img);
-        canvas.setActiveObject(img);
-        canvas.renderAll();
-        saveHistory();
-        refreshLayers();
-
-        setUploadedImages((prev) => [
-          { id: uploadId, src: dataUrl, name: file.name },
-          ...prev,
-        ]);
-      });
-    };
-    reader.readAsDataURL(file);
-    e.target.value = ''; // Reset input
-  };
 
   // Layer Ordering Operations
   const moveLayerUp = useCallback((obj: fabric.Object) => {
@@ -303,6 +265,10 @@ export const Sidebar: React.FC = () => {
 
   const deleteLayer = useCallback((obj: fabric.Object) => {
     if (!canvas) return;
+    const nodeId = obj.get('architectureNodeId' as keyof fabric.Object);
+    if (obj.get('teckstudioObjectType' as keyof fabric.Object) === 'architectureNode' && nodeId) {
+      removeConnectorsForNode(canvas, String(nodeId));
+    }
     canvas.remove(obj);
     canvas.discardActiveObject();
     canvas.renderAll();
@@ -408,6 +374,24 @@ export const Sidebar: React.FC = () => {
       refreshLayers();
       apiFetch(`/api/templates/${template.id}/use`, { method: 'POST', auth: false }).catch(() => undefined);
     });
+  };
+
+  const loadEditorialTechTemplate = async () => {
+    if (!canvas) return;
+    await applyEditorialTechPoster(canvas);
+    useEditorStore.getState().setCanvasDimensions(1080, 1080);
+    saveHistory();
+    refreshLayers();
+  };
+
+  const loadArchitectureTemplate = async () => {
+    if (!canvas) return;
+    await applyAIChatArchitectureTemplate(canvas);
+    useEditorStore.getState().setCanvasDimensions(1080, 1350);
+    const zoom = fitArchitectureCanvasToWorkspace(canvas);
+    useEditorStore.getState().setZoom(zoom);
+    saveHistory();
+    refreshLayers();
   };
 
   const handleApplyTemplate = async (template: BackendTemplate) => {
@@ -600,6 +584,9 @@ export const Sidebar: React.FC = () => {
     saveHistory();
   };
 
+  void loadSectorTemplate;
+  void loadTemplate;
+
   return (
     <aside className="w-80 h-full border-r border-white/[0.08] bg-[#101018] flex select-none shrink-0 z-10">
       {/* Icon Tab Strip */}
@@ -607,6 +594,7 @@ export const Sidebar: React.FC = () => {
         {[
           { id: 'templates', icon: LayoutTemplate, label: 'Templates' },
           { id: 'elements', icon: Sparkles, label: 'Elements' },
+          { id: 'diagram', icon: Network, label: 'Diagram' },
           { id: 'text', icon: Type, label: 'Text' },
           { id: 'draw', icon: PenTool, label: 'Draw' },
           { id: 'uploads', icon: Upload, label: 'Uploads' },
@@ -687,6 +675,73 @@ export const Sidebar: React.FC = () => {
                 </button>
               </div>
             )}
+
+            <button
+              type="button"
+              onClick={loadEditorialTechTemplate}
+              className="group overflow-hidden rounded-xl border border-amber-500/30 bg-[#07100D] text-left transition hover:border-amber-400"
+            >
+              <div
+                className="relative aspect-square overflow-hidden border-b border-amber-500/20"
+                style={{
+                  backgroundColor: '#07100D',
+                  backgroundImage: 'linear-gradient(#14201B55 1px, transparent 1px), linear-gradient(90deg, #14201B55 1px, transparent 1px)',
+                  backgroundSize: '18px 18px',
+                }}
+              >
+                <div className="absolute inset-1 border border-[#F3F0E8]/70" />
+                <div className="absolute inset-x-3 top-[28%] text-center font-serif text-[15px] font-bold text-[#F3F0E8]">
+                  ship <span className="italic text-[#C89A4B]">the API</span>
+                </div>
+                <div className="absolute inset-x-0 bottom-3 text-center font-mono text-[6px] tracking-[0.16em] text-[#858A85]">
+                  NO JARGON · SWIPE →
+                </div>
+              </div>
+              <div className="p-2.5">
+                <div className="text-[10px] font-bold text-zinc-100">{EDITORIAL_TECH_TEMPLATE_NAME}</div>
+                <div className="mt-1 text-[8px] text-amber-300">Technology · Developer · Editable</div>
+                <div className="mt-1 text-[8px] text-zinc-600">1080 × 1080</div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={loadArchitectureTemplate}
+              className="group overflow-hidden rounded-xl border border-cyan-500/30 bg-[#070A0F] text-left transition hover:border-cyan-400"
+            >
+              <div
+                className="relative aspect-[4/5] overflow-hidden border-b border-cyan-500/20"
+                style={{
+                  backgroundColor: '#070A0F',
+                  backgroundImage: 'linear-gradient(#15202A66 1px, transparent 1px), linear-gradient(90deg, #15202A66 1px, transparent 1px)',
+                  backgroundSize: '18px 18px',
+                }}
+              >
+                <div className="absolute inset-x-2 top-3 text-center text-[9px] font-black tracking-[0.12em] text-[#F1F3F5]">AI CHAT SYSTEM</div>
+                <div className="absolute inset-x-3 top-9 flex gap-1">
+                  {['#43D68A', '#F2C94C', '#FF795B', '#43D68A'].map((color, index) => (
+                    <div key={`${color}-${index}`} className="h-1 flex-1 rounded-full" style={{ backgroundColor: color }} />
+                  ))}
+                </div>
+                {[
+                  ['left-2 top-[34%]', '#43D68A'],
+                  ['right-2 top-[34%]', '#CF8CFF'],
+                  ['left-[27%] top-[56%] w-[46%]', '#43D68A'],
+                  ['right-2 top-[73%]', '#55A6FF'],
+                  ['left-[22%] bottom-3 w-[56%]', '#43D68A'],
+                ].map(([position, color], index) => (
+                  <div key={position} className={`absolute h-8 w-[30%] rounded border bg-[#11151D] ${position}`} style={{ borderColor: color }}>
+                    <div className="h-full w-1" style={{ backgroundColor: color }} />
+                    {index === 2 && <div className="absolute inset-0 flex items-center justify-center text-[4px] font-bold text-zinc-300">ORCHESTRATOR</div>}
+                  </div>
+                ))}
+              </div>
+              <div className="p-2.5">
+                <div className="text-[10px] font-bold text-zinc-100">{AI_ARCHITECTURE_TEMPLATE_NAME}</div>
+                <div className="mt-1 text-[8px] text-cyan-300">Technology · System Design · Editable</div>
+                <div className="mt-1 text-[8px] text-zinc-600">1080 × 1350</div>
+              </div>
+            </button>
 
             {/* Loading */}
             {templatesLoading && (
@@ -779,6 +834,10 @@ export const Sidebar: React.FC = () => {
         {/* Elements Tab - includes shapes, stickers, frames, grids, charts, etc. */}
         {activeTab === 'elements' && (
           <ElementsPanel />
+        )}
+
+        {activeTab === 'diagram' && (
+          <ArchitectureDiagramPanel />
         )}
 
         {/* Text Tab */}
@@ -874,64 +933,7 @@ export const Sidebar: React.FC = () => {
 
         {/* Uploads Tab */}
         {activeTab === 'uploads' && (
-          <div className="flex flex-col gap-4">
-            <label className="border-2 border-dashed border-white/[0.08] hover:border-violet-500 hover:bg-violet-500/5 rounded-xl p-6 flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors text-center">
-              <Upload className="w-6 h-6 text-zinc-400" />
-              <span className="text-xs font-semibold text-zinc-300">Upload Files</span>
-              <span className="text-[10px] text-zinc-500">Supports PNG, JPG, JPEG</span>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleImageUpload}
-                className="hidden"
-              />
-            </label>
-            
-            <p className="text-[10px] text-zinc-500 text-center">
-              Your uploaded images will appear directly on the canvas.
-            </p>
-
-            {uploadedImages.length > 0 && (
-              <div className="mt-4">
-                <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-[0.2em] mb-3">Uploaded images</h4>
-                <div className="grid grid-cols-2 gap-2">
-                  {uploadedImages.map((image) => (
-                    <button
-                      key={image.id}
-                      onClick={() => {
-                        if (!canvas) return;
-                        fabric.Image.fromURL(image.src, (img) => {
-                          img.set({
-                            left: 200,
-                            top: 200,
-                            scaleX: 1,
-                            scaleY: 1,
-                            name: image.name,
-                            id: `${image.id}-copy-${Date.now()}`,
-                          } as any);
-                          canvas.add(img);
-                          canvas.setActiveObject(img);
-                          canvas.renderAll();
-                          refreshLayers();
-                          saveHistory();
-                        });
-                      }}
-                      draggable
-                      onDragStart={(event) => {
-                        event.dataTransfer.setData('imageSrc', image.src);
-                        event.dataTransfer.setData('imageName', image.name);
-                        event.dataTransfer.effectAllowed = 'copy';
-                      }}
-                      className="group overflow-hidden rounded-xl border border-white/[0.08] hover:border-violet-500 transition-all"
-                      title={`Add ${image.name}`}
-                    >
-                      <img src={image.src} alt={image.name} className="h-20 w-full object-cover" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+          <UploadsPanel />
         )}
 
         {/* Pages Tab */}

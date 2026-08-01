@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Undo2,
   Redo2,
@@ -16,6 +16,11 @@ import {
   BarChart3,
   Calendar,
   Bell,
+  Film,
+  ShieldAlert,
+  Grid,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useEditorStore } from '../../store/useEditorStore';
@@ -27,6 +32,8 @@ import { QRCodeModal } from './QRCodeModal';
 import { ChartGeneratorModal } from './ChartGeneratorModal';
 import { ContentPlannerModal } from './ContentPlannerModal';
 import { NotificationCenter } from './NotificationCenter';
+import { VideoExportDialog } from './export/VideoExportDialog';
+import type { VideoExportFormat } from '../../types/videoExport';
 
 const toolbarGroupClass = 'flex h-10 shrink-0 items-center gap-1 rounded-xl border border-white/[0.08] bg-zinc-950/80 p-0.5 shadow-sm';
 const iconButtonClass = 'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white disabled:cursor-not-allowed disabled:text-zinc-700 disabled:hover:bg-transparent';
@@ -49,6 +56,12 @@ export const Toolbar: React.FC = () => {
     setEditorMode,
     rulersEnabled,
     setRulersEnabled,
+    zoom,
+    setZoom,
+    showSafeArea,
+    toggleSafeArea,
+    showGrid,
+    toggleGrid,
   } = useEditorStore();
 
   const [showExportMenu, setShowExportMenu] = useState(false);
@@ -58,6 +71,16 @@ export const Toolbar: React.FC = () => {
   const [showChartModal, setShowChartModal] = useState(false);
   const [showPlannerModal, setShowPlannerModal] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [videoExportFormat, setVideoExportFormat] = useState<VideoExportFormat | null>(null);
+
+  useEffect(() => {
+    const openVideoExport = (event: Event) => {
+      const format = (event as CustomEvent<{ format?: VideoExportFormat }>).detail?.format;
+      setVideoExportFormat(format === 'webm' ? 'webm' : 'mp4');
+    };
+    window.addEventListener('teckstudio:open-video-export', openVideoExport);
+    return () => window.removeEventListener('teckstudio:open-video-export', openVideoExport);
+  }, []);
 
   const canUndo = historyIndex > 0;
   const canRedo = historyIndex < history.length - 1;
@@ -66,7 +89,18 @@ export const Toolbar: React.FC = () => {
     if (!canvas) return;
 
     const activeObject = canvas.getActiveObject();
+    const viewportTransform = canvas.viewportTransform
+      ? [...canvas.viewportTransform]
+      : [1, 0, 0, 1, 0, 0];
+    const editorOnlyObjects = canvas.getObjects().filter((object) => (
+      object.get('editorOnly' as keyof typeof object) === true ||
+      object.get('teckstudioObjectType' as keyof typeof object) === 'editorGuide' ||
+      object.get('excludeFromExport' as keyof typeof object) === true
+    ));
+    const editorOnlyVisibility = editorOnlyObjects.map((object) => object.visible);
     canvas.discardActiveObject();
+    editorOnlyObjects.forEach((object) => object.set('visible', false));
+    canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
     canvas.renderAll();
 
     setTimeout(() => {
@@ -79,7 +113,7 @@ export const Toolbar: React.FC = () => {
       } else if (type === 'jpg') {
         const oldBg = canvas.backgroundColor;
         if (!oldBg || oldBg === 'transparent') {
-          canvas.setBackgroundColor('#ffffff', () => {});
+          canvas.setBackgroundColor('#000000', () => {});
         }
 
         const dataURL = canvas.toDataURL({
@@ -100,10 +134,12 @@ export const Toolbar: React.FC = () => {
         URL.revokeObjectURL(url);
       }
 
+      editorOnlyObjects.forEach((object, index) => object.set('visible', editorOnlyVisibility[index]));
+      canvas.setViewportTransform(viewportTransform);
       if (activeObject) {
         canvas.setActiveObject(activeObject);
-        canvas.renderAll();
       }
+      canvas.renderAll();
       setShowExportMenu(false);
     }, 50);
   };
@@ -230,7 +266,7 @@ export const Toolbar: React.FC = () => {
             </button>
           </div>
 
-          <div className={toolbarGroupClass} aria-label="Additional tools">
+          <div className={toolbarGroupClass} aria-label="Canvas Display & Guides">
             <button
               onClick={() => setRulersEnabled(!rulersEnabled)}
               className={`${iconButtonClass} ${rulersEnabled ? 'border border-violet-500/30 bg-violet-600/15 text-violet-400' : ''}`}
@@ -238,6 +274,91 @@ export const Toolbar: React.FC = () => {
               aria-label={rulersEnabled ? 'Hide Rulers' : 'Show Rulers'}
             >
               <Ruler className="h-4 w-4" />
+            </button>
+            <button
+              onClick={toggleSafeArea}
+              className={`${iconButtonClass} ${showSafeArea ? 'border border-cyan-500/40 bg-cyan-500/20 text-cyan-300' : ''}`}
+              title={showSafeArea ? 'Hide Safe Area (1:1 Square)' : 'Show Safe Area (1:1 Square)'}
+              aria-label="Toggle Safe Area"
+            >
+              <ShieldAlert className="h-4 w-4" />
+            </button>
+            <button
+              onClick={toggleGrid}
+              className={`${iconButtonClass} ${showGrid ? 'border border-violet-500/40 bg-violet-500/20 text-violet-300' : ''}`}
+              title={showGrid ? 'Hide Alignment Grid' : 'Show Alignment Grid'}
+              aria-label="Toggle Alignment Grid"
+            >
+              <Grid className="h-4 w-4" />
+            </button>
+          </div>
+
+          {/* Zoom Controls */}
+          <div className={toolbarGroupClass} aria-label="Zoom Controls">
+            <button
+              onClick={() => {
+                if (!canvas) return;
+                const nextZoom = Math.max(0.25, Math.round((zoom - 0.1) * 100) / 100);
+                canvas.setZoom(nextZoom);
+                setZoom(nextZoom);
+                canvas.requestRenderAll();
+              }}
+              className={iconButtonClass}
+              title="Zoom Out"
+            >
+              <ZoomOut className="h-4 w-4" />
+            </button>
+
+            <select
+              value={Math.round(zoom * 100)}
+              onChange={(e) => {
+                if (!canvas) return;
+                const val = e.target.value;
+                if (val === 'fit') {
+                  const el = canvas.getElement().parentElement;
+                  if (el) {
+                    const padding = 80;
+                    const scaleX = (el.clientWidth - padding) / 1080;
+                    const scaleY = (el.clientHeight - padding) / 1080;
+                    const fitZoom = Math.min(scaleX, scaleY, 1.0);
+                    canvas.setViewportTransform([fitZoom, 0, 0, fitZoom, (el.clientWidth - 1080 * fitZoom) / 2, (el.clientHeight - 1080 * fitZoom) / 2]);
+                    setZoom(fitZoom);
+                    canvas.requestRenderAll();
+                  }
+                  return;
+                }
+                const targetZoom = Number(val) / 100;
+                const el = canvas.getElement().parentElement;
+                const offsetX = el ? (el.clientWidth - 1080 * targetZoom) / 2 : 0;
+                const offsetY = el ? (el.clientHeight - 1080 * targetZoom) / 2 : 0;
+                canvas.setViewportTransform([targetZoom, 0, 0, targetZoom, offsetX, offsetY]);
+                setZoom(targetZoom);
+                canvas.requestRenderAll();
+              }}
+              className="h-8 bg-zinc-900 text-[10px] font-bold text-zinc-200 border border-zinc-800 rounded px-1.5 outline-none cursor-pointer"
+              title="Preset Zoom Level"
+            >
+              <option value="fit">Fit</option>
+              <option value="25">25%</option>
+              <option value="50">50%</option>
+              <option value="75">75%</option>
+              <option value="100">100%</option>
+              <option value="150">150%</option>
+              <option value="200">200%</option>
+            </select>
+
+            <button
+              onClick={() => {
+                if (!canvas) return;
+                const nextZoom = Math.min(3.0, Math.round((zoom + 0.1) * 100) / 100);
+                canvas.setZoom(nextZoom);
+                setZoom(nextZoom);
+                canvas.requestRenderAll();
+              }}
+              className={iconButtonClass}
+              title="Zoom In"
+            >
+              <ZoomIn className="h-4 w-4" />
             </button>
           </div>
         </div>
@@ -307,7 +428,7 @@ export const Toolbar: React.FC = () => {
                   className="flex w-full flex-col rounded-lg px-3 py-2 text-left text-xs text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white"
                 >
                   <span className="font-semibold">JPG Image</span>
-                  <span className="text-[10px] text-zinc-500">Good for web (White bg)</span>
+                  <span className="text-[10px] text-zinc-500">Good for web (Black bg)</span>
                 </button>
                 <button
                   onClick={() => handleExport('svg')}
@@ -315,6 +436,33 @@ export const Toolbar: React.FC = () => {
                 >
                   <span className="font-semibold">SVG Vector</span>
                   <span className="text-[10px] text-zinc-500">Scalable vector graphics</span>
+                </button>
+                <div className="my-1 border-t border-white/[0.08]" />
+                <button
+                  onClick={() => {
+                    setShowExportMenu(false);
+                    setVideoExportFormat('mp4');
+                  }}
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white"
+                >
+                  <Film className="h-3.5 w-3.5 text-violet-400" />
+                  <div>
+                    <span className="block font-semibold">MP4 Video</span>
+                    <span className="text-[10px] text-zinc-500">H.264 · Best compatibility</span>
+                  </div>
+                </button>
+                <button
+                  onClick={() => {
+                    setShowExportMenu(false);
+                    setVideoExportFormat('webm');
+                  }}
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white"
+                >
+                  <Film className="h-3.5 w-3.5 text-cyan-400" />
+                  <div>
+                    <span className="block font-semibold">WebM Video</span>
+                    <span className="text-[10px] text-zinc-500">VP9 · Efficient web video</span>
+                  </div>
                 </button>
                 <div className="my-1 border-t border-white/[0.08]" />
                 <button
@@ -359,6 +507,13 @@ export const Toolbar: React.FC = () => {
       <ChartGeneratorModal isOpen={showChartModal} onClose={() => setShowChartModal(false)} />
       <ContentPlannerModal isOpen={showPlannerModal} onClose={() => setShowPlannerModal(false)} />
       <NotificationCenter isOpen={showNotifications} onClose={() => setShowNotifications(false)} />
+      {videoExportFormat && (
+        <VideoExportDialog
+          isOpen
+          initialFormat={videoExportFormat}
+          onClose={() => setVideoExportFormat(null)}
+        />
+      )}
     </header>
   );
 };

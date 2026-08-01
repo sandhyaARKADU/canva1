@@ -30,9 +30,14 @@ import { GridOverlay } from './GridOverlay';
 import { AlignmentTools } from './AlignmentTools';
 import { DevModeInspector } from './DevModeInspector';
 import { ImageCropper } from './ImageCropper';
+import { EditableImportControls } from './image/EditableImportControls';
+import { PosterColourControls } from './image/PosterColourControls';
+import { RoundedHighlightControls } from './RoundedHighlightControls';
 import { TextOnPath } from './TextOnPath';
 import { ElementPropertiesControls } from './ElementPropertiesControls';
+import { MediaFittingControls } from './MediaFittingControls';
 import { COMMON_FONT_SIZES, MAX_FONT_SIZE, MIN_FONT_SIZE, clampFontSize, hasPartialTextSelection, isTextObjectLocked, readSelectionStyleValue } from '../../utils/textSelectionStyles';
+import { synchronizeRoundedHighlightText } from '../../utils/roundedHighlightText';
 
 const PRESET_COLORS = [
   '#ffffff', '#000000', '#f4f4f5', '#71717a',
@@ -42,6 +47,7 @@ const PRESET_COLORS = [
 ];
 
 const FONT_FAMILIES = [
+  'Fredoka', 'Nunito', 'Arial Rounded MT Bold',
   'Outfit', 'Inter', 'system-ui', 'Arial', 'Georgia',
   'Courier New', 'Times New Roman', 'Verdana', 'Helvetica',
   'Roboto', 'Montserrat', 'Poppins', 'Playfair Display',
@@ -166,7 +172,7 @@ export const PropertiesPanel: React.FC = () => {
   }, []);
 
   // Canvas background state helper
-  const [canvasBg, setCanvasBg] = React.useState('#ffffff');
+  const [canvasBg, setCanvasBg] = React.useState('#000000');
 
   // Object shadow state
   const [shadowColor, setShadowColor] = React.useState('#000000');
@@ -180,6 +186,7 @@ export const PropertiesPanel: React.FC = () => {
 
   // Border radius state
   const [borderRadius, setBorderRadius] = React.useState(0);
+  const [textContent, setTextContent] = React.useState('');
 
   React.useEffect(() => {
     if (canvas && !selectedObject) {
@@ -205,6 +212,7 @@ export const PropertiesPanel: React.FC = () => {
       }
 
       if (isText) {
+        setTextContent((selectedObject as fabric.Textbox).text || '');
         setLetterSpacing((selectedObject as any).charSpacing || 0);
         setLineHeight((selectedObject as any).lineHeight || 1.4);
       }
@@ -214,6 +222,18 @@ export const PropertiesPanel: React.FC = () => {
       }
     }
   }, [selectedObject, isText]);
+
+  React.useEffect(() => {
+    if (!canvas || !selectedObject || !isText) return;
+    const syncTextContent = (event: fabric.IEvent) => {
+      if (event.target !== selectedObject) return;
+      setTextContent((selectedObject as fabric.Textbox).text || '');
+    };
+    canvas.on('text:changed', syncTextContent);
+    return () => {
+      canvas.off('text:changed', syncTextContent);
+    };
+  }, [canvas, isText, selectedObject]);
 
   const handleCanvasBgChange = (color: string) => {
     if (!canvas) return;
@@ -242,24 +262,24 @@ export const PropertiesPanel: React.FC = () => {
     saveHistory();
   };
 
-  const handleLetterSpacingChange = (spacing: number) => {
+  const handleLetterSpacingChange = (spacing: number, commitHistory = true) => {
     if (!selectedObject || !canvas) return;
     setLetterSpacing(spacing);
     if (isText) {
-      applyTextSelectionStyles({ charSpacing: spacing });
+      applyTextSelectionStyles({ charSpacing: spacing }, { saveHistory: commitHistory });
       return;
     }
     (selectedObject as any).set('charSpacing', spacing);
     canvas.renderAll();
-    saveHistory();
+    if (commitHistory) saveHistory();
   };
 
-  const handleLineHeightChange = (height: number) => {
+  const handleLineHeightChange = (height: number, commitHistory = true) => {
     if (!selectedObject || !canvas) return;
     setLineHeight(height);
     (selectedObject as any).set('lineHeight', height);
     canvas.renderAll();
-    saveHistory();
+    if (commitHistory) saveHistory();
   };
 
   const handleBorderRadiusChange = (radius: number) => {
@@ -561,6 +581,28 @@ export const PropertiesPanel: React.FC = () => {
                 <div className={`rounded-lg border px-3 py-2 text-[11px] font-semibold ${hasPartialTextRange ? 'border-violet-400/30 bg-violet-500/10 text-violet-100' : 'border-white/[0.08] bg-zinc-900/60 text-zinc-400'}`}>
                   {textStyleTargetLabel}
                 </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] text-zinc-500">Text Content</label>
+                  <textarea
+                    value={textContent}
+                    rows={Math.min(5, Math.max(2, textContent.split('\n').length))}
+                    onChange={(event) => {
+                      if (!canvas || !selectedObject || !isText) return;
+                      const value = event.target.value;
+                      setTextContent(value);
+                      const textObject = selectedObject as fabric.Textbox;
+                      textObject.set('text', value);
+                      synchronizeRoundedHighlightText(textObject);
+                      textObject.initDimensions();
+                      textObject.setCoords();
+                      canvas.requestRenderAll();
+                      canvas.fire('text:changed', { target: textObject });
+                    }}
+                    onBlur={() => saveHistory()}
+                    className="w-full resize-y rounded-lg border border-white/[0.08] bg-zinc-900 px-3 py-2 text-xs text-zinc-100 outline-none focus:border-violet-500"
+                  />
+                </div>
+                <RoundedHighlightControls />
                 {/* Font Family */}
                 <div className="flex flex-col gap-1.5">
                   <label className="text-[10px] text-zinc-500">Font Family</label>
@@ -751,7 +793,15 @@ export const PropertiesPanel: React.FC = () => {
                 <div className="flex flex-col gap-1.5">
                   <div className="flex justify-between items-center">
                     <label className="text-[10px] text-zinc-500">Letter Spacing</label>
-                    <span className="text-[10px] text-zinc-400 font-mono">{letterSpacing}</span>
+                    <input
+                      type="number"
+                      min="-200"
+                      max="500"
+                      value={letterSpacing}
+                      onPointerDown={preserveTextSelection}
+                      onChange={(e) => handleLetterSpacingChange(parseInt(e.target.value) || 0)}
+                      className="w-16 rounded border border-zinc-800 bg-zinc-950 px-1 py-0.5 text-right text-[10px] font-mono text-zinc-300"
+                    />
                   </div>
                   <input
                     type="range"
@@ -759,7 +809,8 @@ export const PropertiesPanel: React.FC = () => {
                     max="500"
                     value={letterSpacing}
                     onPointerDown={preserveTextSelection}
-                    onChange={(e) => handleLetterSpacingChange(parseInt(e.target.value))}
+                    onChange={(e) => handleLetterSpacingChange(parseInt(e.target.value), false)}
+                    onPointerUp={() => saveHistory()}
                     className="w-full accent-violet-500 h-1 rounded-full cursor-pointer bg-zinc-800"
                   />
                 </div>
@@ -768,7 +819,16 @@ export const PropertiesPanel: React.FC = () => {
                 <div className="flex flex-col gap-1.5">
                   <div className="flex justify-between items-center">
                     <label className="text-[10px] text-zinc-500">Line Height</label>
-                    <span className="text-[10px] text-zinc-400 font-mono">{lineHeight.toFixed(1)}</span>
+                    <input
+                      type="number"
+                      min="0.5"
+                      max="3"
+                      step="0.1"
+                      value={lineHeight}
+                      onPointerDown={preserveTextSelection}
+                      onChange={(e) => handleLineHeightChange(Math.max(0.5, Number(e.target.value) || 1))}
+                      className="w-16 rounded border border-zinc-800 bg-zinc-950 px-1 py-0.5 text-right text-[10px] font-mono text-zinc-300"
+                    />
                   </div>
                   <input
                     type="range"
@@ -777,7 +837,8 @@ export const PropertiesPanel: React.FC = () => {
                     step="0.1"
                     value={lineHeight}
                     onPointerDown={preserveTextSelection}
-                    onChange={(e) => handleLineHeightChange(parseFloat(e.target.value))}
+                    onChange={(e) => handleLineHeightChange(parseFloat(e.target.value), false)}
+                    onPointerUp={() => saveHistory()}
                     className="w-full accent-violet-500 h-1 rounded-full cursor-pointer bg-zinc-800"
                   />
                 </div>
@@ -936,12 +997,33 @@ export const PropertiesPanel: React.FC = () => {
         )}
       </div>
 
+      {selectedObject?.get('posterConversionId' as keyof fabric.Object) && (
+        <>
+          <div className="h-[1px] bg-zinc-800" />
+          <EditableImportControls />
+        </>
+      )}
+
+      {selectedObject?.get('posterConversionRole' as keyof fabric.Object) === 'region' && (
+        <>
+          <div className="h-[1px] bg-zinc-800" />
+          <PosterColourControls key={String(selectedObject.get('id' as keyof fabric.Object) || '')} />
+        </>
+      )}
+
       {selectedObject?.type === 'image' && (
         <>
           <div className="h-[1px] bg-zinc-800" />
           <ImageFilters />
           <div className="h-[1px] bg-zinc-800" />
           <ImageCropper />
+        </>
+      )}
+
+      {selectedObject && (
+        <>
+          <div className="h-[1px] bg-zinc-800" />
+          <MediaFittingControls object={selectedObject} />
         </>
       )}
 

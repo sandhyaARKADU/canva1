@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Download, Settings, Loader2 } from 'lucide-react';
 import { useEditorStore } from '../../store/useEditorStore';
+import { beginStaticConnectorExport } from '../../utils/connectorAnimationManager';
 
 type ExportFormat = 'png' | 'jpg' | 'svg' | 'pdf';
 type ExportDPI = 72 | 150 | 300 | 600;
@@ -26,7 +27,7 @@ export const ExportSettings: React.FC = () => {
     quality: 0.95,
     width: 800,
     height: 800,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#000000',
     transparent: false,
   });
 
@@ -37,11 +38,18 @@ export const ExportSettings: React.FC = () => {
   const handleExport = async () => {
     if (!canvas) return;
     setExporting(true);
+    const activeObject = canvas.getActiveObject();
+    const restoreConnectorAnimation = beginStaticConnectorExport(canvas);
+    const excludedObjects = canvas.getObjects().filter((object) => (
+      object.get('excludeFromExport' as keyof fabric.Object) === true ||
+      object.get('editorOnly' as keyof fabric.Object) === true
+    ));
+    const excludedVisibility = excludedObjects.map((object) => object.visible);
 
     try {
       // Discard active selection so selection boxes aren't in the exported image
-      const activeObject = canvas.getActiveObject();
       canvas.discardActiveObject();
+      excludedObjects.forEach((object) => object.set('visible', false));
       canvas.renderAll();
 
       await new Promise(resolve => setTimeout(resolve, 50));
@@ -55,7 +63,7 @@ export const ExportSettings: React.FC = () => {
       } else if (settings.format === 'jpg') {
         const oldBg = canvas.backgroundColor;
         if (!oldBg || oldBg === 'transparent') {
-          canvas.setBackgroundColor('#ffffff', () => {});
+          canvas.setBackgroundColor(settings.backgroundColor, () => {});
         }
 
         const dataURL = canvas.toDataURL({
@@ -78,12 +86,11 @@ export const ExportSettings: React.FC = () => {
         await exportToPDF(canvas, exportName, settings);
       }
 
-      // Restore active selection if there was one
-      if (activeObject) {
-        canvas.setActiveObject(activeObject);
-        canvas.renderAll();
-      }
     } finally {
+      restoreConnectorAnimation();
+      excludedObjects.forEach((object, index) => object.set('visible', excludedVisibility[index]));
+      if (activeObject) canvas.setActiveObject(activeObject);
+      canvas.renderAll();
       setExporting(false);
     }
   };

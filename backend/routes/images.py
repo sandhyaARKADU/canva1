@@ -1,6 +1,5 @@
 import base64
 import io
-import os
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from auth import get_current_user
 from database import ProcessedImage, User, get_db
+from services.background_removal_service import remove_background_with_provider
 
 
 router = APIRouter(prefix="/api/images", tags=["image-processing"])
@@ -84,28 +84,7 @@ def _local_edge_matte(image: Image.Image) -> tuple[Image.Image, Image.Image, flo
 
 
 def _remove_bg_provider(payload: bytes) -> Optional[Image.Image]:
-    api_key = os.getenv("REMOVE_BG_API_KEY", "").strip()
-    if not api_key:
-        return None
-    try:
-        import httpx
-
-        response = httpx.post(
-            "https://api.remove.bg/v1.0/removebg",
-            headers={"X-Api-Key": api_key},
-            files={"image_file": ("image.png", payload, "application/octet-stream")},
-            data={"size": "auto", "format": "png"},
-            timeout=120.0,
-        )
-        response.raise_for_status()
-        content_type = response.headers.get("content-type", "")
-        if not content_type.startswith("image/") or not response.content:
-            raise ValueError(f"Invalid remove.bg response content type: {content_type}")
-        result = Image.open(io.BytesIO(response.content)).convert("RGBA")
-        result.load()
-        return result
-    except Exception:
-        return None
+    return remove_background_with_provider(payload)
 
 
 def _hex_color(value: str, fallback: str = "#8b5cf6") -> tuple[int, int, int, int]:

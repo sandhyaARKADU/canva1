@@ -2,41 +2,23 @@ import React, { useState } from 'react';
 import { fabric } from 'fabric';
 import { Palette, Sparkles, Type } from 'lucide-react';
 import { useEditorStore } from '../../store/useEditorStore';
-import { hasPartialTextSelection, transformTextCase } from '../../utils/textSelectionStyles';
+import {
+  ROUNDED_BOLD_HIGHLIGHT_PRESET_ID,
+  TEXT_PRESETS,
+  type TextPreset,
+} from '../../config/textPresets';
+import {
+  applyRoundedHighlightPresetToText,
+  createRoundedHighlightText,
+} from '../../utils/roundedHighlightText';
+import {
+  enterInlineTextEditing,
+  hasPartialTextSelection,
+  transformTextCase,
+} from '../../utils/textSelectionStyles';
 import { applyTextEffect } from '../../utils/textEffects';
 import { FontBrowserPanel } from './FontBrowserPanel';
 import { TextEffectsPanel } from './TextEffectsPanel';
-
-type TextPreset = {
-  id: string;
-  name: string;
-  preview: string;
-  text: string;
-  fontFamily: string;
-  fontSize: number;
-  fontWeight: string | number;
-  fill: string;
-  textAlign: fabric.Textbox['textAlign'];
-  charSpacing?: number;
-  lineHeight?: number;
-  stroke?: string;
-  strokeWidth?: number;
-  shadow?: fabric.IShadowOptions;
-  gradient?: string[];
-};
-
-const TEXT_PRESETS: TextPreset[] = [
-  { id: 'modern-heading', name: 'Modern Heading', preview: 'Modern', text: 'Modern Heading', fontFamily: 'Outfit', fontSize: 72, fontWeight: 800, fill: '#ffffff', textAlign: 'center', charSpacing: 10, lineHeight: 1.05 },
-  { id: 'bold-poster-title', name: 'Bold Poster Title', preview: 'POSTER', text: 'BOLD POSTER TITLE', fontFamily: 'Outfit', fontSize: 82, fontWeight: 900, fill: '#f8fafc', textAlign: 'center', charSpacing: 35, lineHeight: 0.95, stroke: '#111827', strokeWidth: 2 },
-  { id: 'gradient-ai', name: 'Gradient AI', preview: 'AI', text: 'Gradient AI', fontFamily: 'Outfit', fontSize: 78, fontWeight: 900, fill: '#8b5cf6', textAlign: 'center', gradient: ['#8b5cf6', '#06b6d4'], shadow: { color: 'rgba(139,92,246,0.35)', blur: 18, offsetX: 0, offsetY: 8 } },
-  { id: 'gold-luxury', name: 'Gold Luxury', preview: 'Luxury', text: 'Gold Luxury', fontFamily: 'Georgia', fontSize: 68, fontWeight: 700, fill: '#f59e0b', textAlign: 'center', gradient: ['#fef3c7', '#f59e0b', '#92400e'], charSpacing: 18 },
-  { id: 'retro-outline', name: 'Retro Outline', preview: 'Retro', text: 'Retro Outline', fontFamily: 'Outfit', fontSize: 70, fontWeight: 900, fill: '#f97316', textAlign: 'center', stroke: '#111827', strokeWidth: 4, shadow: { color: '#facc15', blur: 0, offsetX: 6, offsetY: 6 } },
-  { id: 'soft-shadow', name: 'Soft Shadow', preview: 'Soft', text: 'Soft Shadow', fontFamily: 'Inter', fontSize: 58, fontWeight: 700, fill: '#ffffff', textAlign: 'center', shadow: { color: 'rgba(0,0,0,0.35)', blur: 22, offsetX: 0, offsetY: 12 } },
-  { id: 'corporate-heading', name: 'Corporate Heading', preview: 'Business', text: 'Corporate Heading', fontFamily: 'Inter', fontSize: 54, fontWeight: 800, fill: '#0f172a', textAlign: 'left', lineHeight: 1.15 },
-  { id: 'sale-poster', name: 'Sale Poster', preview: 'SALE', text: 'SALE 50% OFF', fontFamily: 'Outfit', fontSize: 78, fontWeight: 900, fill: '#ef4444', textAlign: 'center', charSpacing: 20, stroke: '#ffffff', strokeWidth: 3 },
-  { id: 'gold-highlight', name: 'Gold Highlight', preview: 'Gold', text: 'Gold Highlight', fontFamily: 'Playfair Display', fontSize: 62, fontWeight: 800, fill: '#fbbf24', textAlign: 'center', charSpacing: 8 },
-  { id: 'technical-label', name: 'Technical Label', preview: 'Label', text: 'Technical Label', fontFamily: 'Courier New', fontSize: 28, fontWeight: 700, fill: '#67e8f9', textAlign: 'left', charSpacing: 40 },
-];
 
 const GRADIENTS = [
   { id: 'purple-blue', name: 'Purple → Blue', colors: ['#8b5cf6', '#3b82f6'] },
@@ -76,6 +58,7 @@ export const TextToolsPanel: React.FC = () => {
     textSelectionRange,
   } = useEditorStore();
   const [message, setMessage] = useState('');
+  const [addingPresetId, setAddingPresetId] = useState('');
 
   const hasRange = isTextObject(selectedObject) && hasPartialTextSelection(selectedObject, textSelectionRange);
 
@@ -91,6 +74,7 @@ export const TextToolsPanel: React.FC = () => {
       fontFamily: preset.fontFamily,
       fontSize: preset.fontSize,
       fontWeight: preset.fontWeight,
+      fontStyle: preset.fontStyle || 'normal',
       fill: preset.gradient ? preset.gradient[0] : preset.fill,
       charSpacing: preset.charSpacing || 0,
       lineHeight: preset.lineHeight || 1.1,
@@ -101,8 +85,35 @@ export const TextToolsPanel: React.FC = () => {
     return applyTextSelectionStyles(styles);
   };
 
-  const addTextPreset = (preset: TextPreset) => {
-    if (!canvas) return;
+  const addTextPreset = async (preset: TextPreset) => {
+    if (!canvas || addingPresetId) return;
+    if (preset.id === ROUNDED_BOLD_HIGHLIGHT_PRESET_ID) {
+      setAddingPresetId(preset.id);
+      setMessage('');
+      try {
+        const selectedText = isTextObject(selectedObject) ? selectedObject : null;
+        const textObject = selectedText
+          ? await applyRoundedHighlightPresetToText(canvas, selectedText, preset)
+          : await createRoundedHighlightText(canvas, preset);
+        if (!textObject) throw new Error('Select an editable text layer and try again.');
+        if (!selectedText) {
+          canvas.add(textObject);
+          canvas.setActiveObject(textObject);
+          enterInlineTextEditing(canvas, textObject, { selectAll: true });
+        }
+        useEditorStore.getState().setSelectedObject(textObject);
+        saveHistory();
+        window.dispatchEvent(new CustomEvent('teckstudio:open-panel', { detail: { panel: 'text-styles' } }));
+        setMessage(selectedText
+          ? 'Rounded Bold Highlight applied without changing your text.'
+          : 'Rounded Title added. Start typing to replace it.');
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : 'Unable to load the rounded heading font.');
+      } finally {
+        setAddingPresetId('');
+      }
+      return;
+    }
     if (applyPresetToSelectedText(preset)) {
       setMessage(hasRange ? 'Preset applied to selected text.' : 'Preset applied to text box.');
       return;
@@ -113,6 +124,7 @@ export const TextToolsPanel: React.FC = () => {
       fontFamily: preset.fontFamily,
       fontSize: preset.fontSize,
       fontWeight: preset.fontWeight,
+      fontStyle: preset.fontStyle || 'normal',
       fill: preset.fill,
       textAlign: preset.textAlign,
       charSpacing: preset.charSpacing || 0,
@@ -167,13 +179,40 @@ export const TextToolsPanel: React.FC = () => {
 
   return (
     <div className="flex flex-col gap-4">
+      <div>
+        <div className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wide text-zinc-500">
+          <Type className="h-3.5 w-3.5" /> Heading Styles
+        </div>
+        {TEXT_PRESETS.filter((preset) => preset.category === 'heading').map((preset) => (
+          <button
+            key={preset.id}
+            type="button"
+            aria-label={`Add ${preset.name}`}
+            disabled={Boolean(addingPresetId)}
+            onMouseDown={preserveSelection}
+            onClick={() => void addTextPreset(preset)}
+            className="w-full overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/40 p-3 text-left transition hover:border-amber-300/50 disabled:cursor-wait disabled:opacity-60"
+          >
+            <span
+              className="block whitespace-nowrap text-[22px] font-bold leading-none tracking-[-0.03em]"
+              style={{ fontFamily: '"Fredoka", "Nunito", "Arial Rounded MT Bold", sans-serif' }}
+            >
+              <span className="text-[#F5F2E8]">Round</span>
+              <span className="text-[#E3A83B]">ed</span>
+            </span>
+            <span className="mt-2 block text-[10px] font-bold text-zinc-200">{preset.name}</span>
+            <span className="mt-0.5 block text-[9px] text-zinc-500">Bold rounded heading · optional accent</span>
+          </button>
+        ))}
+      </div>
+
       <div className="grid gap-2">
-        {TEXT_PRESETS.slice(0, 3).map((preset) => (
+        {TEXT_PRESETS.filter((preset) => preset.category !== 'heading').slice(0, 3).map((preset) => (
           <button
             key={preset.id}
             type="button"
             onMouseDown={preserveSelection}
-            onClick={() => addTextPreset(preset)}
+            onClick={() => void addTextPreset(preset)}
             className="w-full rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 text-left transition hover:border-violet-500/50 hover:bg-zinc-800/40"
           >
             <span className="block text-xl font-black leading-none text-white">{preset.preview}</span>
@@ -187,12 +226,12 @@ export const TextToolsPanel: React.FC = () => {
           <Type className="h-3.5 w-3.5" /> Text Presets
         </div>
         <div className="grid grid-cols-2 gap-2">
-          {TEXT_PRESETS.slice(3).map((preset) => (
+          {TEXT_PRESETS.filter((preset) => preset.category !== 'heading').slice(3).map((preset) => (
             <button
               key={preset.id}
               type="button"
               onMouseDown={preserveSelection}
-              onClick={() => addTextPreset(preset)}
+              onClick={() => void addTextPreset(preset)}
               className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3 text-left transition hover:border-violet-500/50"
             >
               <span className="block truncate text-sm font-black text-zinc-100">{preset.preview}</span>

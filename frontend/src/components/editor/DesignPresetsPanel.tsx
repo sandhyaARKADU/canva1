@@ -1,11 +1,9 @@
 import React, { useState } from 'react';
 import { useEditorStore } from '../../store/useEditorStore';
 import {
-  DESIGN_PRESETS,
   getPresetsByCategory,
   getPresetCategories,
   searchPresets,
-  createCustomPreset,
   type DesignPreset,
 } from '../../utils/designPresets';
 import {

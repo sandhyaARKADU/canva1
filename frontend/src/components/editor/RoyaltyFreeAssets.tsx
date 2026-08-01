@@ -1433,6 +1433,7 @@ export const RoyaltyFreeAssets: React.FC = () => {
               <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3">Solid Colors</h4>
               <div className="flex flex-wrap gap-2">
                 {[
+                  '#000000',
                   '#8b5cf6', '#ec4899', '#f97316', '#eab308', '#22c55e',
                   '#06b6d4', '#3b82f6', '#a855f7', '#ef4444', '#10b981',
                   '#f59e0b', '#6366f1', '#14b8a6', '#e11d48', '#7c3aed',
@@ -1456,7 +1457,10 @@ export const RoyaltyFreeAssets: React.FC = () => {
                       canvas.renderAll();
                       saveHistory();
                     }}
-                    className="w-8 h-8 rounded-lg border-2 border-transparent hover:border-white/60 transition-all cursor-pointer shadow-md hover:scale-110"
+                    aria-label={`${color} solid color`}
+                    className={`w-8 h-8 rounded-lg border-2 hover:border-white/60 transition-all cursor-pointer shadow-md hover:scale-110 ${
+                      color === '#000000' ? 'border-zinc-500' : 'border-transparent'
+                    }`}
                     style={{ backgroundColor: color }}
                   />
                 ))}

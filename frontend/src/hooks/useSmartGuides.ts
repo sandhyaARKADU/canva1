@@ -28,7 +28,11 @@ export const useSmartGuides = (canvas: fabric.Canvas | null) => {
         evented: false,
         strokeDashArray: [5, 5],
         opacity: 0.8,
-      });
+        excludeFromExport: true,
+        editorOnly: true,
+        name: 'Smart vertical guide',
+        teckstudioObjectType: 'editorGuide',
+      } as fabric.ILineOptions & Record<string, unknown>);
       canvas.add(line);
       verticalLines.push(line);
     };
@@ -41,7 +45,11 @@ export const useSmartGuides = (canvas: fabric.Canvas | null) => {
         evented: false,
         strokeDashArray: [5, 5],
         opacity: 0.8,
-      });
+        excludeFromExport: true,
+        editorOnly: true,
+        name: 'Smart horizontal guide',
+        teckstudioObjectType: 'editorGuide',
+      } as fabric.ILineOptions & Record<string, unknown>);
       canvas.add(line);
       horizontalLines.push(line);
     };

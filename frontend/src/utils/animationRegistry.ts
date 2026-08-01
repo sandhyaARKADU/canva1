@@ -78,7 +78,7 @@ function svgWrap(inner: string, w = 100, h = 100): string {
 
 // ─── Animation Engine ─────────────────────────────────────────────────────────
 
-let activeAnimations = new Map<string, () => void>();
+const activeAnimations = new Map<string, () => void>();
 let isGlobalPlaying = false;
 
 export function startGlobalPlayback() { isGlobalPlaying = true; }
@@ -806,7 +806,7 @@ export function searchAnimations(query: string): AnimationDefinition[] {
 
 // ─── Recommendation engine ────────────────────────────────────────────────────
 
-export function getRecommendations(_context?: { query?: string; category?: string }): AnimationDefinition[] {
+export function getRecommendations(): AnimationDefinition[] {
   // Mix of popular animations from different categories
   const popular = [
     'emoji-wave', 'celeb-confetti', 'arrow-bounce', 'shape-circle-pulse',

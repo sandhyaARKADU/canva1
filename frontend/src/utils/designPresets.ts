@@ -29,6 +29,10 @@ export type DesignPresetId =
   | "pitch-deck"
   | "logo-square"
   | "logo-wide"
+  | "editorial-tech-square"
+  | "architecture-poster-4-5"
+  | "architecture-poster-3-4"
+  | "architecture-story"
   | "custom";
 
 export interface DesignPreset {
@@ -80,6 +84,11 @@ function preset(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const DESIGN_PRESETS: DesignPreset[] = [
+  preset("editorial-tech-square", "Editorial Tech Poster", 1080, 1080, "Technology", "Developer", "code", ["editorial", "technology", "developer", "square"]),
+  preset("architecture-poster-4-5", "AI Architecture Poster", 1080, 1350, "Technology", "System Design", "network", ["architecture", "ai", "diagram", "4:5"]),
+  preset("architecture-poster-3-4", "Architecture Diagram Tall", 1080, 1440, "Technology", "System Design", "network", ["architecture", "diagram", "3:4"]),
+  preset("architecture-story", "Architecture Story", 1080, 1920, "Technology", "System Design", "network", ["architecture", "diagram", "story"]),
+
   // Poster
   preset("poster", "Poster", 800, 1132, "Marketing", "Posters", "image", ["poster", "portrait", "marketing"]),
 

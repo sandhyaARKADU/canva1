@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Bookmark, Save, Loader2, Check, Tag, FolderOpen } from 'lucide-react';
+import { Bookmark, Save, Loader2, Check } from 'lucide-react';
 import { useEditorStore } from '../../store/useEditorStore';
 import { apiFetch } from '../../services/apiClient';
 
@@ -38,7 +38,7 @@ const CATEGORY_OPTIONS = [
 ];
 
 export const SaveAsTemplate: React.FC<SaveAsTemplateProps> = ({ onSaved }) => {
-  const { canvas, projectName, canvasWidth, canvasHeight } = useEditorStore();
+  const { canvas, canvasWidth, canvasHeight } = useEditorStore();
   const [isOpen, setIsOpen] = useState(false);
   const [templateName, setTemplateName] = useState('');
   const [description, setDescription] = useState('');

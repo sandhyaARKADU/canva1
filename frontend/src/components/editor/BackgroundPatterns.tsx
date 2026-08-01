@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Grid3x3, Waves, Sun, Snowflake, Braces, Sparkles, Circle, Square } from 'lucide-react';
+import { Grid3x3, Waves, Sun, Snowflake, Braces, Sparkles, Circle } from 'lucide-react';
 import { fabric } from 'fabric';
 import { useEditorStore } from '../../store/useEditorStore';
+import { EditorialPosterPanel } from './EditorialPosterPanel';
 
 interface PatternOption {
   id: string;
@@ -148,7 +149,7 @@ export const BackgroundPatterns: React.FC = () => {
       } as any);
 
       // Add as first object (background layer)
-      canvas.insertAt(img, 0);
+      canvas.insertAt(img, 0, false);
       canvas.renderAll();
       saveHistory();
       setActivePattern(pattern.id);
@@ -169,7 +170,9 @@ export const BackgroundPatterns: React.FC = () => {
   };
 
   return (
-    <div className="p-3 space-y-3">
+    <div>
+      <EditorialPosterPanel />
+      <div className="p-3 space-y-3">
       <div className="flex items-center gap-2 mb-2">
         <Grid3x3 className="w-4 h-4 text-violet-400" />
         <span className="text-xs font-bold text-zinc-200">Background Patterns</span>
@@ -230,6 +233,7 @@ export const BackgroundPatterns: React.FC = () => {
         <p className="text-[9px] text-zinc-500">
           Patterns are added as a background layer. They can be selected and deleted from the Layers panel.
         </p>
+      </div>
       </div>
     </div>
   );

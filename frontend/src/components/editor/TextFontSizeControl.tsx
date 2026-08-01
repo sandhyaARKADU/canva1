@@ -21,6 +21,7 @@ import {
 } from '../../utils/textSelectionStyles';
 
 const FONT_FAMILIES = [
+  'Fredoka', 'Nunito', 'Arial Rounded MT Bold',
   'Outfit', 'Inter', 'system-ui', 'Arial', 'Georgia',
   'Courier New', 'Times New Roman', 'Verdana', 'Helvetica',
   'Roboto', 'Montserrat', 'Poppins', 'Playfair Display',

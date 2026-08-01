@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { Palette, Copy, RefreshCw, Check, Droplets, Sun, Moon, Contrast } from 'lucide-react';
+import { Palette, Check, Droplets } from 'lucide-react';
 import { fabric } from 'fabric';
 import { useEditorStore } from '../../store/useEditorStore';
 
@@ -125,7 +125,7 @@ function extractColorsFromCanvas(canvas: fabric.Canvas): string[] {
 }
 
 export const ColorPaletteGenerator: React.FC = () => {
-  const { canvas, selectedObject, fillColor, setFillColor, saveHistory } = useEditorStore();
+  const { canvas, selectedObject, fillColor, setFillColor } = useEditorStore();
   const [baseColor, setBaseColor] = useState(fillColor || '#8b5cf6');
   const [palettes, setPalettes] = useState<ColorPalette[]>([]);
   const [copiedColor, setCopiedColor] = useState<string | null>(null);

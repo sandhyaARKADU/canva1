@@ -1,6 +1,8 @@
 import { useEffect } from 'react';
 import { fabric } from 'fabric';
 import { useEditorStore } from '../store/useEditorStore';
+import { isEditableTextObject } from '../utils/textSelectionStyles';
+import { masterTimelineManager } from '../utils/masterTimelineManager';
 
 export const useKeyboardShortcuts = () => {
   const {
@@ -37,7 +39,8 @@ export const useKeyboardShortcuts = () => {
         (activeElement as any).contentEditable === 'true'
       );
 
-      const isEditingText = selectedObject && (selectedObject as any).isEditing;
+      const activeObject = canvas.getActiveObject();
+      const isEditingText = isEditableTextObject(activeObject) && activeObject.isEditing === true;
 
       if (isInputActive || isEditingText) {
         // Allow Ctrl/Cmd shortcuts even in inputs for save, undo, etc.
@@ -50,6 +53,18 @@ export const useKeyboardShortcuts = () => {
       }
 
       const isCtrl = e.ctrlKey || e.metaKey;
+
+      // Spacebar - Play/Pause Timeline
+      if (e.code === 'Space' || e.key === ' ') {
+        e.preventDefault();
+        const state = useEditorStore.getState();
+        if (state.timelinePlaybackState === 'playing') {
+          masterTimelineManager.pause();
+        } else {
+          void masterTimelineManager.play();
+        }
+        return;
+      }
 
       // Delete
       if (e.key === 'Delete' || e.key === 'Backspace') {

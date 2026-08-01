@@ -19,6 +19,7 @@ import { TextStylesPanel } from './components/editor/TextStylesPanel';
 import { EnhancedExportPanel } from './components/editor/EnhancedExportPanel';
 import { SaveAsTemplate } from './components/editor/SaveAsTemplate';
 import { BackgroundPatterns } from './components/editor/BackgroundPatterns';
+import { TimelinePanel } from './components/editor/TimelinePanel';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useEditorStore } from './store/useEditorStore';
 import { Sparkles, Image, Layers, Palette, Wand2, Maximize, ShieldCheck, Type, Download, Bookmark, Grid3x3 } from 'lucide-react';
@@ -31,8 +32,13 @@ const App: React.FC = () => {
   useKeyboardShortcuts();
   const { id } = useParams<{ id: string }>();
   const setProjectId = useEditorStore((state) => state.setProjectId);
+  const selectedObject = useEditorStore((state) => state.selectedObject);
   const [rightPanel, setRightPanel] = useState<RightPanel>('ai');
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const isTextSelected = Boolean(
+    selectedObject
+    && ['text', 'i-text', 'textbox'].includes(selectedObject.type || ''),
+  );
 
   useLayoutEffect(() => {
     if (id) {
@@ -95,17 +101,17 @@ const App: React.FC = () => {
   }, []);
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#08080D] text-zinc-100 overflow-hidden font-sans">
+    <div className="grid h-screen w-screen grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden bg-[#08080D] font-sans text-zinc-100">
       {/* Top action toolbar */}
       <Toolbar />
 
       {/* Main editor workspace panel */}
-      <div className="flex-1 flex w-full overflow-hidden relative">
+      <div className="relative flex min-h-0 w-full overflow-hidden">
         {/* Left Side: Element insertion and Layer managers */}
         <Sidebar />
 
         {/* Center: Interactive design canvas */}
-        <div className="flex-1 h-full relative flex flex-col overflow-hidden">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <CanvasWorkspace />
           {/* Floating selection toolbar — appears above selected elements */}
           <ElementToolbar />
@@ -163,7 +169,7 @@ const App: React.FC = () => {
             )}
             {rightPanel === 'text-styles' && (
               <div className="h-full overflow-y-auto">
-                <TextStylesPanel />
+                {isTextSelected ? <PropertiesPanel /> : <TextStylesPanel />}
               </div>
             )}
             {rightPanel === 'assets' && <RoyaltyFreeAssets />}
@@ -206,6 +212,8 @@ const App: React.FC = () => {
           </div>
         </div>
       </div>
+
+      <TimelinePanel />
 
       {/* Keyboard Shortcuts Modal */}
       <KeyboardShortcutsModal

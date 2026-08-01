@@ -12,18 +12,67 @@ import {
   getFrameClipBoundsForObject,
   isFrameElementObject,
 } from '../../utils/editorElementFactory';
-import { isEditableTextObject } from '../../utils/textSelectionStyles';
+import { enterInlineTextEditing, isEditableTextObject } from '../../utils/textSelectionStyles';
 import { addStickerToCanvas } from '../../utils/stickerCanvas';
 import type { StickerItem } from '../../types/editorFeatures';
 import { installTextEffectSynchronization } from '../../utils/textEffects';
 import type { EditorElement, ElementMetadata } from '../../types/elements';
 import { PageSelectionOverlay } from './PageSelectionOverlay';
+import {
+  enterEditorialTagEditing,
+  regroupEditorialTag,
+  resizeEditorialTagText,
+} from '../../utils/editorialPoster';
+import {
+  enterArchitectureCardEditing,
+  regroupArchitectureNode,
+} from '../../utils/architectureDiagram';
+import {
+  createDiagramConnector,
+  getDiagramAnchorSelection,
+  removeDiagramBendHandles,
+  removeDiagramAnchors,
+  showDiagramBendHandle,
+  showDiagramAnchors,
+  updateConnectorBendFromHandle,
+  updateAllDiagramConnectors,
+  updateAttachedConnectors,
+} from '../../utils/diagramConnectors';
+import type {
+  DiagramAnchorSelection,
+} from '../../utils/diagramConnectors';
+import type { DiagramConnectorConfig } from '../../utils/architectureDiagramTypes';
+import { installConnectorAnimationManager } from '../../utils/connectorAnimationManager';
+import type { UploadedImageAsset } from '../../types/uploads';
+import { uploadImageAsset } from '../../services/uploadsApi';
+import { addUploadedImageToCanvas } from '../../utils/uploadedImageCanvas';
+import { isRoundedHighlightText, synchronizeRoundedHighlightText } from '../../utils/roundedHighlightText';
+import { insertDynamicMediaAsset } from '../../utils/canvasVideo';
+import { masterTimelineManager } from '../../utils/masterTimelineManager';
+import type { DynamicMediaAssetPayload } from '../../types/timeline';
+import { PosterSceneRenderer } from '../../utils/sceneTimelineRenderer';
+import {
+  convertPosterRegionToText,
+  enterPosterTextEditing,
+  isPosterEditableText,
+  syncPosterEditableTextMetadata,
+} from '../../utils/posterConversionCanvas';
 
 export const CanvasWorkspace: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const fabricRef = useRef<fabric.Canvas | null>(null);
-  const { setCanvas, setSelectedObject, saveHistory, setZoom, editorMode, projectId, isProjectLoading, projectLoadError, loadProject, clearProjectLoadError, canvasWidth, canvasHeight } = useEditorStore();
+  const previewInteractionRef = useRef(new Map<fabric.Object, {
+    selectable: boolean;
+    evented: boolean;
+    hasControls: boolean;
+  }>());
+  const connectorModeRef = useRef(false);
+  const connectorStartRef = useRef<DiagramAnchorSelection | null>(null);
+  const connectorConfigRef = useRef<Partial<DiagramConnectorConfig>>({});
+  const textHistoryTimerRef = useRef<number | null>(null);
+  const { canvas, setCanvas, setSelectedObject, saveHistory, editorMode, projectId, isProjectLoading, projectLoadError, loadProject, clearProjectLoadError, canvasWidth, canvasHeight, timelinePreviewActive, zoom, showSafeArea, safeAreaMargin, showGrid } = useEditorStore();
 
   useSmartGuides(fabricRef.current);
   useDistanceMeasurement(fabricRef.current);
@@ -49,9 +98,9 @@ export const CanvasWorkspace: React.FC = () => {
     };
 
     const fc = new fabric.Canvas(canvasRef.current, {
-      width: 800,
-      height: 800,
-      backgroundColor: '#ffffff',
+      width: 1080,
+      height: 1080,
+      backgroundColor: '#000000',
       preserveObjectStacking: true,
       enableRetinaScaling: true,
       imageSmoothingEnabled: true,
@@ -66,6 +115,22 @@ export const CanvasWorkspace: React.FC = () => {
     if ((fc as any).lowerCanvasEl) ((fc as any).lowerCanvasEl as any).__fabric = fc;
     if ((fc as any).upperCanvasEl) ((fc as any).upperCanvasEl as any).__fabric = fc;
     const removeTextEffectSynchronization = installTextEffectSynchronization(fc);
+    const removeConnectorAnimationManager = installConnectorAnimationManager(fc);
+    masterTimelineManager.attachCanvas(fc);
+    if (previewCanvasRef.current) {
+      masterTimelineManager.attachSceneRenderer(new PosterSceneRenderer(
+        previewCanvasRef.current,
+        () => {
+          const state = useEditorStore.getState();
+          return {
+            pages: state.pages,
+            timeline: state.timelineProject,
+            width: fc.getWidth(),
+            height: fc.getHeight(),
+          };
+        },
+      ));
+    }
     setCanvas(fc);
 
     // Sync canvas dimensions with store
@@ -102,10 +167,188 @@ export const CanvasWorkspace: React.FC = () => {
     };
 
     // Initial fit-to-view after a short delay for layout to settle
-    setTimeout(fitCanvasToView, 500);
+    const initialFitTimer = window.setTimeout(fitCanvasToView, 500);
+
+    const getArchitectureNodes = () => fc.getObjects().filter((object) => (
+      object.get('teckstudioObjectType' as keyof fabric.Object) === 'architectureNode'
+    ));
+
+    const showSelectedNodeAnchors = (object?: fabric.Object | null) => {
+      if (connectorModeRef.current) {
+        removeDiagramBendHandles(fc);
+        showDiagramAnchors(fc, getArchitectureNodes(), connectorStartRef.current);
+        return;
+      }
+      const objectType = object?.get('teckstudioObjectType' as keyof fabric.Object);
+      if (object && objectType === 'architectureNode') {
+        removeDiagramBendHandles(fc);
+        showDiagramAnchors(fc, [object]);
+      } else if (object && objectType === 'diagramConnectorPath') {
+        removeDiagramAnchors(fc);
+        showDiagramBendHandle(fc, object);
+      } else if (objectType === 'diagramBendHandle') {
+        removeDiagramAnchors(fc);
+      } else {
+        removeDiagramAnchors(fc);
+        removeDiagramBendHandles(fc);
+      }
+    };
+
+    const openTextPropertiesPanel = (object: fabric.Object | null | undefined) => {
+      if (
+        object?.get('objectType' as keyof fabric.Object) !== 'editable-import-text'
+        && !isRoundedHighlightText(object)
+      ) return;
+      window.dispatchEvent(new CustomEvent('teckstudio:open-panel', { detail: { panel: 'text-styles' } }));
+    };
+
+    const isPosterHotspot = (object: fabric.Object | null | undefined) => (
+      object?.get('posterConversionRole' as keyof fabric.Object) === 'ocr-hotspot'
+    );
+
+    const setPosterHotspotOutline = (object: fabric.Object | null | undefined, visible: boolean) => {
+      if (!isPosterHotspot(object)) return;
+      object?.set({
+        stroke: visible ? 'rgba(139,92,246,0.9)' : 'rgba(139,92,246,0)',
+      });
+    };
+
+    const clearPosterHotspotOutlines = (except?: fabric.Object | null) => {
+      fc.getObjects().forEach((object) => {
+        if (object !== except) setPosterHotspotOutline(object, false);
+      });
+    };
 
     const syncSelection = (e: fabric.IEvent) => {
-      setSelectedObject(e.selected && e.selected.length > 0 ? e.selected[0] : null);
+      const selected = e.selected && e.selected.length > 0 ? e.selected[0] : null;
+      clearPosterHotspotOutlines(selected);
+      setPosterHotspotOutline(selected, true);
+      setSelectedObject(selected);
+      showSelectedNodeAnchors(selected);
+      openTextPropertiesPanel(selected);
+      fc.requestRenderAll();
+      if (import.meta.env.DEV && selected) {
+        console.debug('[TECKSTUDIO] Selected object', {
+          type: selected.type,
+          id: selected.get('id' as keyof fabric.Object),
+          name: selected.get('name' as keyof fabric.Object),
+          selectable: selected.selectable,
+          evented: selected.evented,
+          editable: selected.get('editable' as keyof fabric.Object),
+          lockMovementX: selected.lockMovementX,
+          lockMovementY: selected.lockMovementY,
+          lockScalingX: selected.lockScalingX,
+          lockScalingY: selected.lockScalingY,
+          lockRotation: selected.lockRotation,
+          hasControls: selected.hasControls,
+          isEditing: isEditableTextObject(selected) ? selected.isEditing : false,
+          parent: selected.group?.type || null,
+          visible: selected.visible,
+          opacity: selected.opacity,
+          excludeFromExport: selected.get('excludeFromExport' as keyof fabric.Object),
+        });
+      }
+    };
+
+    const handleSelectionCleared = () => {
+      clearPosterHotspotOutlines();
+      setSelectedObject(null);
+      if (!connectorModeRef.current) {
+        removeDiagramAnchors(fc);
+        removeDiagramBendHandles(fc);
+      }
+    };
+
+    const handlePosterHotspotOver = (event: fabric.IEvent) => {
+      setPosterHotspotOutline(event.target, true);
+      fc.requestRenderAll();
+    };
+
+    const handlePosterHotspotOut = (event: fabric.IEvent) => {
+      if (event.target !== fc.getActiveObject()) setPosterHotspotOutline(event.target, false);
+      fc.requestRenderAll();
+    };
+
+    const stopConnectorMode = () => {
+      connectorModeRef.current = false;
+      connectorStartRef.current = null;
+      connectorConfigRef.current = {};
+      removeDiagramAnchors(fc);
+      removeDiagramBendHandles(fc);
+      showSelectedNodeAnchors(fc.getActiveObject());
+    };
+
+    const startConnectorMode = (event: Event) => {
+      const detail = (event as CustomEvent<{ config?: Partial<DiagramConnectorConfig> }>).detail;
+      connectorModeRef.current = true;
+      connectorStartRef.current = null;
+      connectorConfigRef.current = detail?.config || {};
+      removeDiagramBendHandles(fc);
+      showDiagramAnchors(fc, getArchitectureNodes());
+    };
+
+    const handleConnectorAnchorClick = (event: fabric.IEvent) => {
+      const anchor = getDiagramAnchorSelection(event.target);
+      if (!anchor) return;
+      if (!connectorModeRef.current) {
+        connectorModeRef.current = true;
+        connectorConfigRef.current = {};
+      }
+      if (!connectorStartRef.current) {
+        connectorStartRef.current = anchor;
+        showDiagramAnchors(fc, getArchitectureNodes(), anchor);
+        return;
+      }
+      const source = connectorStartRef.current;
+      if (source.nodeId === anchor.nodeId) {
+        connectorStartRef.current = anchor;
+        showDiagramAnchors(fc, getArchitectureNodes(), anchor);
+        return;
+      }
+      const config = connectorConfigRef.current;
+      removeDiagramAnchors(fc);
+      const objects = createDiagramConnector(fc, {
+        sourceNodeId: source.nodeId,
+        targetNodeId: anchor.nodeId,
+        sourceAnchor: source.anchor,
+        targetAnchor: anchor.anchor,
+        routing: config.routing || 'elbow',
+        style: config.style || 'solid',
+        color: config.color || '#43D68A',
+        width: config.width || 2,
+        opacity: config.opacity ?? 0.9,
+        dashLength: config.dashLength || 10,
+        dashGap: config.dashGap || 8,
+        startArrow: config.startArrow || 'none',
+        endArrow: config.endArrow || 'arrow',
+        arrowSize: config.arrowSize || 13,
+        bendOffset: config.bendOffset || 0,
+        curvature: config.curvature || 0.45,
+        label: config.label || '',
+        labelColor: config.labelColor || String(config.color || '#43D68A'),
+        labelBackground: config.labelBackground || 'rgba(7, 10, 15, 0.88)',
+        labelPosition: config.labelPosition || 0.5,
+        labelOffset: config.labelOffset ?? -16,
+        labelFontSize: config.labelFontSize || 11,
+        labelVisible: config.labelVisible !== false,
+        glow: Boolean(config.glow),
+        glowBlur: config.glowBlur || 8,
+        animation: config.animation,
+      });
+      const firstCardIndex = fc.getObjects().findIndex((object) => (
+        object.get('teckstudioObjectType' as keyof fabric.Object) === 'architectureNode'
+      ));
+      objects.forEach((object, index) => fc.moveTo(object, Math.max(0, firstCardIndex) + index));
+      connectorModeRef.current = false;
+      connectorStartRef.current = null;
+      connectorConfigRef.current = {};
+      if (objects[0]) {
+        fc.setActiveObject(objects[0]);
+        setSelectedObject(objects[0]);
+      }
+      fc.requestRenderAll();
+      saveHistory();
+      window.dispatchEvent(new CustomEvent('teckstudio:connector-created'));
     };
 
     const syncActiveTextObject = () => {
@@ -113,10 +356,142 @@ export const CanvasWorkspace: React.FC = () => {
       setSelectedObject(activeObject || null);
       if (activeObject && isEditableTextObject(activeObject)) {
         useEditorStore.getState().captureTextSelection();
+        openTextPropertiesPanel(activeObject);
       }
     };
 
+    const handleTextChanged = (event: fabric.IEvent) => {
+      const architectureRole = event.target?.get('architectureRole' as keyof fabric.Object);
+      if (architectureRole === 'architecture-card-title' || architectureRole === 'architecture-card-subtitle') {
+        return;
+      }
+      if (event.target && resizeEditorialTagText(fc, event.target)) return;
+      if (event.target) synchronizeRoundedHighlightText(event.target);
+      if (syncPosterEditableTextMetadata(event.target)) {
+        setSelectedObject(event.target || null);
+      }
+      if (textHistoryTimerRef.current) window.clearTimeout(textHistoryTimerRef.current);
+      textHistoryTimerRef.current = window.setTimeout(() => {
+        textHistoryTimerRef.current = null;
+        saveHistory();
+      }, 450);
+    };
+
+    const handleDoubleClick = (event: fabric.IEvent) => {
+      if (!event.target) return;
+      if (isPosterHotspot(event.target)) {
+        if (event.target.get('posterConversionPending' as keyof fabric.Object) === true) return;
+        const hotspot = event.target;
+        hotspot.set({ posterConversionPending: true, evented: false } as Record<string, unknown>);
+        fc.requestRenderAll();
+        void convertPosterRegionToText(fc, hotspot)
+          .then((result) => {
+            saveHistory();
+            enterPosterTextEditing(fc, result.text, { selectAll: true });
+            setSelectedObject(result.text);
+          })
+          .catch((error) => {
+            hotspot.set({ posterConversionPending: false, evented: true } as Record<string, unknown>);
+            fc.setActiveObject(hotspot);
+            setSelectedObject(hotspot);
+            fc.requestRenderAll();
+            console.error('[TECKSTUDIO] Unable to convert OCR text region:', error);
+          });
+        return;
+      }
+      if (isEditableTextObject(event.target)) {
+        const entered = isPosterEditableText(event.target)
+          ? enterPosterTextEditing(fc, event.target, { pointerEvent: event.e })
+          : enterInlineTextEditing(fc, event.target, { pointerEvent: event.e });
+        if (entered) {
+          setSelectedObject(event.target);
+          openTextPropertiesPanel(event.target);
+          return;
+        }
+      }
+      const subTargets = (event as fabric.IEvent & { subTargets?: fabric.Object[] }).subTargets || [];
+      const architectureEditing = enterArchitectureCardEditing(fc, event.target, subTargets);
+      const tagEditing = !architectureEditing && enterEditorialTagEditing(fc, event.target);
+      if (!architectureEditing && !tagEditing) return;
+      setSelectedObject(fc.getActiveObject() || null);
+      if (architectureEditing) saveHistory();
+    };
+
+    const handleTextEditingExited = (event: fabric.IEvent) => {
+      if (textHistoryTimerRef.current) {
+        window.clearTimeout(textHistoryTimerRef.current);
+        textHistoryTimerRef.current = null;
+        saveHistory();
+      }
+      useEditorStore.setState({ textSelectionRange: null });
+      syncActiveTextObject();
+      const target = event.target;
+      const editorialTagId = target?.get('editorialTagId' as keyof fabric.Object);
+      if (editorialTagId && target?.get('editorialTagRole' as keyof fabric.Object) === 'text') {
+        resizeEditorialTagText(fc, target);
+        window.setTimeout(() => {
+          const group = regroupEditorialTag(fc, String(editorialTagId));
+          if (group) {
+            setSelectedObject(group);
+            saveHistory();
+          }
+        }, 0);
+        return;
+      }
+      const role = target?.get('architectureRole' as keyof fabric.Object);
+      const nodeId = target?.get('architectureNodeId' as keyof fabric.Object);
+      if (
+        !nodeId ||
+        (role !== 'architecture-card-title' && role !== 'architecture-card-subtitle')
+      ) return;
+      window.setTimeout(() => {
+        const group = regroupArchitectureNode(fc, String(nodeId));
+        if (group) {
+          setSelectedObject(group);
+          saveHistory();
+        }
+      }, 0);
+    };
+
+    const handleDiagramNodeTransform = (event: fabric.IEvent) => {
+      if (!event.target) return;
+      if (event.target.get('teckstudioObjectType' as keyof fabric.Object) === 'diagramBendHandle') {
+        updateConnectorBendFromHandle(fc, event.target);
+        return;
+      }
+      updateAttachedConnectors(fc, event.target);
+    };
+
+    const handleObjectModified = (event: fabric.IEvent) => {
+      if (event.target?.get('teckstudioObjectType' as keyof fabric.Object) === 'diagramBendHandle') {
+        const path = updateConnectorBendFromHandle(fc, event.target);
+        if (path) {
+          fc.setActiveObject(path);
+          setSelectedObject(path);
+          showSelectedNodeAnchors(path);
+        }
+        saveHistory();
+        return;
+      }
+      if (event.target) updateAttachedConnectors(fc, event.target);
+      if (connectorModeRef.current) {
+        showDiagramAnchors(fc, getArchitectureNodes(), connectorStartRef.current);
+      } else {
+        showSelectedNodeAnchors(event.target);
+      }
+      saveHistory();
+    };
+
+    const handleObjectAdded = (event: fabric.IEvent) => {
+      if (event.target) assignObjectId(event.target);
+    };
+
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && connectorModeRef.current) {
+        event.preventDefault();
+        stopConnectorMode();
+        return;
+      }
       const activeObject = fc.getActiveObject();
       if (!isEditableTextObject(activeObject)) return;
 
@@ -149,14 +524,32 @@ export const CanvasWorkspace: React.FC = () => {
 
     fc.on('selection:created', syncSelection);
     fc.on('selection:updated', syncSelection);
-    fc.on('selection:cleared', () => setSelectedObject(null));
-    fc.on('object:modified', () => saveHistory());
-    fc.on('object:added', (e) => { if (e.target) assignObjectId(e.target as fabric.Object); });
+    fc.on('selection:cleared', handleSelectionCleared);
+    fc.on('object:moving', handleDiagramNodeTransform);
+    fc.on('object:scaling', handleDiagramNodeTransform);
+    fc.on('object:modified', handleObjectModified);
+    fc.on('object:added', handleObjectAdded);
     fc.on('text:selection:changed', syncActiveTextObject);
     fc.on('text:editing:entered', syncActiveTextObject);
-    fc.on('text:editing:exited', syncActiveTextObject);
-    fc.on('text:changed', () => saveHistory());
+    fc.on('text:editing:exited', handleTextEditingExited);
+    fc.on('text:changed', handleTextChanged);
+    fc.on('mouse:dblclick', handleDoubleClick);
+    fc.on('mouse:down', handleConnectorAnchorClick);
+    fc.on('mouse:over', handlePosterHotspotOver);
+    fc.on('mouse:out', handlePosterHotspotOut);
     window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('teckstudio:start-connector-mode', startConnectorMode);
+    const handleDynamicMediaAsset = (event: Event) => {
+      const payload = (event as CustomEvent<DynamicMediaAssetPayload>).detail;
+      if (!payload?.type) return;
+      void insertDynamicMediaAsset(fc, payload).then((object) => {
+        setSelectedObject(object);
+        return useEditorStore.getState().saveHistory();
+      }).catch((error) => {
+        console.error('[TECKSTUDIO] Unable to insert dynamic media payload:', error);
+      });
+    };
+    window.addEventListener('teckstudio:insert-dynamic-asset', handleDynamicMediaAsset);
 
     // Re-fit canvas on window resize
     const handleResize = () => {
@@ -186,9 +579,32 @@ export const CanvasWorkspace: React.FC = () => {
     window.addEventListener('resize', handleResize);
 
     return () => {
+      window.clearTimeout(initialFitTimer);
+      if (textHistoryTimerRef.current) window.clearTimeout(textHistoryTimerRef.current);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('resize', handleResize);
+      window.removeEventListener('teckstudio:start-connector-mode', startConnectorMode);
+      window.removeEventListener('teckstudio:insert-dynamic-asset', handleDynamicMediaAsset);
+      fc.off('selection:created', syncSelection);
+      fc.off('selection:updated', syncSelection);
+      fc.off('selection:cleared', handleSelectionCleared);
+      fc.off('object:moving', handleDiagramNodeTransform);
+      fc.off('object:scaling', handleDiagramNodeTransform);
+      fc.off('object:modified', handleObjectModified);
+      fc.off('object:added', handleObjectAdded);
+      fc.off('text:selection:changed', syncActiveTextObject);
+      fc.off('text:editing:entered', syncActiveTextObject);
+      fc.off('text:editing:exited', handleTextEditingExited);
+      fc.off('text:changed', handleTextChanged);
+      fc.off('mouse:dblclick', handleDoubleClick);
+      fc.off('mouse:down', handleConnectorAnchorClick);
+      fc.off('mouse:over', handlePosterHotspotOver);
+      fc.off('mouse:out', handlePosterHotspotOut);
+      removeDiagramAnchors(fc);
+      removeDiagramBendHandles(fc);
+      removeConnectorAnimationManager();
       removeTextEffectSynchronization();
+      masterTimelineManager.detachCanvas();
       fc.dispose();
       fabricRef.current = null;
       setCanvas(null);
@@ -229,11 +645,39 @@ export const CanvasWorkspace: React.FC = () => {
 
       fabricRef.current.setViewportTransform([idealZoom, 0, 0, idealZoom, offsetX, offsetY]);
       store.setZoom(idealZoom);
+      updateAllDiagramConnectors(fabricRef.current);
       fabricRef.current.renderAll();
     }, 500);
 
     return () => clearTimeout(timer);
   }, [isProjectLoading, canvasWidth, canvasHeight]);
+
+  useEffect(() => {
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+    if (timelinePreviewActive) {
+      previewInteractionRef.current.clear();
+      canvas.discardActiveObject();
+      canvas.selection = false;
+      canvas.skipTargetFind = true;
+      canvas.getObjects().forEach((object) => {
+        previewInteractionRef.current.set(object, {
+          selectable: object.selectable !== false,
+          evented: object.evented !== false,
+          hasControls: object.hasControls !== false,
+        });
+        object.set({ selectable: false, evented: false, hasControls: false });
+      });
+    } else {
+      canvas.selection = true;
+      canvas.skipTargetFind = false;
+      previewInteractionRef.current.forEach((values, object) => {
+        if (canvas.contains(object)) object.set(values);
+      });
+      previewInteractionRef.current.clear();
+    }
+    canvas.requestRenderAll();
+  }, [timelinePreviewActive]);
 
   useEffect(() => {
     if (!fabricRef.current) return;
@@ -262,6 +706,21 @@ export const CanvasWorkspace: React.FC = () => {
       const fc = fabricRef.current;
       if (!fc) return;
       const ptr = fc.getPointer(e as any);
+      const dynamicAssetPayloadRaw = e.dataTransfer?.getData('application/x-teckstudio-dynamic-asset');
+      if (dynamicAssetPayloadRaw) {
+        try {
+          const payload = JSON.parse(dynamicAssetPayloadRaw) as DynamicMediaAssetPayload;
+          void insertDynamicMediaAsset(fc, payload, ptr).then((object) => {
+            useEditorStore.getState().setSelectedObject(object);
+            return useEditorStore.getState().saveHistory();
+          }).catch((error) => {
+            console.error('[TECKSTUDIO] Unable to add dragged dynamic media:', error);
+          });
+        } catch (error) {
+          console.error('[TECKSTUDIO] Invalid dynamic media payload:', error);
+        }
+        return;
+      }
       const stickerPayloadRaw = e.dataTransfer?.getData('application/x-teckstudio-sticker');
       if (stickerPayloadRaw) {
         try {
@@ -280,7 +739,28 @@ export const CanvasWorkspace: React.FC = () => {
       const elementPayloadRaw = e.dataTransfer?.getData('application/x-teckstudio-element');
       if (elementPayloadRaw) {
         try {
-          const payload = JSON.parse(elementPayloadRaw);
+          const payload = JSON.parse(elementPayloadRaw) as EditorElement;
+          if (payload.kind === 'video' && payload.sourceUrl) {
+            void insertDynamicMediaAsset(fc, {
+              id: payload.id,
+              type: 'video',
+              sourceUrl: payload.sourceUrl,
+              posterUrl: payload.previewUrl || payload.thumbnailUrl,
+              mimeType: payload.mimeType,
+              name: payload.name,
+              duration: payload.videoConfig?.duration,
+              startTime: payload.videoConfig?.startTime,
+              endTime: payload.videoConfig?.endTime,
+              loop: payload.videoConfig?.loop,
+              muted: payload.videoConfig?.muted,
+            }, ptr).then((object) => {
+              useEditorStore.getState().setSelectedObject(object);
+              return useEditorStore.getState().saveHistory();
+            }).catch((error) => {
+              console.error('[TECKSTUDIO] Unable to add dragged video:', error);
+            });
+            return;
+          }
           const object = createElementObjectFromPayload(payload, {
             fill: useEditorStore.getState().fillColor,
             stroke: useEditorStore.getState().strokeColor,
@@ -292,6 +772,22 @@ export const CanvasWorkspace: React.FC = () => {
           }
         } catch (error) {
           console.error('[TECKSTUDIO] Unable to add dragged element:', error);
+        }
+        return;
+      }
+
+      const uploadPayloadRaw = e.dataTransfer?.getData('application/x-teckstudio-upload');
+      if (uploadPayloadRaw) {
+        try {
+          const asset = JSON.parse(uploadPayloadRaw) as UploadedImageAsset;
+          void addUploadedImageToCanvas(fc, asset, ptr).then((object) => {
+            useEditorStore.getState().setSelectedObject(object);
+            useEditorStore.getState().saveHistory();
+          }).catch((error) => {
+            console.error('[TECKSTUDIO] Unable to add uploaded image:', error);
+          });
+        } catch (error) {
+          console.error('[TECKSTUDIO] Invalid uploaded image payload:', error);
         }
         return;
       }
@@ -457,17 +953,36 @@ export const CanvasWorkspace: React.FC = () => {
       }
 
       const droppedFile = Array.from(e.dataTransfer?.files || []).find((file) => file.type.startsWith('image/'));
+      const droppedVideo = Array.from(e.dataTransfer?.files || []).find((file) => file.type.startsWith('video/'));
+      if (droppedVideo) {
+        const sourceUrl = URL.createObjectURL(droppedVideo);
+        void insertDynamicMediaAsset(fc, {
+          type: 'video',
+          sourceUrl,
+          name: droppedVideo.name,
+          mimeType: droppedVideo.type,
+          loop: true,
+          muted: false,
+        }, ptr).then((object) => {
+          useEditorStore.getState().setSelectedObject(object);
+          return useEditorStore.getState().saveHistory();
+        }).catch((error) => {
+          URL.revokeObjectURL(sourceUrl);
+          console.error('[TECKSTUDIO] Unable to add dropped video:', error);
+        });
+        return;
+      }
       if (droppedFile) {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const dataUrl = event.target?.result;
-          if (typeof dataUrl === 'string') {
-            const targetFrame = findFrameAtPointer();
-            if (targetFrame) addImageToFrame(targetFrame, dataUrl, droppedFile.name);
-            else addImageAtPointer(dataUrl, droppedFile.name);
-          }
-        };
-        reader.readAsDataURL(droppedFile);
+        void uploadImageAsset(droppedFile, projectId).then((asset) => (
+          addUploadedImageToCanvas(fc, asset, ptr)
+        )).then((object) => {
+          useEditorStore.getState().setSelectedObject(object);
+          useEditorStore.getState().saveHistory();
+          window.dispatchEvent(new Event('teckstudio:uploads-changed'));
+        }).catch((error) => {
+          console.error('[TECKSTUDIO] Unable to upload dropped image:', error);
+          window.alert(error instanceof Error ? error.message : 'Unable to upload the dropped image.');
+        });
         return;
       }
 
@@ -491,7 +1006,10 @@ export const CanvasWorkspace: React.FC = () => {
     el.addEventListener('dragover', handleDragOver);
     el.addEventListener('drop', handleDrop);
     return () => { el.removeEventListener('dragover', handleDragOver); el.removeEventListener('drop', handleDrop); };
-  }, []);
+  }, [projectId]);
+
+  const previewViewportTransform = canvas?.viewportTransform
+    || [zoom, 0, 0, zoom, 0, 0];
 
   return (
     <div
@@ -526,9 +1044,50 @@ export const CanvasWorkspace: React.FC = () => {
         </div>
       )}
 
-      <div className="canvas-container shadow-2xl relative">
+      <div className="canvas-container shadow-2xl ring-1 ring-zinc-500/80 relative">
         <canvas ref={canvasRef} />
+        <canvas
+          ref={previewCanvasRef}
+          width={canvasWidth}
+          height={canvasHeight}
+          className={`pointer-events-none absolute left-0 top-0 z-[8] ${timelinePreviewActive ? 'block' : 'hidden'}`}
+          style={{
+            width: canvasWidth,
+            height: canvasHeight,
+            transformOrigin: '0 0',
+            transform: `matrix(${previewViewportTransform.join(',')})`,
+          }}
+          aria-hidden="true"
+        />
         <PageSelectionOverlay />
+
+        {showSafeArea && (
+          <div
+            className="pointer-events-none absolute z-[9] border-2 border-dashed border-cyan-400/80 shadow-[0_0_12px_rgba(6,182,212,0.3)]"
+            style={{
+              left: safeAreaMargin,
+              top: safeAreaMargin,
+              width: canvasWidth - safeAreaMargin * 2,
+              height: canvasHeight - safeAreaMargin * 2,
+            }}
+          >
+            <div className="absolute top-2 left-2 px-2 py-0.5 bg-cyan-950/90 text-[9px] font-bold text-cyan-300 rounded border border-cyan-500/50 shadow">
+              Instagram Safe Area (1080 × 1080)
+            </div>
+          </div>
+        )}
+
+        {showGrid && (
+          <div
+            className="pointer-events-none absolute left-0 top-0 z-[9]"
+            style={{
+              width: canvasWidth,
+              height: canvasHeight,
+              backgroundImage: `linear-gradient(to right, rgba(139, 92, 246, 0.2) 1px, transparent 1px), linear-gradient(to bottom, rgba(139, 92, 246, 0.2) 1px, transparent 1px)`,
+              backgroundSize: '108px 108px',
+            }}
+          />
+        )}
       </div>
     </div>
   );
