@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { fabric } from 'fabric';
 import { useEditorStore } from '../../store/useEditorStore';
+import { SUPPORTED_VIDEO_FPS } from '../../config/design';
 import {
   DEFAULT_SCENE_ANIMATION,
   getPosterTrack,
@@ -39,6 +40,7 @@ import type {
   SceneAnimationConfig,
   SceneAnimationType,
   TimelineClip,
+  TimelineFps,
   TimelineTransitionType,
 } from '../../types/timeline';
 import { masterTimelineManager } from '../../utils/masterTimelineManager';
@@ -90,6 +92,10 @@ const formatTime = (timeMs: number, fps: number) => {
   const frames = Math.floor((totalSeconds % 1) * fps);
   return `${minutes}:${seconds.toString().padStart(2, '0')}:${frames.toString().padStart(2, '0')}`;
 };
+
+const frameCountForDuration = (durationMs: number, fps: number) => (
+  Math.max(Math.ceil((durationMs / 1000) * fps), durationMs > 0 ? 1 : 0)
+);
 
 const OBJECT_TYPE_COLORS: Record<string, string> = {
   text: 'bg-violet-500/20 border-violet-500/40 text-violet-200',
@@ -194,6 +200,7 @@ export const TimelinePanel: React.FC = () => {
   const play = async () => {
     setError('');
     try {
+      await masterTimelineManager.unlockAudio();
       store.syncActivePage();
       await masterTimelineManager.play();
     } catch (caughtError) {
@@ -437,14 +444,18 @@ export const TimelinePanel: React.FC = () => {
         {/* FPS */}
         <select
           value={timeline.fps}
-          onChange={(e) => store.setTimelineFps(Number(e.target.value) as 24 | 30 | 60)}
+          onChange={(event) => store.setTimelineFps(Number(event.target.value) as TimelineFps)}
           className="rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[9px]"
           title="Frame rate"
+          aria-label="Frame rate"
         >
-          <option value={24}>24 FPS</option>
-          <option value={30}>30 FPS</option>
-          <option value={60}>60 FPS</option>
+          {SUPPORTED_VIDEO_FPS.map((fps) => (
+            <option key={fps} value={fps}>{fps} FPS</option>
+          ))}
         </select>
+        <span className="font-mono text-[9px] text-zinc-500">
+          {frameCountForDuration(timeline.durationMs, timeline.fps)} frames
+        </span>
 
         {/* Zoom controls */}
         <button

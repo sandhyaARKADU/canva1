@@ -59,6 +59,22 @@ import {
   getConnectorAnimationPreset,
 } from '../../utils/architectureDiagramTypes';
 import type { ArchitectureIconName } from '../../utils/architectureDiagramTypes';
+import {
+  TECHNICAL_ACCENTS,
+  TECHNICAL_COMPONENT_ITEMS,
+  TECHNICAL_DARK_BACKGROUND,
+  TECHNICAL_ELEMENT_ITEMS,
+  addTechnicalBackground,
+  applyTechnicalAccent,
+  centerObjectOnCanvas,
+  createTechnicalComponent,
+  createTechnicalElement,
+  getTechnicalAccent,
+  groupTechnicalObjects,
+  type TechnicalAccentId,
+  type TechnicalComponentId,
+  type TechnicalElementId,
+} from '../../utils/technicalInfographicDesign';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -149,6 +165,11 @@ const CATEGORY_CONFIGS: CategoryConfig[] = [
   {
     id: 'architecture', label: 'Architecture', icon: Network,
     gradient: 'from-cyan-500/30 to-emerald-500/30', iconColor: 'text-cyan-400',
+    type: 'interactive',
+  },
+  {
+    id: 'technical-infographic', label: 'Technical Infographic', icon: Cpu,
+    gradient: 'from-emerald-500/30 to-cyan-500/30', iconColor: 'text-emerald-400',
     type: 'interactive',
   },
   {
@@ -299,6 +320,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
   const [architectureSearch, setArchitectureSearch] = useState('');
   const [architectureCategory, setArchitectureCategory] = useState('All');
   const architectureSearchDebounced = useDebouncedValue(architectureSearch, 150);
+  const [technicalAccentId, setTechnicalAccentId] = useState<TechnicalAccentId>('green');
 
   // Animations "See All" sub-view
   const [animSeeAll, setAnimSeeAll] = useState<AnimationCategory | null>(null);
@@ -592,6 +614,42 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
       id: createElementInstanceId(`table_${rows}x${cols}`), name: `${rows}×${cols} Table`,
     } as any);
     canvas.add(group); canvas.setActiveObject(group); canvas.renderAll(); saveHistory();
+  };
+
+  const insertTechnicalObjects = (objects: fabric.Object[], name: string, shouldGroup = objects.length > 1) => {
+    if (!canvas || objects.length === 0) return;
+    const object = shouldGroup ? groupTechnicalObjects(objects, name) : objects[0];
+    centerObjectOnCanvas(canvas, object);
+    canvas.add(object);
+    canvas.setActiveObject(object);
+    canvas.renderAll();
+    saveHistory();
+  };
+
+  const handleAddTechnicalElement = (elementId: TechnicalElementId) => {
+    const label = TECHNICAL_ELEMENT_ITEMS.find((item) => item.id === elementId)?.label || elementId;
+    insertTechnicalObjects(createTechnicalElement(elementId, technicalAccentId), `Technical - ${label}`);
+  };
+
+  const handleAddTechnicalComponent = (componentId: TechnicalComponentId) => {
+    const label = TECHNICAL_COMPONENT_ITEMS.find((item) => item.id === componentId)?.label || componentId;
+    insertTechnicalObjects(createTechnicalComponent(componentId, technicalAccentId), label);
+  };
+
+  const handleApplyTechnicalAccent = () => {
+    if (!canvas) return;
+    const activeObject = canvas.getActiveObject();
+    if (!activeObject) return;
+    applyTechnicalAccent(activeObject, technicalAccentId);
+    canvas.renderAll();
+    saveHistory();
+  };
+
+  const handleAddTechnicalBackground = () => {
+    if (!canvas) return;
+    addTechnicalBackground(canvas, technicalAccentId);
+    canvas.renderAll();
+    saveHistory();
   };
 
   const handleAddCodeBlock = (type: string) => {
@@ -1489,6 +1547,73 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
   // RENDER: CODE (interactive)
   // ═══════════════════════════════════════════════════════════════════════════
 
+  const renderTechnicalInfographic = () => {
+    const accent = getTechnicalAccent(technicalAccentId);
+    return (
+      <div className="space-y-4">
+        <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3">
+          <h4 className="text-[10px] font-bold text-emerald-300 mb-2 uppercase tracking-wider">Technical Accent Theme</h4>
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            {TECHNICAL_ACCENTS.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setTechnicalAccentId(item.id)}
+                className={`rounded-lg border p-2 text-left transition-colors ${technicalAccentId === item.id ? 'border-emerald-400 bg-zinc-950' : 'border-zinc-800 bg-zinc-900/60 hover:border-zinc-600'}`}
+                title={item.label}
+              >
+                <span className="block h-3 w-full rounded-full" style={{ backgroundColor: item.color }} />
+                <span className="mt-1 block text-[8px] font-bold text-zinc-300 uppercase">{item.id}</span>
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={handleApplyTechnicalAccent} className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-[10px] font-bold text-zinc-300 hover:border-emerald-400 hover:text-emerald-300">Apply to Selected</button>
+            <button type="button" onClick={handleAddTechnicalBackground} className="rounded-lg border border-zinc-800 bg-[#080D0B] px-3 py-2 text-[10px] font-bold text-emerald-300 hover:border-emerald-400">Dark Background</button>
+          </div>
+        </div>
+
+        <div>
+          <h4 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-2">Technical Infographic Components</h4>
+          <div className="grid grid-cols-1 gap-2">
+            {TECHNICAL_COMPONENT_ITEMS.map((component) => (
+              <button key={component.id} type="button" onClick={() => handleAddTechnicalComponent(component.id)} className="flex items-center gap-2 p-3 bg-zinc-900/40 border border-zinc-800 hover:border-emerald-500/50 hover:bg-zinc-800 rounded-xl transition-all cursor-pointer text-left group">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-300 flex items-center justify-center group-hover:bg-emerald-500/20 transition-colors"><Workflow className="w-4 h-4" /></div>
+                <div className="min-w-0">
+                  <h4 className="text-xs font-semibold text-zinc-200 truncate">{component.label}</h4>
+                  <p className="text-[9px] text-zinc-500">{component.description}</p>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <h4 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-2">Technical / Infographic</h4>
+          <div className="flex flex-col gap-3">
+            {Array.from(new Set(TECHNICAL_ELEMENT_ITEMS.map((item) => item.group))).map((group) => (
+              <div key={group}>
+                <p className="mb-1 text-[9px] font-bold uppercase tracking-[0.18em] text-zinc-600">{group}</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {TECHNICAL_ELEMENT_ITEMS.filter((item) => item.group === group).map((item) => (
+                    <button key={item.id} type="button" onClick={() => handleAddTechnicalElement(item.id)} className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-2 py-2 text-left text-[10px] font-semibold text-zinc-300 hover:border-emerald-500/50 hover:bg-zinc-800">
+                      <span className="mr-1 inline-block h-2 w-2 rounded-full" style={{ backgroundColor: accent.color }} />
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-white/[0.08] p-3 text-[10px] text-zinc-500" style={{ backgroundColor: TECHNICAL_DARK_BACKGROUND }}>
+          Inserts are editable Fabric.js groups. Use the object toolbar/layers to ungroup, move, resize, and recolor individual parts.
+        </div>
+      </div>
+    );
+  };
+
   const renderCode = () => (
     <div className="space-y-4">
       <div>
@@ -2128,6 +2253,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
     if (cat.type === 'interactive') {
       switch (cat.id) {
         case 'architecture': return renderArchitectureLibrary();
+        case 'technical-infographic': return renderTechnicalInfographic();
         case 'shapes': return renderShapes();
         case 'frames': return renderFrames();
         case 'grids': return renderGrids();

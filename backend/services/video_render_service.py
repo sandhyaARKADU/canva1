@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import re
 import shutil
@@ -10,20 +11,70 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from config import settings
+from config import resolve_runtime_path, settings
 from database import SessionLocal, VideoRenderJob
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-RENDER_ROOT = BACKEND_DIR / "media" / "video-renders"
+RENDER_ROOT = resolve_runtime_path(settings.TEMP_RENDER_ROOT)
 RENDER_ROOT.mkdir(parents=True, exist_ok=True)
 ACTIVE_PROCESSES: dict[str, subprocess.Popen[str]] = {}
 PROCESS_LOCK = threading.Lock()
+DATA_AUDIO_RE = re.compile(r"^data:(?P<mime>audio/[^;,]+)?;base64,(?P<data>.+)$", re.DOTALL)
+AUDIO_MIME_EXTENSIONS = {
+    "audio/aac": ".aac",
+    "audio/mp4": ".m4a",
+    "audio/mpeg": ".mp3",
+    "audio/ogg": ".ogg",
+    "audio/wav": ".wav",
+    "audio/webm": ".webm",
+    "audio/x-wav": ".wav",
+}
+
+
+
+def _is_within_render_root(path: Path) -> bool:
+    try:
+        path.resolve().relative_to(RENDER_ROOT.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def cleanup_render_inputs(job_directory: Path, keep_output_path: Path | None = None) -> None:
+    if not _is_within_render_root(job_directory) or not job_directory.is_dir():
+        return
+    keep_path = keep_output_path.resolve() if keep_output_path else None
+    for child in job_directory.iterdir():
+        try:
+            if keep_path and child.resolve() == keep_path:
+                continue
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+                continue
+            if (
+                child.name.startswith("frame-")
+                or child.name.startswith("scene-")
+                or child.name.startswith("audio-")
+                or child.name.startswith("audio-input-")
+            ):
+                child.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+def cleanup_render_job_directory(job_directory: Path) -> None:
+    if _is_within_render_root(job_directory):
+        shutil.rmtree(job_directory, ignore_errors=True)
 
 FORMAT_CODECS = {
     "mp4": ("libx264", "video/mp4", ".mp4"),
     "webm": ("libvpx-vp9", "video/webm", ".webm"),
 }
+VIDEO_COMPOSITION_WIDTH = 1080
+VIDEO_COMPOSITION_HEIGHT = 1350
+VIDEO_COMPOSITION_FPS = 30
+SUPPORTED_VIDEO_FPS = {24, 30, 60}
 QUALITY_SETTINGS = {
     "draft": {"crf": "32", "preset": "veryfast"},
     "standard": {"crf": "24", "preset": "medium"},
@@ -71,12 +122,10 @@ def validate_render_request(
 ) -> tuple[list[dict[str, Any]], int]:
     if output_format not in FORMAT_CODECS:
         raise VideoRenderValidationError("Format must be mp4 or webm.")
-    if fps not in {24, 30, 60}:
+    if (width, height) != (VIDEO_COMPOSITION_WIDTH, VIDEO_COMPOSITION_HEIGHT):
+        raise VideoRenderValidationError("Video export must use the fixed 1080 × 1350 composition.")
+    if fps not in SUPPORTED_VIDEO_FPS:
         raise VideoRenderValidationError("Frame rate must be 24, 30, or 60 FPS.")
-    if width < 240 or height < 240 or width > 4096 or height > 4096:
-        raise VideoRenderValidationError("Video dimensions must be between 240 and 4096 pixels.")
-    if width % 2 or height % 2:
-        raise VideoRenderValidationError("Video dimensions must be even numbers.")
     if quality not in QUALITY_SETTINGS:
         raise VideoRenderValidationError("Quality must be draft, standard, or high.")
     clips = _poster_clips(timeline)
@@ -318,6 +367,7 @@ def render_video_job(
     scene_paths: list[Path],
     project_name: str,
 ) -> None:
+    job_directory = RENDER_ROOT / job_id
     db = SessionLocal()
     try:
         job = db.query(VideoRenderJob).filter(VideoRenderJob.id == job_id).first()
@@ -332,7 +382,6 @@ def render_video_job(
             return
         timeline = job.timeline_json
         output_format = job.format
-        job_directory = RENDER_ROOT / job.id
         _, mime_type, extension = FORMAT_CODECS[output_format]
         output_path = job_directory / safe_project_filename(project_name, extension)
         command, duration_ms = build_ffmpeg_command(
@@ -359,6 +408,7 @@ def render_video_job(
             error_message=str(error)[:500],
             completed_at=datetime.utcnow(),
         )
+        cleanup_render_job_directory(job_directory)
         return
     finally:
         db.close()
@@ -385,7 +435,11 @@ def render_video_job(
                     process.terminate()
                     raise TimeoutError("Video rendering timed out.")
                 if line.startswith("out_time_ms="):
-                    rendered_ms = int(line.split("=", 1)[1].strip() or 0) // 1000
+                    raw_out_time_ms = line.split("=", 1)[1].strip()
+                    out_time_ms = _metadata_int(raw_out_time_ms)
+                    if out_time_ms is None:
+                        continue
+                    rendered_ms = out_time_ms // 1000
                     progress = min(15 + int((rendered_ms / max(duration_ms, 1)) * 80), 95)
                     if time.monotonic() - last_update >= 0.5:
                         cancelled = _update_job(
@@ -426,6 +480,7 @@ def render_video_job(
             job.completed_at = datetime.utcnow()
             job.error_message = None
             db.commit()
+            cleanup_render_inputs(job_directory, output_path)
         finally:
             db.close()
     except Exception as error:
@@ -438,6 +493,7 @@ def render_video_job(
             error_message=str(error)[:500],
             completed_at=datetime.utcnow(),
         )
+        cleanup_render_job_directory(job_directory)
 
 
 def start_render_thread(job_id: str, scene_paths: list[Path], project_name: str) -> None:
@@ -467,6 +523,7 @@ def build_frame_sequence_command(
         raise VideoRenderValidationError("The frame sequence is empty.")
     codec, _, _ = FORMAT_CODECS[output_format]
     quality_settings = QUALITY_SETTINGS[quality]
+    video_duration_ms = round(total_frames * 1000 / fps)
     command = [
         settings.FFMPEG_BINARY,
         "-hide_banner",
@@ -476,13 +533,60 @@ def build_frame_sequence_command(
         "-i", str(frame_directory / "frame-%06d.png"),
     ]
 
+    def materialize_audio_url(url: Any, index: int):
+        source = str(url or "")
+        if source.startswith("http://") or source.startswith("https://") or Path(source).exists():
+            return source
+        if source.startswith("blob:") or source.startswith("uploaded-audio://"):
+            return None
+        match = DATA_AUDIO_RE.match(source)
+        if not match:
+            return None
+        mime_type = match.group("mime") or "audio/mpeg"
+        extension = AUDIO_MIME_EXTENSIONS.get(mime_type, ".audio")
+        audio_path = frame_directory.parent / f"audio-input-{index}{extension}"
+        try:
+            audio_path.write_bytes(base64.b64decode(match.group("data"), validate=True))
+        except ValueError:
+            return None
+        return str(audio_path)
+
+    def read_ms(clip: dict[str, Any], ms_key: str, seconds_key: str | None = None, default: int = 0) -> int:
+        if clip.get(ms_key) is not None:
+            try:
+                return max(int(round(float(clip.get(ms_key)))), 0)
+            except (TypeError, ValueError):
+                return default
+        if seconds_key and clip.get(seconds_key) is not None:
+            try:
+                return max(int(round(float(clip.get(seconds_key)) * 1000)), 0)
+            except (TypeError, ValueError):
+                return default
+        return default
+
     valid_audio_inputs = []
+    requested_audio_count = 0
     if audio_clips:
         for idx, clip in enumerate(audio_clips):
             url = clip.get('assetUrl') or clip.get('sourceUrl')
-            if url and not clip.get('muted'):
-                if str(url).startswith('http://') or str(url).startswith('https://') or Path(url).exists():
-                    valid_audio_inputs.append((idx, url, clip))
+            if clip.get('muted'):
+                continue
+            if not url:
+                continue
+            requested_audio_count += 1
+            materialized_url = materialize_audio_url(url, idx)
+            if not materialized_url:
+                raise VideoRenderValidationError("An audio source could not be prepared for export.")
+            valid_audio_inputs.append((idx, materialized_url, clip))
+
+    print(
+        "[TECKSTUDIO] EXPORT",
+        {
+            "projectDurationMs": video_duration_ms,
+            "audioTrackCount": requested_audio_count,
+            "frameDirectory": str(frame_directory),
+        },
+    )
 
     for _, url, _ in valid_audio_inputs:
         command.extend(["-i", str(url)])
@@ -491,32 +595,93 @@ def build_frame_sequence_command(
         "-frames:v", str(total_frames),
     ])
 
-    vf_string = (
-        f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
-        "setsar=1,format=yuv420p"
-    )
+    vf_string = "setsar=1,format=yuv420p"
     command.extend(["-vf", vf_string, "-c:v", codec, "-crf", quality_settings["crf"]])
 
     if valid_audio_inputs:
         filter_parts = []
         mix_inputs = []
         for i, (_, _, clip) in enumerate(valid_audio_inputs, start=1):
-            start_ms = int(clip.get('startTimeMs', clip.get('startTime', 0)))
-            volume = float(clip.get('volume', 1.0))
+            start_ms = min(read_ms(clip, 'startTimeMs', 'startTime'), video_duration_ms)
+            trim_start_ms = read_ms(clip, 'trimStartMs', 'trimStart')
+            trim_end_ms = read_ms(clip, 'trimEndMs')
+            source_duration_ms = read_ms(clip, 'durationMs', 'duration', video_duration_ms)
+            source_segment_ms = max(source_duration_ms - trim_start_ms - trim_end_ms, 1)
+            remaining_video_ms = max(video_duration_ms - start_ms, 0)
+            if remaining_video_ms <= 0:
+                continue
+
+            loop = bool(clip.get('loop'))
+            render_duration_ms = remaining_video_ms if loop else min(source_segment_ms, remaining_video_ms)
+            if render_duration_ms <= 0:
+                continue
+
+            fade_in_ms = min(read_ms(clip, 'fadeInMs', 'fadeIn'), render_duration_ms // 2)
+            fade_out_ms = min(read_ms(clip, 'fadeOutMs', 'fadeOut'), render_duration_ms // 2)
+            try:
+                volume = float(clip.get('volume', 1.0))
+            except (TypeError, ValueError):
+                volume = 1.0
+            if volume > 2.0:
+                volume /= 100
+            volume = min(max(volume, 0.0), 2.0)
+
+            source_segment_s = source_segment_ms / 1000
+            render_duration_s = render_duration_ms / 1000
             label = f"a{i}"
-            filter_parts.append(f"[{i}:a]adelay={start_ms}|{start_ms},volume={volume:.2f}[{label}]")
+            print(
+                "[TECKSTUDIO] EXPORT AUDIO",
+                {
+                    "clipId": clip.get("id"),
+                    "trackType": clip.get("trackType"),
+                    "source": str(valid_audio_inputs[i - 1][1]),
+                    "timelineStartMs": start_ms,
+                    "trimStartMs": trim_start_ms,
+                    "trimEndMs": trim_end_ms,
+                    "renderDurationMs": render_duration_ms,
+                    "volume": volume,
+                    "loop": loop,
+                    "fadeInMs": fade_in_ms,
+                    "fadeOutMs": fade_out_ms,
+                },
+            )
+            audio_chain = [
+                f"[{i}:a]atrim=start={trim_start_ms / 1000:.3f}:duration={source_segment_s:.3f}",
+                "asetpts=PTS-STARTPTS",
+            ]
+            if loop:
+                audio_chain.extend([
+                    "aloop=loop=-1:size=2147483647",
+                    f"atrim=duration={render_duration_s:.3f}",
+                    "asetpts=PTS-STARTPTS",
+                ])
+            elif render_duration_ms < source_segment_ms:
+                audio_chain.extend([
+                    f"atrim=duration={render_duration_s:.3f}",
+                    "asetpts=PTS-STARTPTS",
+                ])
+            if fade_in_ms > 0:
+                audio_chain.append(f"afade=t=in:st=0:d={fade_in_ms / 1000:.3f}")
+            if fade_out_ms > 0:
+                fade_out_start_s = max((render_duration_ms - fade_out_ms) / 1000, 0)
+                audio_chain.append(f"afade=t=out:st={fade_out_start_s:.3f}:d={fade_out_ms / 1000:.3f}")
+            audio_chain.append(f"adelay={start_ms}|{start_ms}")
+            audio_chain.append(f"volume={volume:.2f}[{label}]")
+            filter_parts.append(",".join(audio_chain))
             mix_inputs.append(f"[{label}]")
 
         if len(mix_inputs) > 1:
             mix_str = f"{''.join(mix_inputs)}amix=inputs={len(mix_inputs)}:duration=first[outa]"
             filter_parts.append(mix_str)
             command.extend(["-filter_complex", ";".join(filter_parts), "-map", "0:v", "-map", "[outa]"])
-        else:
+        elif len(mix_inputs) == 1:
             command.extend(["-filter_complex", ";".join(filter_parts), "-map", "0:v", "-map", f"[{mix_inputs[0][1:-1]}]"])
+        else:
+            command.extend(["-map", "0:v"])
 
-        audio_codec = "aac" if output_format == "mp4" else "libvorbis"
-        command.extend(["-c:a", audio_codec, "-b:a", "192k"])
+        if mix_inputs:
+            audio_codec = "aac" if output_format == "mp4" else "libvorbis"
+            command.extend(["-c:a", audio_codec, "-b:a", "192k"])
 
     if output_format == "mp4":
         command.extend([
@@ -533,11 +698,13 @@ def build_frame_sequence_command(
         ])
     command.extend([
         "-r", str(fps),
+        "-t", f"{video_duration_ms / 1000:.3f}",
         "-progress", "pipe:1",
         "-nostats",
         str(output_path),
     ])
-    return command, round(total_frames * 1000 / fps)
+    print("[TECKSTUDIO] FFMPEG FRAME COMMAND", " ".join(command))
+    return command, video_duration_ms
 
 
 def _ffprobe_binary() -> str:
@@ -552,6 +719,30 @@ def _ffprobe_binary() -> str:
     return discovered
 
 
+def _metadata_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.upper() == "N/A":
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def _metadata_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.upper() == "N/A":
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 def verify_video_output(
     output_path: Path,
     output_format: str,
@@ -559,14 +750,14 @@ def verify_video_output(
     height: int,
     fps: int,
     total_frames: int,
+    require_audio: bool = False,
 ) -> dict[str, Any]:
     command = [
         _ffprobe_binary(),
         "-v", "error",
         "-count_frames",
-        "-select_streams", "v:0",
         "-show_entries",
-        "stream=codec_name,width,height,pix_fmt,r_frame_rate,nb_read_frames,duration",
+        "stream=index,codec_type,codec_name,width,height,pix_fmt,r_frame_rate,nb_read_frames,nb_frames,duration,sample_rate,channels",
         "-of", "json",
         str(output_path),
     ]
@@ -581,13 +772,16 @@ def verify_video_output(
     if completed.returncode != 0:
         raise RuntimeError("Rendered video verification failed.")
     try:
-        stream = json.loads(completed.stdout)["streams"][0]
+        streams = json.loads(completed.stdout)["streams"]
+        stream = next(item for item in streams if item.get("codec_type") == "video")
     except (KeyError, IndexError, json.JSONDecodeError) as error:
         raise RuntimeError("Rendered video metadata is invalid.") from error
+    except StopIteration as error:
+        raise RuntimeError("Rendered video stream is missing.") from error
     expected_codec = "h264" if output_format == "mp4" else "vp9"
     if stream.get("codec_name") != expected_codec:
         raise RuntimeError("Rendered video uses an unexpected codec.")
-    if int(stream.get("width") or 0) != width or int(stream.get("height") or 0) != height:
+    if (_metadata_int(stream.get("width")) or 0) != width or (_metadata_int(stream.get("height")) or 0) != height:
         raise RuntimeError("Rendered video dimensions do not match the request.")
     if stream.get("pix_fmt") != "yuv420p":
         raise RuntimeError("Rendered video pixel format is not browser-compatible.")
@@ -595,13 +789,30 @@ def verify_video_output(
     measured_fps = float(numerator or 0) / max(float(denominator or 1), 1)
     if abs(measured_fps - fps) > 0.01:
         raise RuntimeError("Rendered video frame rate does not match the request.")
-    frame_count = int(stream.get("nb_read_frames") or 0)
-    if frame_count != total_frames:
-        raise RuntimeError("Rendered video frame count is incomplete.")
+    frame_count = _metadata_int(stream.get("nb_read_frames")) or _metadata_int(stream.get("nb_frames"))
+    if frame_count is not None:
+        if frame_count != total_frames:
+            raise RuntimeError("Rendered video frame count is incomplete.")
+    else:
+        duration_seconds = _metadata_float(stream.get("duration"))
+        if duration_seconds is None:
+            raise RuntimeError("Rendered video frame count metadata is unavailable.")
+        expected_duration = total_frames / max(fps, 1)
+        frame_tolerance_seconds = max(1 / max(fps, 1), 0.05)
+        if abs(duration_seconds - expected_duration) > frame_tolerance_seconds:
+            raise RuntimeError("Rendered video duration does not match the expected frame count.")
+    audio_stream = next((item for item in streams if item.get("codec_type") == "audio"), None)
+    if require_audio:
+        if not audio_stream:
+            raise RuntimeError("Rendered video is missing the required audio stream.")
+        expected_audio_codec = "aac" if output_format == "mp4" else "vorbis"
+        if audio_stream.get("codec_name") != expected_audio_codec:
+            raise RuntimeError("Rendered audio uses an unexpected codec.")
     return stream
 
 
 def render_frame_sequence_job(job_id: str, project_name: str) -> None:
+    job_directory = RENDER_ROOT / job_id
     db = SessionLocal()
     try:
         job = db.query(VideoRenderJob).filter(VideoRenderJob.id == job_id).first()
@@ -614,18 +825,21 @@ def render_frame_sequence_job(job_id: str, project_name: str) -> None:
             job.completed_at = datetime.utcnow()
             db.commit()
             return
-        job_directory = RENDER_ROOT / job.id
         _, mime_type, extension = FORMAT_CODECS[job.format]
         output_path = job_directory / safe_project_filename(project_name, extension)
         audio_clips = []
         if job.timeline_json:
             try:
-                parsed_tl = json.loads(job.timeline_json)
+                parsed_tl = job.timeline_json if isinstance(job.timeline_json, dict) else json.loads(job.timeline_json)
                 audio_clips = parsed_tl.get("audioClips") or []
                 if not audio_clips and parsed_tl.get("audio"):
                     audio_clips = [parsed_tl.get("audio")]
             except Exception:
                 pass
+        required_audio_count = len([
+            clip for clip in audio_clips
+            if isinstance(clip, dict) and not clip.get("muted") and (clip.get("assetUrl") or clip.get("sourceUrl"))
+        ])
 
         command, duration_ms = build_frame_sequence_command(
             job_directory,
@@ -640,7 +854,7 @@ def render_frame_sequence_job(job_id: str, project_name: str) -> None:
         )
         job.status = "processing"
         job.progress = 72
-        job.stage = "Encoding deterministic animation frames"
+        job.stage = "Mixing background music" if required_audio_count else "Encoding deterministic animation frames"
         db.commit()
     except Exception as error:
         db.close()
@@ -651,6 +865,7 @@ def render_frame_sequence_job(job_id: str, project_name: str) -> None:
             error_message=str(error)[:500],
             completed_at=datetime.utcnow(),
         )
+        cleanup_render_job_directory(job_directory)
         return
     finally:
         db.close()
@@ -677,7 +892,11 @@ def render_frame_sequence_job(job_id: str, project_name: str) -> None:
                     process.terminate()
                     raise TimeoutError("Video rendering timed out.")
                 if line.startswith("out_time_ms="):
-                    encoded_ms = int(line.split("=", 1)[1].strip() or 0) // 1000
+                    raw_out_time_ms = line.split("=", 1)[1].strip()
+                    out_time_ms = _metadata_int(raw_out_time_ms)
+                    if out_time_ms is None:
+                        continue
+                    encoded_ms = out_time_ms // 1000
                     progress = min(72 + int((encoded_ms / max(duration_ms, 1)) * 24), 96)
                     if time.monotonic() - last_update >= 0.5:
                         cancelled = _update_job(
@@ -718,6 +937,7 @@ def render_frame_sequence_job(job_id: str, project_name: str) -> None:
                 job.height,
                 job.fps,
                 job.total_frames,
+                require_audio=required_audio_count > 0,
             )
             job.status = "completed"
             job.progress = 100
@@ -728,8 +948,7 @@ def render_frame_sequence_job(job_id: str, project_name: str) -> None:
             job.completed_at = datetime.utcnow()
             job.error_message = None
             db.commit()
-            for frame_path in job_directory.glob("frame-*.png"):
-                frame_path.unlink(missing_ok=True)
+            cleanup_render_inputs(job_directory, output_path)
         finally:
             db.close()
     except Exception as error:
@@ -742,6 +961,7 @@ def render_frame_sequence_job(job_id: str, project_name: str) -> None:
             error_message=str(error)[:500],
             completed_at=datetime.utcnow(),
         )
+        cleanup_render_job_directory(job_directory)
 
 
 def start_frame_render_thread(job_id: str, project_name: str) -> None:

@@ -167,7 +167,7 @@ export const UploadsPanel: React.FC = () => {
     canvas.setActiveObject(selected);
     setSelectedObject(selected);
     saveHistory();
-    setSuccessMessage('Editable regions enabled. The original poster remains pixel-perfect until you convert a text region.');
+    setSuccessMessage(`Edit Text ready. ${conversion.hotspots.length} text region(s) detected${conversion.reviewRequired.length ? ` · ${conversion.reviewRequired.length} need review` : ''}. Double-click text to edit without changing the original poster.`);
     window.setTimeout(() => setSuccessMessage(''), 4500);
   }, [canvas, editableAsset, saveHistory, setSelectedObject]);
 

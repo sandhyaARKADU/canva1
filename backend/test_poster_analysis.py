@@ -47,20 +47,21 @@ def test_quick_analysis_preserves_original_pixels_and_editable_metadata(monkeypa
 
     assert len(result.text_blocks) == 1
     assert result.text_blocks[0]["text"] == "SUMMER SALE"
+    assert result.text_blocks[0]["role"] == "heading"
     assert result.text_blocks[0]["style"]["fill"] == "#FFFFFF"
     assert result.clean_background.tobytes() == original.tobytes()
     assert result.regions == []
 
 
-def test_full_analysis_extracts_palette_and_selective_regions(monkeypatch):
+def test_full_analysis_extracts_palette_but_does_not_convert_graphics(monkeypatch):
     monkeypatch.setattr(poster_analysis_service, "extract_text_layout", lambda *_args, **_kwargs: _ocr_result())
 
     result = analyze_poster_image(_poster_bytes(), "image/png", "full")
 
     assert any(item["color"].upper() == "#6E22FF" for item in result.palette)
-    assert result.regions
-    assert all(region.mask.mode == "RGBA" for region in result.regions)
-    assert all(region.payload["bounding_box"]["width"] > 0 for region in result.regions)
+    assert result.regions == []
+    assert "Backgrounds, photos, graphics, icons, and decorative elements remain the original image." in result.warnings
+    assert "Only a user-selected text region receives a local clean patch when that region is edited." in result.warnings
 
 
 def test_analysis_handles_image_with_no_text(monkeypatch):

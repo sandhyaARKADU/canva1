@@ -1,3 +1,5 @@
+import { SUPPORTED_VIDEO_FPS, VIDEO_COMPOSITION } from '../config/design';
+
 export type TimelinePlaybackState = 'playing' | 'paused' | 'seeking';
 export type TimelineFps = 24 | 30 | 60;
 export type TimelineTrackType = 'poster' | 'video' | 'audio';
@@ -57,7 +59,9 @@ export type FabricObjectAnimationType =
   | 'float'
   | 'wobble'
   | 'shake'
-  | 'draw';
+  | 'draw'
+  | 'blink'
+  | 'scale-in';
 
 export interface FabricObjectAnimation {
   id?: string;
@@ -162,6 +166,7 @@ export interface TimelineAudioClip {
   fadeInMs?: number;
   fadeOutMs?: number;
   loop?: boolean;
+  autoFitToVideo?: boolean;
 }
 
 export interface AudioDuckingConfig {
@@ -195,7 +200,7 @@ export const createDefaultTimelineProject = (): TimelineProject => ({
   version: 2,
   durationMs: 0,
   currentTimeMs: 0,
-  fps: 30,
+  fps: VIDEO_COMPOSITION.fps,
   zoom: 1,
   collapsed: false,
   height: 230,
@@ -211,9 +216,35 @@ const clampDuration = (durationMs: number) => (
   Math.min(Math.max(Math.round(durationMs || 0), 500), 120_000)
 );
 
+const normalizeAudioClip = (clip: TimelineAudioClip): TimelineAudioClip => {
+  const durationMs = clampDuration(clip.durationMs);
+  const trimStartMs = Math.min(Math.max(Math.round(clip.trimStartMs || 0), 0), durationMs - 500);
+  const trimEndMs = Math.min(
+    Math.max(Math.round(clip.trimEndMs || 0), 0),
+    durationMs - trimStartMs - 500,
+  );
+  return {
+    ...clip,
+    startTimeMs: Math.max(Math.round(clip.startTimeMs || 0), 0),
+    durationMs,
+    trimStartMs,
+    trimEndMs,
+    volume: Math.min(Math.max(Number(clip.volume) || 1, 0), 2),
+    muted: clip.muted === true,
+    loop: clip.loop === true,
+    autoFitToVideo: clip.autoFitToVideo === true,
+  };
+};
+
 export const getPosterTrack = (timeline: TimelineProject) => (
   timeline.tracks.find((track) => track.type === 'poster')
   || { id: 'poster-track', type: 'poster' as const, clips: [] }
+);
+
+export const normalizeTimelineFps = (fps?: number | null): TimelineFps => (
+  SUPPORTED_VIDEO_FPS.includes(fps as TimelineFps)
+    ? fps as TimelineFps
+    : VIDEO_COMPOSITION.fps
 );
 
 export const normalizeTimelineProject = (timeline?: Partial<TimelineProject> | null): TimelineProject => {
@@ -221,6 +252,9 @@ export const normalizeTimelineProject = (timeline?: Partial<TimelineProject> | n
   const tracks = Array.isArray(timeline?.tracks) ? timeline.tracks : fallback.tracks;
   const posterTrack = tracks.find((track) => track.type === 'poster') || fallback.tracks[0];
   const transitions = Array.isArray(timeline?.transitions) ? timeline.transitions : [];
+  const audioClips = Array.isArray(timeline?.audioClips)
+    ? timeline.audioClips.map(normalizeAudioClip)
+    : (fallback.audioClips || []);
   let cursorMs = 0;
   const clips = posterTrack.clips.map((clip, index) => {
     const durationMs = clampDuration(clip.durationMs);
@@ -247,18 +281,19 @@ export const normalizeTimelineProject = (timeline?: Partial<TimelineProject> | n
     { ...posterTrack, clips },
     ...tracks.filter((track) => track.type !== 'poster'),
   ];
+  const durationMs = cursorMs;
   return {
     ...fallback,
     ...timeline,
     version: 2,
-    fps: timeline?.fps === 24 || timeline?.fps === 60 ? timeline.fps : 30,
+    fps: normalizeTimelineFps(timeline?.fps),
     zoom: Math.min(Math.max(Number(timeline?.zoom) || 1, 0.25), 4),
     height: Math.min(Math.max(Number(timeline?.height) || 210, 120), 480),
-    durationMs: cursorMs,
-    currentTimeMs: Math.min(Math.max(Number(timeline?.currentTimeMs) || 0, 0), cursorMs),
+    durationMs,
+    currentTimeMs: Math.min(Math.max(Number(timeline?.currentTimeMs) || 0, 0), durationMs),
     tracks: normalizedTracks,
     transitions,
-    audioClips: Array.isArray(timeline?.audioClips) ? timeline.audioClips : (fallback.audioClips || []),
+    audioClips,
     audioDucking: timeline?.audioDucking || fallback.audioDucking,
   };
 };

@@ -45,11 +45,10 @@ class LocalDatabaseAssetProvider:
         query = self._apply_search(query, input_data.search)
 
         total = query.count()
-        order_columns = [Asset.use_count.desc()]
         if input_data.category == "images":
-            order_columns.append(Asset.id.asc())
+            order_columns = [Asset.id.asc()]
         else:
-            order_columns.extend([Asset.name.asc(), Asset.id.asc()])
+            order_columns = [Asset.use_count.desc(), Asset.name.asc(), Asset.id.asc()]
 
         assets = (
             query

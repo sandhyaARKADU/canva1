@@ -14,13 +14,14 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from auth import decode_token, get_current_user
+from config import resolve_runtime_path, settings
 from database import AuthSession, BrandFont, BrandKit, Favorite, FontAsset, RecentHistory, User, get_db
 from font_catalog import BUILT_IN_FONTS
 
 
 router = APIRouter(prefix="/api/fonts", tags=["fonts"])
 optional_security = HTTPBearer(auto_error=False)
-FONT_ROOT = Path(__file__).resolve().parents[1] / "media" / "fonts"
+FONT_ROOT = resolve_runtime_path(settings.MEDIA_ROOT) / "fonts"
 MAX_FONT_SIZE = 10 * 1024 * 1024
 ALLOWED_EXTENSIONS = {".ttf", ".otf", ".woff", ".woff2"}
 MIME_TYPES = {

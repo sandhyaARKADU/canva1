@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     ENABLE_POLLINATIONS_FALLBACK: bool = True
     ENABLE_FAKE_AI_FALLBACK: bool = False
 
+    # Runtime media storage
+    MEDIA_ROOT: str = str(BACKEND_DIR / "media")
+    TEMP_RENDER_ROOT: str = "/tmp/teckstudio/video-renders"
+
     # User image uploads
     MAX_UPLOAD_IMAGE_MB: int = 15
     MAX_UPLOAD_IMAGE_PIXELS: int = 24_000_000
@@ -83,6 +87,14 @@ def key_fingerprint(value: str) -> str | None:
     return hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:12]
 
 settings = Settings()
+
+
+def resolve_runtime_path(value: str | Path) -> Path:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    return BACKEND_DIR / path
+
 
 INSECURE_JWT_SECRETS = {
     "",

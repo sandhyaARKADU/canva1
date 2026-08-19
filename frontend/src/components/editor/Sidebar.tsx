@@ -30,7 +30,16 @@ import { EDITORIAL_TECH_TEMPLATE_NAME, applyEditorialTechPoster } from '../../ut
 import { ArchitectureDiagramPanel } from './ArchitectureDiagramPanel';
 import { AI_ARCHITECTURE_TEMPLATE_NAME } from '../../utils/architectureDiagramTypes';
 import { applyAIChatArchitectureTemplate, fitArchitectureCanvasToWorkspace } from '../../utils/architectureDiagram';
+import {
+  TECHNICAL_INFOGRAPHIC_TEMPLATE_NAME,
+  PROMPT_CONTEXT_HARNESS_TEMPLATE_NAME,
+  applyTechnicalAIWorkflowTemplate,
+  applyPromptContextHarnessInfographicTemplate,
+  fitTechnicalInfographicCanvasToWorkspace,
+} from '../../utils/technicalInfographicDesign';
 import { removeConnectorsForNode } from '../../utils/diagramConnectors';
+import { masterTimelineManager } from '../../utils/masterTimelineManager';
+import { normalizeTimelineProject } from '../../types/timeline';
 import { UploadsPanel } from './uploads/UploadsPanel';
 
 type Tab = 'templates' | 'elements' | 'diagram' | 'text' | 'draw' | 'uploads' | 'layers' | 'pages' | 'history';
@@ -60,6 +69,7 @@ export const Sidebar: React.FC = () => {
   const [templateSearch, setTemplateSearch] = useState('');
   const [templateTypeFilter, setTemplateTypeFilter] = useState('all');
   const [applyingTemplateId, setApplyingTemplateId] = useState<string | null>(null);
+  const [promptHarnessLoading, setPromptHarnessLoading] = useState(false);
 
   const getStableLayerId = useCallback((obj: fabric.Object) => {
     let id = obj.get('id' as any) as string | undefined;
@@ -362,6 +372,80 @@ export const Sidebar: React.FC = () => {
     saveHistory();
   };
 
+
+
+  const waitForTechnicalPosterFonts = async () => {
+    if (typeof document === 'undefined' || !('fonts' in document)) return;
+    const fontSet = document.fonts;
+    await Promise.allSettled([
+      fontSet.load(`800 43px "Space Mono"`),
+      fontSet.load(`700 16px "Space Mono"`),
+      fontSet.load(`800 24px "IBM Plex Mono"`),
+      fontSet.ready,
+    ]);
+  };
+
+  const normalizeTextAfterFonts = () => {
+    if (!canvas) return;
+    canvas.getObjects().forEach((object) => {
+      const updateText = (target: fabric.Object) => {
+        if (!('text' in target)) return;
+        const textObject = target as fabric.Textbox & { initDimensions?: () => void };
+        textObject.initDimensions?.();
+        textObject.setCoords();
+      };
+      if (object.type === 'group') (object as fabric.Group).forEachObject(updateText);
+      updateText(object);
+      object.setCoords();
+    });
+  };
+
+  const ensureActivePageTimelineClip = (durationMs: number) => {
+    const store = useEditorStore.getState();
+    const pageId = store.activePageId || store.pages[0]?.id;
+    if (!pageId) return;
+
+    const pages = store.syncActivePage();
+    const activePage = pages.find((page) => page.id === pageId);
+    const timeline = useEditorStore.getState().timelineProject;
+    const posterTrack = timeline.tracks.find((track) => track.type === 'poster');
+    const existingClip = posterTrack?.clips.find((clip) => clip.pageId === pageId);
+    const clipId = existingClip?.id || `prompt-context-harness-${pageId}-clip`;
+    const clip = {
+      ...(existingClip || {}),
+      id: clipId,
+      sceneId: pageId,
+      pageId,
+      name: activePage?.name || 'Prompt Context Harness Infographic',
+      thumbnailUrl: activePage?.thumbnail,
+      startMs: existingClip?.startMs || 0,
+      durationMs: Math.max(existingClip?.durationMs || 0, durationMs),
+      visible: true,
+      locked: existingClip?.locked || false,
+    };
+    const tracks = timeline.tracks.some((track) => track.type === 'poster')
+      ? timeline.tracks.map((track) => {
+        if (track.type !== 'poster') return track;
+        const hasClip = track.clips.some((candidate) => candidate.pageId === pageId);
+        return {
+          ...track,
+          clips: hasClip
+            ? track.clips.map((candidate) => (candidate.pageId === pageId ? clip : candidate))
+            : [...track.clips, clip],
+        };
+      })
+      : [{ id: 'poster-track', type: 'poster' as const, clips: [clip] }, ...timeline.tracks];
+
+    useEditorStore.setState({
+      timelineProject: normalizeTimelineProject({
+        ...timeline,
+        currentTimeMs: 0,
+        tracks,
+      }),
+      selectedTimelineClipId: clipId,
+    });
+  };
+
   const loadBackendTemplate = (template: BackendTemplate) => {
     if (!canvas || !template.data) return;
 
@@ -392,6 +476,43 @@ export const Sidebar: React.FC = () => {
     useEditorStore.getState().setZoom(zoom);
     saveHistory();
     refreshLayers();
+  };
+
+  const loadTechnicalInfographicTemplate = () => {
+    if (!canvas) return;
+    applyTechnicalAIWorkflowTemplate(canvas);
+    useEditorStore.getState().setCanvasDimensions(1080, 1350);
+    const zoom = fitTechnicalInfographicCanvasToWorkspace(canvas);
+    useEditorStore.getState().setZoom(zoom);
+    saveHistory();
+    refreshLayers();
+  };
+
+
+  const loadPromptContextHarnessTemplate = async () => {
+    if (!canvas || promptHarnessLoading) return;
+    setPromptHarnessLoading(true);
+    try {
+      masterTimelineManager.pause();
+      await waitForTechnicalPosterFonts();
+      applyPromptContextHarnessInfographicTemplate(canvas);
+      useEditorStore.getState().setCanvasDimensions(1080, 1350);
+      normalizeTextAfterFonts();
+      canvas.getObjects()
+        .sort((left, right) => Number(left.get('layerIndex' as keyof fabric.Object) || 0) - Number(right.get('layerIndex' as keyof fabric.Object) || 0))
+        .forEach((object) => canvas.bringToFront(object));
+      ensureActivePageTimelineClip(16000);
+      const zoom = fitTechnicalInfographicCanvasToWorkspace(canvas);
+      useEditorStore.getState().setZoom(zoom);
+      masterTimelineManager.attachCanvas(canvas);
+      masterTimelineManager.seekMs(0);
+      useEditorStore.getState().setTimelineCurrentTime(0);
+      canvas.renderAll();
+      saveHistory();
+      refreshLayers();
+    } finally {
+      setPromptHarnessLoading(false);
+    }
   };
 
   const handleApplyTemplate = async (template: BackendTemplate) => {
@@ -704,6 +825,8 @@ export const Sidebar: React.FC = () => {
               </div>
             </button>
 
+            <div className="col-span-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-emerald-300">Technical / Infographic</div>
+
             <button
               type="button"
               onClick={loadArchitectureTemplate}
@@ -739,6 +862,76 @@ export const Sidebar: React.FC = () => {
               <div className="p-2.5">
                 <div className="text-[10px] font-bold text-zinc-100">{AI_ARCHITECTURE_TEMPLATE_NAME}</div>
                 <div className="mt-1 text-[8px] text-cyan-300">Technology · System Design · Editable</div>
+                <div className="mt-1 text-[8px] text-zinc-600">1080 × 1350</div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={loadTechnicalInfographicTemplate}
+              className="group overflow-hidden rounded-xl border border-emerald-500/30 bg-[#080D0B] text-left transition hover:border-emerald-400"
+            >
+              <div
+                className="relative aspect-[4/5] overflow-hidden border-b border-emerald-500/20"
+                style={{
+                  backgroundColor: '#080D0B',
+                  backgroundImage: 'linear-gradient(#17312655 1px, transparent 1px), linear-gradient(90deg, #17312655 1px, transparent 1px)',
+                  backgroundSize: '18px 18px',
+                }}
+              >
+                <div className="absolute inset-3 rounded border border-emerald-500/45" />
+                <div className="absolute inset-x-3 top-4 text-center font-mono text-[8px] font-black tracking-[0.18em] text-[#F4F7F5]">AI WORKFLOW</div>
+                <div className="absolute left-4 right-4 top-[34%] flex items-center gap-1">
+                  {['#38F08C', '#38BDF8', '#A78BFA'].map((color, index) => (
+                    <React.Fragment key={color}>
+                      <div className="h-8 flex-1 rounded border bg-[#101619]" style={{ borderColor: color }} />
+                      {index < 2 && <div className="h-0.5 w-3" style={{ backgroundColor: color }} />}
+                    </React.Fragment>
+                  ))}
+                </div>
+                <div className="absolute inset-x-5 bottom-5 h-1 rounded-full bg-[#38F08C]" />
+              </div>
+              <div className="p-2.5">
+                <div className="text-[10px] font-bold text-zinc-100">{TECHNICAL_INFOGRAPHIC_TEMPLATE_NAME}</div>
+                <div className="mt-1 text-[8px] text-emerald-300">Technical · Infographic · Editable</div>
+                <div className="mt-1 text-[8px] text-zinc-600">1080 × 1350</div>
+              </div>
+            </button>
+
+
+            <button
+              type="button"
+              onClick={loadPromptContextHarnessTemplate}
+              disabled={promptHarnessLoading}
+              className="group overflow-hidden rounded-xl border border-purple-500/30 bg-[#070B0D] text-left transition hover:border-purple-400"
+            >
+              <div
+                className="relative aspect-[4/5] overflow-hidden border-b border-purple-500/20"
+                style={{
+                  backgroundColor: '#070B0D',
+                  backgroundImage: 'linear-gradient(#607A7230 1px, transparent 1px), linear-gradient(90deg, #607A7230 1px, transparent 1px)',
+                  backgroundSize: '16px 16px',
+                }}
+              >
+                <div className="absolute inset-3 rounded border border-white/15" />
+                <div className="absolute inset-x-3 top-4 text-center font-mono text-[7px] font-black tracking-[0.14em] text-[#F4F7F5]">PROMPT / CONTEXT / HARNESS</div>
+                <div className="absolute left-5 right-5 top-12 h-1 rounded-full bg-gradient-to-r from-[#38F08C] via-[#38BDF8] to-[#A78BFA]" />
+                {[
+                  ['top-[28%]', '#38F08C', '01'],
+                  ['top-[49%]', '#38BDF8', '02'],
+                  ['top-[70%]', '#A78BFA', '03'],
+                ].map(([position, color, number]) => (
+                  <div key={number} className={`absolute left-5 right-5 h-12 rounded border bg-[#101619] ${position}`} style={{ borderColor: color }}>
+                    <div className="absolute left-2 top-2 flex h-5 w-5 items-center justify-center rounded-full border text-[6px] font-black" style={{ borderColor: color, color }}>{number}</div>
+                    <div className="absolute left-10 top-3 h-1.5 w-20 rounded" style={{ backgroundColor: color }} />
+                    <div className="absolute left-10 top-7 h-1 w-28 rounded bg-white/20" />
+                    <div className="absolute right-4 top-4 h-4 w-4 rotate-45 border" style={{ borderColor: color }} />
+                  </div>
+                ))}
+              </div>
+              <div className="p-2.5">
+                <div className="text-[10px] font-bold text-zinc-100">{promptHarnessLoading ? 'Loading deterministic poster...' : PROMPT_CONTEXT_HARNESS_TEMPLATE_NAME}</div>
+                <div className="mt-1 text-[8px] text-purple-300">Technical / Infographic · Animated</div>
                 <div className="mt-1 text-[8px] text-zinc-600">1080 × 1350</div>
               </div>
             </button>

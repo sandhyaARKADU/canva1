@@ -1,4 +1,6 @@
 import { fabric } from 'fabric';
+import { DESIGN_HEIGHT, DESIGN_WIDTH } from '../config/design';
+import { calculatePosterVideoSceneLayout, validatePosterScene } from './posterVideoComposition';
 
 export type MediaFitMode = 'smart-fit' | 'contain' | 'cover' | 'stretch' | 'original';
 export type BackgroundFillMode = 'blur' | 'solid' | 'dominant' | 'gradient' | 'mirror';
@@ -35,9 +37,9 @@ export interface ImageFitResult {
 export const calculateImageFit = ({
   sourceWidth,
   sourceHeight,
-  frameWidth = 1080,
-  frameHeight = 1080,
-  fitMode = 'smart-fit',
+  frameWidth = DESIGN_WIDTH,
+  frameHeight = DESIGN_HEIGHT,
+  fitMode = 'contain',
 }: ImageFitInput): ImageFitResult => {
   const srcW = Math.max(sourceWidth, 1);
   const srcH = Math.max(sourceHeight, 1);
@@ -45,7 +47,7 @@ export const calculateImageFit = ({
   // Contain scale for foreground (preserves full image, no crop, no distortion)
   const containScale = Math.min(frameWidth / srcW, frameHeight / srcH);
 
-  // Cover scale for background duplicate (fills entire 1080x1080 frame)
+  // Cover scale for background duplicate (fills entire 1080x1350 frame)
   const coverScale = Math.max(frameWidth / srcW, frameHeight / srcH);
 
   if (fitMode === 'stretch') {
@@ -145,14 +147,14 @@ export const getNaturalMediaDimensions = (object: fabric.Object): { width: numbe
     const img = object as fabric.Image;
     const element = img.getElement() as HTMLImageElement | HTMLVideoElement | undefined;
     if (element) {
-      const width = (element as HTMLVideoElement).videoWidth || (element as HTMLImageElement).naturalWidth || img.width || 1080;
-      const height = (element as HTMLVideoElement).videoHeight || (element as HTMLImageElement).naturalHeight || img.height || 1080;
+      const width = (element as HTMLVideoElement).videoWidth || (element as HTMLImageElement).naturalWidth || img.width || DESIGN_WIDTH;
+      const height = (element as HTMLVideoElement).videoHeight || (element as HTMLImageElement).naturalHeight || img.height || DESIGN_HEIGHT;
       return { width, height };
     }
   }
   return {
-    width: object.width || 1080,
-    height: object.height || 1080,
+    width: object.width || DESIGN_WIDTH,
+    height: object.height || DESIGN_HEIGHT,
   };
 };
 
@@ -199,19 +201,25 @@ export const createSmartFitImageLayers = async (
     backgroundColor?: string;
   } = {},
 ): Promise<{ foreground: fabric.Image; background: fabric.Object | null }> => {
-  const frameW = canvas.getWidth() || 1080;
-  const frameH = canvas.getHeight() || 1080;
-  const srcW = imgElement.naturalWidth || imgElement.width || 1080;
-  const srcH = imgElement.naturalHeight || imgElement.height || 1080;
+  const frameW = canvas.getWidth() || DESIGN_WIDTH;
+  const frameH = canvas.getHeight() || DESIGN_HEIGHT;
+  const srcW = imgElement.naturalWidth || imgElement.width || DESIGN_WIDTH;
+  const srcH = imgElement.naturalHeight || imgElement.height || DESIGN_HEIGHT;
 
   const pairId = options.id || `smartfit-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  const fitMode = options.fitMode || 'smart-fit';
+  const fitMode = options.fitMode || 'contain';
   const bgMode = options.backgroundMode || 'blur';
   const blurAmount = options.blurAmount ?? 40;
   const overlayOpacity = options.overlayOpacity ?? 0.15;
   const customBgColor = options.backgroundColor || extractDominantColor(imgElement);
+  const posterVideoScene = calculatePosterVideoSceneLayout(
+    options.sourceUrl || options.assetUrl || '',
+    srcW,
+    srcH,
+    { id: pairId, backgroundMode: bgMode === 'solid' ? 'solid-color' : 'blurred-duplicate' },
+  );
 
-  const { foreground, background } = calculateImageFit({
+  const { foreground } = calculateImageFit({
     sourceWidth: srcW,
     sourceHeight: srcH,
     frameWidth: frameW,
@@ -229,26 +237,32 @@ export const createSmartFitImageLayers = async (
   }
 
   // Create background layer if using Smart Fit or if bgMode is active
-  if (fitMode === 'smart-fit' || bgMode !== 'solid') {
+  if (fitMode === 'smart-fit' || fitMode === 'contain' || bgMode !== 'solid') {
     if (bgMode === 'blur' || bgMode === 'mirror') {
       const bgImg = new fabric.Image(imgElement, {
         crossOrigin: 'anonymous',
         originX: 'center',
         originY: 'center',
-        left: background.left,
-        top: background.top,
-        scaleX: background.scaleX * (bgMode === 'mirror' ? -1 : 1),
-        scaleY: background.scaleY,
+        left: posterVideoScene.background.left,
+        top: posterVideoScene.background.top,
+        scaleX: posterVideoScene.background.scale * (bgMode === 'mirror' ? -1 : 1),
+        scaleY: posterVideoScene.background.scale,
         selectable: false,
         evented: false,
+        locked: true,
         isSmartFitBackground: true,
         smartFitPairId: pairId,
+        excludeFromLayers: true,
         excludeFromExport: false,
       } as any);
 
       // Apply blur filter if supported
       if (bgMode === 'blur' && fabric.Image.filters?.Blur) {
-        bgImg.filters = [new fabric.Image.filters.Blur({ blur: blurAmount / 100 })];
+        const filters = [new fabric.Image.filters.Blur({ blur: blurAmount / 100 })];
+        if (fabric.Image.filters?.Brightness) {
+          filters.push(new fabric.Image.filters.Brightness({ brightness: -0.15 }) as never);
+        }
+        bgImg.filters = filters;
         bgImg.applyFilters();
       }
 
@@ -264,8 +278,10 @@ export const createSmartFitImageLayers = async (
         fill: customBgColor,
         selectable: false,
         evented: false,
+        locked: true,
         isSmartFitBackground: true,
         smartFitPairId: pairId,
+        excludeFromLayers: true,
       } as any);
     } else if (bgMode === 'gradient') {
       const domColor = extractDominantColor(imgElement);
@@ -287,8 +303,10 @@ export const createSmartFitImageLayers = async (
         }),
         selectable: false,
         evented: false,
+        locked: true,
         isSmartFitBackground: true,
         smartFitPairId: pairId,
+        excludeFromLayers: true,
       } as any);
     }
 
@@ -310,12 +328,12 @@ export const createSmartFitImageLayers = async (
     sourceUrl: options.sourceUrl || options.assetUrl,
     naturalWidth: srcW,
     naturalHeight: srcH,
-    originX: 'center',
-    originY: 'center',
-    left: foreground.left,
-    top: foreground.top,
-    scaleX: foreground.scaleX,
-    scaleY: foreground.scaleY,
+    originX: fitMode === 'cover' || fitMode === 'original' ? 'center' : 'left',
+    originY: fitMode === 'cover' || fitMode === 'original' ? 'center' : 'top',
+    left: fitMode === 'cover' || fitMode === 'original' ? foreground.left : posterVideoScene.foreground.left,
+    top: fitMode === 'cover' || fitMode === 'original' ? foreground.top : posterVideoScene.foreground.top,
+    scaleX: fitMode === 'cover' || fitMode === 'original' ? foreground.scaleX : posterVideoScene.foreground.scale,
+    scaleY: fitMode === 'cover' || fitMode === 'original' ? foreground.scaleY : posterVideoScene.foreground.scale,
     fitMode,
     backgroundMode: bgMode,
     blurAmount,
@@ -323,10 +341,34 @@ export const createSmartFitImageLayers = async (
     backgroundColor: customBgColor,
     isSmartFitForeground: true,
     smartFitPairId: pairId,
+    posterFitData: {
+      scene: posterVideoScene,
+      designWidth: frameW,
+      designHeight: frameH,
+      originalWidth: srcW,
+      originalHeight: srcH,
+      originalAspectRatio: srcW / srcH,
+      fitMode,
+      image: {
+        src: options.sourceUrl || options.assetUrl || '',
+        left: fitMode === 'cover' || fitMode === 'original' ? foreground.left : posterVideoScene.foreground.left,
+        top: fitMode === 'cover' || fitMode === 'original' ? foreground.top : posterVideoScene.foreground.top,
+        scaleX: fitMode === 'cover' || fitMode === 'original' ? foreground.scaleX : posterVideoScene.foreground.scale,
+        scaleY: fitMode === 'cover' || fitMode === 'original' ? foreground.scaleY : posterVideoScene.foreground.scale,
+        angle: 0,
+      },
+      background: bgObject ? {
+        mode: bgMode === 'solid' || bgMode === 'dominant' || bgMode === 'gradient' ? 'solid' : 'blurred-duplicate',
+        color: customBgColor,
+        blur: bgMode === 'blur' ? blurAmount : undefined,
+        brightness: 0.85,
+      } : undefined,
+    },
     staticExportSupported: true,
   } as Record<string, unknown>);
 
   canvas.add(fgImg);
+  validatePosterScene(posterVideoScene);
   canvas.setActiveObject(fgImg);
   canvas.requestRenderAll();
 
@@ -339,8 +381,8 @@ export const applyMediaFitMode = (
   canvas: fabric.Canvas,
   mode: MediaFitMode,
 ): void => {
-  const canvasW = canvas.getWidth() || 1080;
-  const canvasH = canvas.getHeight() || 1080;
+  const canvasW = canvas.getWidth() || DESIGN_WIDTH;
+  const canvasH = canvas.getHeight() || DESIGN_HEIGHT;
   const { width: srcW, height: srcH } = getNaturalMediaDimensions(object);
 
   const { foreground, background } = calculateImageFit({
@@ -369,7 +411,7 @@ export const applyMediaFitMode = (
   );
 
   if (bgObj) {
-    if (mode === 'smart-fit') {
+    if (mode === 'smart-fit' || mode === 'contain') {
       bgObj.set({
         originX: 'center',
         originY: 'center',
@@ -382,6 +424,41 @@ export const applyMediaFitMode = (
     } else {
       bgObj.set('visible', false);
     }
+  }
+
+  if ((mode === 'smart-fit' || mode === 'contain') && object.type === 'image') {
+    const source = String(object.get('sourceUrl' as keyof fabric.Object) || object.get('assetUrl' as keyof fabric.Object) || '');
+    const posterVideoScene = calculatePosterVideoSceneLayout(source, srcW, srcH, { backgroundMode: 'blurred-duplicate' });
+    object.set({
+      originX: 'left',
+      originY: 'top',
+      left: posterVideoScene.foreground.left,
+      top: posterVideoScene.foreground.top,
+      scaleX: posterVideoScene.foreground.scale,
+      scaleY: posterVideoScene.foreground.scale,
+      posterFitData: {
+        scene: posterVideoScene,
+        designWidth: canvasW,
+        designHeight: canvasH,
+        originalWidth: srcW,
+        originalHeight: srcH,
+        originalAspectRatio: srcW / srcH,
+        fitMode: mode,
+        image: {
+          src: source,
+          left: posterVideoScene.foreground.left,
+          top: posterVideoScene.foreground.top,
+          scaleX: posterVideoScene.foreground.scale,
+          scaleY: posterVideoScene.foreground.scale,
+          angle: 0,
+        },
+        background: {
+          mode: 'blurred-duplicate',
+          blur: posterVideoScene.background.blur,
+          brightness: posterVideoScene.background.brightness,
+        },
+      },
+    } as Record<string, unknown>);
   }
 
   object.setCoords();
@@ -402,8 +479,8 @@ export const centerObjectVertically = (object: fabric.Object, canvas: fabric.Can
 
 export const resetObjectSize = (object: fabric.Object, canvas: fabric.Canvas): void => {
   const { width: srcW, height: srcH } = getNaturalMediaDimensions(object);
-  const canvasW = canvas.getWidth() || 1080;
-  const canvasH = canvas.getHeight() || 1080;
+  const canvasW = canvas.getWidth() || DESIGN_WIDTH;
+  const canvasH = canvas.getHeight() || DESIGN_HEIGHT;
   const scale = Math.min(canvasW / srcW, canvasH / srcH);
   object.set({
     originX: 'center',
@@ -420,7 +497,22 @@ export const resetObjectSize = (object: fabric.Object, canvas: fabric.Canvas): v
 export const toggleLockAspectRatio = (object: fabric.Object, canvas: fabric.Canvas): boolean => {
   const current = Boolean(object.get('lockUniScaling' as any));
   const next = !current;
-  object.set('lockUniScaling' as any, next);
+  object.set({
+    lockUniScaling: next,
+    imageLockedAspectRatio: next,
+  } as Record<string, unknown>);
+  object.setControlsVisibility?.({
+    mt: !next,
+    mb: !next,
+    ml: !next,
+    mr: !next,
+    tl: true,
+    tr: true,
+    bl: true,
+    br: true,
+    mtr: true,
+  });
+  object.setCoords();
   canvas.requestRenderAll();
   return next;
 };

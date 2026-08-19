@@ -10,13 +10,14 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, Unidentifie
 from sqlalchemy.orm import Session
 
 from auth import get_current_user
+from config import resolve_runtime_path, settings
 from database import ProcessedImage, User, get_db
 from services.background_removal_service import remove_background_with_provider
 
 
 router = APIRouter(prefix="/api/images", tags=["image-processing"])
 
-MEDIA_ROOT = Path(__file__).resolve().parent.parent / "media" / "processed-images"
+MEDIA_ROOT = resolve_runtime_path(settings.MEDIA_ROOT) / "processed-images"
 MAX_IMAGE_BYTES = 15 * 1024 * 1024
 MAX_IMAGE_PIXELS = 24_000_000
 ALLOWED_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}

@@ -12,6 +12,12 @@ export interface VideoExportSettings {
   includeAudio: boolean;
 }
 
+export interface VideoExportAudioFile {
+  clipId: string;
+  fileName: string;
+  blob: Blob;
+}
+
 export interface VideoRenderCreateResponse {
   job_id: string;
   status: 'queued';
@@ -38,4 +44,5 @@ export interface VideoRenderPayload {
   settings: VideoExportSettings;
   timeline: TimelineProject;
   totalFrames: number;
+  audioFiles?: VideoExportAudioFile[];
 }

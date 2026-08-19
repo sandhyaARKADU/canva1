@@ -192,7 +192,7 @@ source venv/bin/activate  # macOS/Linux
 pip install -r requirements.txt
 
 # Configure environment
-cp .env.example .env
+cp .env.example .envcodex
 # Edit .env with your MySQL credentials and AI API keys
 
 # Start the server

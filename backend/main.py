@@ -9,7 +9,7 @@ from sqlalchemy import text
 from database import SessionLocal, init_db
 from migrate import run_migrations
 from routes import auth, projects, templates, categories, brand_kits, shared, favorites, assets, ai, ai_poster, stickers, fonts, images, poster_analysis, uploads, qrcode, charts, notifications, content_calendar, audit_logs, feature_flags, elements, video_render
-from config import settings, validate_security_settings
+from config import resolve_runtime_path, settings, validate_security_settings
 
 app = FastAPI(
     title="TECKSTUDIO API",
@@ -34,7 +34,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MEDIA_DIR = Path(__file__).resolve().parent / "media"
+MEDIA_DIR = resolve_runtime_path(settings.MEDIA_ROOT)
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
 

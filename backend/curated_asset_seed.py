@@ -434,6 +434,17 @@ ADDITIONAL_CATEGORY_SUBJECT_KEYS: dict[str, list[str]] = {
     "maps": ["world-map", "city-map", "route-map", "pin-location", "travel-map", "campus-map", "metro-map", "terrain-map", "gps-screen", "delivery-route", "country-map", "navigation-map"],
 }
 
+CATEGORY_QUERY_PREFIXES: dict[str, str] = {
+    "education": "classroom students teacher university books learning",
+    "healthcare": "doctor nurse hospital medical healthcare medicine",
+    "finance": "banking finance investment stock market money financial planning",
+    "marketing": "digital marketing advertising branding campaign analytics",
+    "social-media": "content creator smartphone social media marketing influencer online content",
+    "events": "conference event stage celebration seminar party audience",
+    "sports": "athlete football basketball running sports competition stadium",
+    "music": "musician concert guitar piano recording studio headphones",
+}
+
 _palette_cycle = [
     [("#0f172a", "#2563eb", "#38bdf8", "#dbeafe"), ("#111827", "#7c3aed", "#f0abfc", "#faf5ff"), ("#082f49", "#14b8a6", "#a7f3d0", "#ecfeff")],
     [("#431407", "#f97316", "#fde68a", "#fff7ed"), ("#831843", "#ec4899", "#f9a8d4", "#fdf2f8"), ("#3b0764", "#a855f7", "#e9d5ff", "#faf5ff")],
@@ -446,7 +457,7 @@ for category_index, (category_slug, keys) in enumerate(ADDITIONAL_CATEGORY_SUBJE
         AssetSubject(
             key,
             key.replace("-", " ").title(),
-            f"{category_slug.replace('-', ' ')} {key.replace('-', ' ')} high quality design asset",
+            f"{CATEGORY_QUERY_PREFIXES.get(category_slug, category_slug.replace('-', ' '))} {key.replace('-', ' ')} high quality design asset",
             tuple(part for part in key.split("-") if part) + (category_slug,),
         )
         for key in keys
@@ -682,6 +693,22 @@ def _render_scene(category: str, key: str, width: int, height: int, bg_a: str, b
         return _animals_scene(key, width, height, accent, light, seed)
     if category == "people":
         return _people_scene(key, width, height, accent, light, seed)
+    if category == "education":
+        return _education_scene(key, width, height, accent, light, seed)
+    if category == "healthcare":
+        return _healthcare_scene(key, width, height, accent, light, seed)
+    if category == "finance":
+        return _finance_scene(key, width, height, accent, light, seed)
+    if category == "marketing":
+        return _marketing_scene(key, width, height, accent, light, seed)
+    if category == "social-media":
+        return _social_media_scene(key, width, height, accent, light, seed)
+    if category == "events":
+        return _events_scene(key, width, height, accent, light, seed)
+    if category == "sports":
+        return _sports_scene(key, width, height, accent, light, seed)
+    if category == "music":
+        return _music_scene(key, width, height, accent, light, seed)
     return _minimal_scene(key, width, height, accent, light, seed)
 
 
@@ -851,6 +878,95 @@ def _people_scene(key: str, width: int, height: int, accent: str, light: str, se
         people = "".join(f'<circle cx="{width*(.24+i*.13)}" cy="{height*(.30+(i%2)*.06)}" r="{unit*.045}" fill="{["#fde68a", "#fecaca", "#c7d2fe", "#fed7aa"][i%4]}"/><path d="M{width*(.20+i*.13)} {height*(.48+(i%2)*.03)} q{unit*.045} {-unit*.11} {unit*.09} 0 v{unit*.17} h{-unit*.18} z" fill="{[accent, light, "#38bdf8", "#fb7185"][i%4]}" opacity="0.86"/>' for i in range(5))
         return people + f'<rect x="{width*.14}" y="{height*.74}" width="{width*.72}" height="{unit*.035}" rx="16" fill="{light}" opacity="0.45"/>'
     return f'<circle cx="{width*.50}" cy="{height*.32}" r="{unit*.11}" fill="#fde68a" filter="url(#softShadow)"/><path d="M{width*.36} {height*.70} C{width*.38} {height*.52} {width*.44} {height*.45} {width*.50} {height*.45} C{width*.56} {height*.45} {width*.62} {height*.52} {width*.64} {height*.70} Z" fill="{accent}" filter="url(#softShadow)"/><path d="M{width*.40} {height*.36} C{width*.45} {height*.25} {width*.57} {height*.25} {width*.62} {height*.36}" fill="none" stroke="{light}" stroke-width="{unit*.02}" stroke-linecap="round" opacity="0.65"/>'
+
+
+def _education_scene(key: str, width: int, height: int, accent: str, light: str, seed: int) -> str:
+    unit = min(width, height)
+    if key in {"classroom", "school", "whiteboard"}:
+        desks = "".join(f'<rect x="{width*(.18+desk_index*.14)}" y="{height*.63}" width="{width*.09}" height="{height*.06}" rx="10" fill="{accent}" opacity="0.75"/>' for desk_index in range(5))
+        board_lines = "".join(f'<rect x="{width*.30}" y="{height*(.29+line_index*.06)}" width="{width*(.18+line_index*.05)}" height="{unit*.012}" rx="5" fill="{accent}" opacity="0.75"/>' for line_index in range(4))
+        return f'<rect x="{width*.18}" y="{height*.18}" width="{width*.64}" height="{height*.34}" rx="18" fill="{light}" opacity="0.86" filter="url(#softShadow)"/>{board_lines}{desks}<path d="M{width*.15} {height*.78} H{width*.85}" stroke="{light}" stroke-width="{unit*.018}" opacity="0.45"/>'
+    if key in {"books", "library", "study-desk"}:
+        books = "".join(f'<rect x="{width*(.25+book_index*.07)}" y="{height*(.34+(book_index%2)*.04)}" width="{width*.055}" height="{height*(.28+(book_index%3)*.03)}" rx="7" fill="{[accent, light, "#fbbf24", "#60a5fa"][book_index%4]}" filter="url(#softShadow)"/>' for book_index in range(7))
+        return books + f'<rect x="{width*.20}" y="{height*.70}" width="{width*.60}" height="{unit*.04}" rx="14" fill="{light}" opacity="0.55"/>'
+    return f'<circle cx="{width*.50}" cy="{height*.32}" r="{unit*.08}" fill="#fde68a" filter="url(#softShadow)"/><path d="M{width*.34} {height*.52} q{width*.16} {-height*.14} {width*.32} 0 v{height*.18} h{-width*.32} z" fill="{accent}"/><path d="M{width*.28} {height*.76} H{width*.72}" stroke="{light}" stroke-width="{unit*.026}" stroke-linecap="round"/><path d="M{width*.32} {height*.22} L{width*.50} {height*.15} L{width*.68} {height*.22} L{width*.50} {height*.30} Z" fill="{light}" opacity="0.9"/>'
+
+
+def _healthcare_scene(key: str, width: int, height: int, accent: str, light: str, seed: int) -> str:
+    unit = min(width, height)
+    cross = f'<rect x="{width*.46}" y="{height*.24}" width="{width*.08}" height="{height*.30}" rx="10" fill="{accent}"/><rect x="{width*.35}" y="{height*.35}" width="{width*.30}" height="{height*.08}" rx="10" fill="{accent}"/>'
+    if key in {"doctor", "nurse", "telehealth"}:
+        return f'<circle cx="{width*.50}" cy="{height*.28}" r="{unit*.08}" fill="#fde68a" filter="url(#softShadow)"/><path d="M{width*.34} {height*.70} C{width*.36} {height*.50} {width*.44} {height*.42} {width*.50} {height*.42} C{width*.56} {height*.42} {width*.64} {height*.50} {width*.66} {height*.70} Z" fill="{light}"/>{cross}<path d="M{width*.37} {height*.45} C{width*.25} {height*.55} {width*.27} {height*.70} {width*.39} {height*.68}" fill="none" stroke="{accent}" stroke-width="{unit*.018}" stroke-linecap="round"/>'
+    if key in {"stethoscope", "clinic", "hospital"}:
+        return f'<rect x="{width*.18}" y="{height*.26}" width="{width*.64}" height="{height*.43}" rx="24" fill="{light}" opacity="0.86" filter="url(#softShadow)"/>{cross}<path d="M{width*.30} {height*.33} V{height*.48} C{width*.30} {height*.62} {width*.45} {height*.62} {width*.45} {height*.49}" fill="none" stroke="#0f172a" stroke-width="{unit*.018}" stroke-linecap="round"/><circle cx="{width*.55}" cy="{height*.51}" r="{unit*.045}" fill="none" stroke="#0f172a" stroke-width="{unit*.014}"/>'
+    return f'<rect x="{width*.24}" y="{height*.34}" width="{width*.52}" height="{height*.24}" rx="28" fill="{light}" filter="url(#softShadow)"/>{cross}<circle cx="{width*.62}" cy="{height*.46}" r="{unit*.055}" fill="#ef4444" opacity="0.78"/><path d="M{width*.20} {height*.75} H{width*.80}" stroke="{light}" stroke-width="{unit*.018}" opacity="0.45"/>'
+
+
+def _finance_scene(key: str, width: int, height: int, accent: str, light: str, seed: int) -> str:
+    unit = min(width, height)
+    if key in {"stock-chart", "analytics", "investment", "report"}:
+        bars = "".join(f'<rect x="{width*(.22+bar_index*.085)}" y="{height*(.68-bar_index*.04)}" width="{width*.052}" height="{height*(.12+bar_index*.04)}" rx="8" fill="{[accent, light][bar_index%2]}"/>' for bar_index in range(6))
+        return f'<rect x="{width*.15}" y="{height*.18}" width="{width*.70}" height="{height*.58}" rx="24" fill="#111827" opacity="0.78" filter="url(#softShadow)"/>{bars}<path d="M{width*.20} {height*.53} C{width*.34} {height*.42} {width*.47} {height*.48} {width*.60} {height*.32} S{width*.75} {height*.34} {width*.82} {height*.25}" fill="none" stroke="{accent}" stroke-width="{unit*.017}" stroke-linecap="round"/>'
+    if key in {"credit-card", "banking", "wallet"}:
+        return f'<rect x="{width*.22}" y="{height*.34}" width="{width*.56}" height="{height*.30}" rx="24" fill="{light}" filter="url(#softShadow)"/><rect x="{width*.22}" y="{height*.42}" width="{width*.56}" height="{height*.06}" fill="{accent}" opacity="0.85"/><rect x="{width*.30}" y="{height*.54}" width="{width*.16}" height="{unit*.025}" rx="8" fill="#0f172a" opacity="0.45"/><circle cx="{width*.65}" cy="{height*.56}" r="{unit*.035}" fill="{accent}" opacity="0.65"/>'
+    coins = "".join(f'<ellipse cx="{width*(.36+coin_index*.055)}" cy="{height*(.64-coin_index*.035)}" rx="{unit*.08}" ry="{unit*.028}" fill="{[accent, light][coin_index%2]}" opacity="0.9"/>' for coin_index in range(6))
+    return coins + f'<path d="M{width*.22} {height*.30} H{width*.78}" stroke="{light}" stroke-width="{unit*.016}" opacity="0.45"/>'
+
+
+def _marketing_scene(key: str, width: int, height: int, accent: str, light: str, seed: int) -> str:
+    unit = min(width, height)
+    if key in {"megaphone", "campaign", "launch"}:
+        return f'<path d="M{width*.26} {height*.45} L{width*.67} {height*.27} V{height*.65} L{width*.26} {height*.52} Z" fill="{light}" filter="url(#softShadow)"/><rect x="{width*.20}" y="{height*.43}" width="{width*.12}" height="{height*.13}" rx="12" fill="{accent}"/><path d="M{width*.37} {height*.54} l{width*.08} {height*.19}" stroke="{accent}" stroke-width="{unit*.025}" stroke-linecap="round"/><path d="M{width*.74} {height*.34} q{unit*.10} {unit*.08} 0 {unit*.18}" fill="none" stroke="{light}" stroke-width="{unit*.015}"/>'
+    if key in {"brand-board", "content-calendar", "social-post", "email"}:
+        cards = "".join(f'<rect x="{width*(.20+(card_index%2)*.31)}" y="{height*(.24+(card_index//2)*.20)}" width="{width*.24}" height="{height*.14}" rx="14" fill="{[light, accent, "#f59e0b", "#60a5fa"][card_index%4]}" opacity="0.85"/>' for card_index in range(4))
+        return f'<rect x="{width*.14}" y="{height*.18}" width="{width*.72}" height="{height*.58}" rx="24" fill="#111827" opacity="0.52" filter="url(#softShadow)"/>{cards}'
+    return f'<rect x="{width*.18}" y="{height*.20}" width="{width*.64}" height="{height*.50}" rx="24" fill="{light}" opacity="0.85" filter="url(#softShadow)"/><path d="M{width*.28} {height*.58} C{width*.42} {height*.48} {width*.48} {height*.52} {width*.62} {height*.34}" fill="none" stroke="{accent}" stroke-width="{unit*.018}"/><circle cx="{width*.67}" cy="{height*.31}" r="{unit*.05}" fill="{accent}"/>'
+
+
+def _social_media_scene(key: str, width: int, height: int, accent: str, light: str, seed: int) -> str:
+    unit = min(width, height)
+    phone = f'<rect x="{width*.34}" y="{height*.18}" width="{width*.32}" height="{height*.60}" rx="30" fill="#111827" stroke="{light}" stroke-width="{unit*.012}" filter="url(#softShadow)"/><rect x="{width*.38}" y="{height*.27}" width="{width*.24}" height="{height*.36}" rx="16" fill="{accent}" opacity="0.72"/>'
+    bubbles = "".join(f'<circle cx="{width*(.22+bubble_index*.13)}" cy="{height*(.27+(bubble_index%3)*.16)}" r="{unit*.045}" fill="{[light, accent, "#f472b6"][bubble_index%3]}" opacity="0.82"/>' for bubble_index in range(5))
+    if key in {"creator-phone", "video-post", "story-template", "feed"}:
+        return phone + f'<circle cx="{width*.50}" cy="{height*.68}" r="{unit*.015}" fill="{light}"/><path d="M{width*.46} {height*.39} l{unit*.10} {unit*.065} l{-unit*.10} {unit*.065} z" fill="#ffffff" opacity="0.9"/>'
+    if key in {"likes", "comment-bubbles", "engagement", "hashtag"}:
+        return phone + bubbles + f'<path d="M{width*.72} {height*.30} c{unit*.04} {-unit*.05} {unit*.12} 0 {unit*.08} {unit*.08} l{-unit*.08} {unit*.10} l{-unit*.08} {-unit*.10} c{-unit*.04} {-unit*.08} {unit*.04} {-unit*.13} {unit*.08} {-unit*.08}z" fill="#ef4444"/>'
+    return phone + f'<circle cx="{width*.23}" cy="{height*.36}" r="{unit*.08}" fill="{light}"/><circle cx="{width*.77}" cy="{height*.56}" r="{unit*.07}" fill="{accent}"/>'
+
+
+def _events_scene(key: str, width: int, height: int, accent: str, light: str, seed: int) -> str:
+    unit = min(width, height)
+    if key in {"conference", "stage", "concert", "podium"}:
+        beams = "".join(f'<path d="M{width*(.24+beam_index*.18)} {height*.18} L{width*.50} {height*.70}" stroke="{[accent, light][beam_index%2]}" stroke-width="{unit*.018}" opacity="0.55"/>' for beam_index in range(4))
+        return beams + f'<rect x="{width*.18}" y="{height*.66}" width="{width*.64}" height="{height*.10}" rx="18" fill="{light}" filter="url(#softShadow)"/><rect x="{width*.43}" y="{height*.45}" width="{width*.14}" height="{height*.22}" rx="10" fill="{accent}"/>'
+    if key in {"tickets", "invitation", "calendar"}:
+        return f'<rect x="{width*.24}" y="{height*.28}" width="{width*.52}" height="{height*.30}" rx="20" fill="{light}" filter="url(#softShadow)"/><circle cx="{width*.24}" cy="{height*.43}" r="{unit*.045}" fill="#111827"/><circle cx="{width*.76}" cy="{height*.43}" r="{unit*.045}" fill="#111827"/><path d="M{width*.38} {height*.32} V{height*.55}" stroke="{accent}" stroke-width="{unit*.012}" stroke-dasharray="10 12"/><rect x="{width*.45}" y="{height*.37}" width="{width*.20}" height="{unit*.035}" rx="8" fill="{accent}"/>'
+    confetti = "".join(f'<circle cx="{width*(.18+(confetti_index*17%68)/100)}" cy="{height*(.18+(confetti_index*23%55)/100)}" r="{unit*.018}" fill="{[accent, light, "#f59e0b", "#f472b6"][confetti_index%4]}"/>' for confetti_index in range(18))
+    return confetti + f'<path d="M{width*.22} {height*.68} C{width*.38} {height*.54} {width*.60} {height*.78} {width*.80} {height*.58}" fill="none" stroke="{light}" stroke-width="{unit*.025}"/>'
+
+
+def _sports_scene(key: str, width: int, height: int, accent: str, light: str, seed: int) -> str:
+    unit = min(width, height)
+    if key in {"basketball", "football", "tennis"}:
+        ball_color = "#f97316" if key == "basketball" else light
+        ball = f'<circle cx="{width*.50}" cy="{height*.45}" r="{unit*.15}" fill="{ball_color}" filter="url(#softShadow)"/><path d="M{width*.35} {height*.45} H{width*.65} M{width*.50} {height*.30} V{height*.60}" stroke="{accent}" stroke-width="{unit*.012}" opacity="0.85"/>'
+        return ball + f'<path d="M{width*.18} {height*.75} C{width*.36} {height*.66} {width*.62} {height*.84} {width*.84} {height*.70}" fill="none" stroke="{light}" stroke-width="{unit*.018}" opacity="0.5"/>'
+    if key in {"running-track", "training", "fitness-field", "team"}:
+        return f'<circle cx="{width*.45}" cy="{height*.24}" r="{unit*.045}" fill="{light}"/><path d="M{width*.45} {height*.31} L{width*.55} {height*.48} L{width*.69} {height*.58}" fill="none" stroke="{accent}" stroke-width="{unit*.030}" stroke-linecap="round"/><path d="M{width*.50} {height*.40} L{width*.34} {height*.55} M{width*.55} {height*.48} L{width*.43} {height*.72}" fill="none" stroke="{light}" stroke-width="{unit*.026}" stroke-linecap="round"/><ellipse cx="{width*.50}" cy="{height*.78}" rx="{width*.36}" ry="{height*.08}" fill="none" stroke="{light}" stroke-width="{unit*.014}" opacity="0.55"/>'
+    return f'<path d="M{width*.50} {height*.22} L{width*.58} {height*.42} L{width*.80} {height*.42} L{width*.62} {height*.55} L{width*.70} {height*.76} L{width*.50} {height*.63} L{width*.30} {height*.76} L{width*.38} {height*.55} L{width*.20} {height*.42} L{width*.42} {height*.42} Z" fill="{accent}" filter="url(#softShadow)"/><rect x="{width*.25}" y="{height*.78}" width="{width*.50}" height="{unit*.035}" rx="14" fill="{light}" opacity="0.48"/>'
+
+
+def _music_scene(key: str, width: int, height: int, accent: str, light: str, seed: int) -> str:
+    unit = min(width, height)
+    if key in {"guitar", "violin"}:
+        return f'<ellipse cx="{width*.42}" cy="{height*.58}" rx="{unit*.12}" ry="{unit*.17}" fill="{accent}" filter="url(#softShadow)"/><ellipse cx="{width*.52}" cy="{height*.45}" rx="{unit*.09}" ry="{unit*.12}" fill="{accent}"/><rect x="{width*.55}" y="{height*.22}" width="{unit*.035}" height="{height*.34}" rx="8" fill="{light}" transform="rotate(-22 {width*.57} {height*.38})"/><circle cx="{width*.46}" cy="{height*.54}" r="{unit*.035}" fill="#111827" opacity="0.7"/>'
+    if key in {"microphone", "studio", "concert-stage"}:
+        return f'<rect x="{width*.44}" y="{height*.24}" width="{width*.12}" height="{height*.24}" rx="{unit*.06}" fill="{light}" filter="url(#softShadow)"/><path d="M{width*.36} {height*.42} C{width*.36} {height*.58} {width*.64} {height*.58} {width*.64} {height*.42}" fill="none" stroke="{accent}" stroke-width="{unit*.022}"/><path d="M{width*.50} {height*.58} V{height*.74} M{width*.36} {height*.74} H{width*.64}" stroke="{light}" stroke-width="{unit*.018}" stroke-linecap="round"/>'
+    if key in {"piano", "headphones", "speaker"}:
+        keys = "".join(f'<rect x="{width*(.25+key_index*.055)}" y="{height*.55}" width="{width*.045}" height="{height*.16}" fill="{[light, "#111827"][key_index%2]}" opacity="0.9"/>' for key_index in range(9))
+        return f'<rect x="{width*.20}" y="{height*.42}" width="{width*.60}" height="{height*.30}" rx="18" fill="{accent}" filter="url(#softShadow)"/>{keys}<path d="M{width*.35} {height*.36} C{width*.35} {height*.20} {width*.65} {height*.20} {width*.65} {height*.36}" fill="none" stroke="{light}" stroke-width="{unit*.022}"/>'
+    notes = "".join(f'<path d="M{width*(.32+note_index*.12)} {height*.30} V{height*(.55+(note_index%2)*.05)}" stroke="{light}" stroke-width="{unit*.015}"/><circle cx="{width*(.30+note_index*.12)}" cy="{height*(.58+(note_index%2)*.05)}" r="{unit*.04}" fill="{accent}"/>' for note_index in range(4))
+    return notes + f'<path d="M{width*.20} {height*.78} H{width*.80}" stroke="{light}" stroke-width="{unit*.018}" opacity="0.45"/>'
 
 
 def _minimal_scene(key: str, width: int, height: int, accent: str, light: str, seed: int) -> str:

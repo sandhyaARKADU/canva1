@@ -24,6 +24,7 @@ export type TextPreset = {
   shadow?: fabric.IShadowOptions;
   gradient?: string[];
   highlightColor?: string;
+  opacity?: number;
 };
 
 export const ROUNDED_BOLD_HIGHLIGHT_PRESET_ID = 'rounded-bold-highlight';
@@ -67,4 +68,23 @@ export const TEXT_PRESETS: TextPreset[] = [
   { id: 'sale-poster', name: 'Sale Poster', preview: 'SALE', text: 'SALE 50% OFF', fontFamily: 'Outfit', fontSize: 78, fontWeight: 900, fill: '#ef4444', textAlign: 'center', charSpacing: 20, stroke: '#ffffff', strokeWidth: 3 },
   { id: 'gold-highlight', name: 'Gold Highlight', preview: 'Gold', text: 'Gold Highlight', fontFamily: 'Playfair Display', fontSize: 62, fontWeight: 800, fill: '#fbbf24', textAlign: 'center', charSpacing: 8 },
   { id: 'technical-label', name: 'Technical Label', preview: 'Label', text: 'Technical Label', fontFamily: 'Courier New', fontSize: 28, fontWeight: 700, fill: '#67e8f9', textAlign: 'left', charSpacing: 40 },
+
+  { id: 'prompt-harness-main-heading', name: 'Technical Main Heading', preview: 'PROMPT', text: 'PROMPT / CONTEXT / HARNESS', fontFamily: 'Space Mono, IBM Plex Mono, Menlo, monospace', fontSize: 48, fontWeight: 800, fill: '#F4F7F5', textAlign: 'center', charSpacing: 105, lineHeight: 1, opacity: 1 },
+  { id: 'prompt-harness-wide-tracking', name: 'Wide Tracking Heading', preview: 'HARNESS', text: 'HARNESS ENGINEERING', fontFamily: 'Space Mono, IBM Plex Mono, Menlo, monospace', fontSize: 26, fontWeight: 800, fill: '#F4F7F5', textAlign: 'left', charSpacing: 120, lineHeight: 1.05, opacity: 1 },
+  { id: 'prompt-harness-small-label', name: 'Small Technical Label', preview: 'SECTION', text: 'SECTION 01', fontFamily: 'Space Mono, IBM Plex Mono, Menlo, monospace', fontSize: 12, fontWeight: 800, fill: '#38F08C', textAlign: 'left', charSpacing: 160, lineHeight: 1, opacity: 1 },
+  { id: 'prompt-harness-diagram-text', name: 'Diagram Text', preview: 'NODE', text: 'PROCESS NODE', fontFamily: 'Space Mono, IBM Plex Mono, Menlo, monospace', fontSize: 15, fontWeight: 800, fill: '#F4F7F5', textAlign: 'center', charSpacing: 90, lineHeight: 1.1, opacity: 1 },
+  { id: 'prompt-harness-body-caption', name: 'Body Caption', preview: 'caption', text: 'small technical annotation', fontFamily: 'Space Mono, IBM Plex Mono, Menlo, monospace', fontSize: 12, fontWeight: 500, fill: '#8D9A96', textAlign: 'left', charSpacing: 40, lineHeight: 1.25, opacity: 0.9 },
+  { id: 'prompt-harness-footer-heading', name: 'Footer Heading', preview: 'SOFTWARE', text: 'SOFTWARE HARNESS > ONE PERFECT PROMPT', fontFamily: 'Space Mono, IBM Plex Mono, Menlo, monospace', fontSize: 25, fontWeight: 800, fill: '#F4F7F5', textAlign: 'center', charSpacing: 120, lineHeight: 1, opacity: 1 },
+  { id: 'technical-hero-title', name: 'Technical Hero Title', preview: 'SYSTEM', text: 'SYSTEM WORKFLOW', fontFamily: 'Space Mono, IBM Plex Mono, Menlo, monospace', fontSize: 64, fontWeight: 800, fill: '#F4F7F5', textAlign: 'left', charSpacing: 180, lineHeight: 0.95, opacity: 1 },
+  { id: 'technical-wide-title', name: 'Wide Letter Spacing Heading', preview: 'TECH MAP', text: 'TECHNICAL MAP', fontFamily: 'Space Mono, IBM Plex Mono, Menlo, monospace', fontSize: 34, fontWeight: 800, fill: '#F4F7F5', textAlign: 'left', charSpacing: 260, lineHeight: 1, opacity: 1 },
+  { id: 'technical-section-number', name: 'Section Number', preview: '01', text: '01', fontFamily: 'Space Mono, IBM Plex Mono, Menlo, monospace', fontSize: 44, fontWeight: 800, fill: '#38F08C', textAlign: 'center', charSpacing: 40, lineHeight: 1, opacity: 1 },
+  { id: 'technical-section-heading', name: 'Section Heading', preview: 'SECTION', text: 'SECTION HEADING', fontFamily: 'Space Mono, IBM Plex Mono, Menlo, monospace', fontSize: 24, fontWeight: 800, fill: '#F4F7F5', textAlign: 'left', charSpacing: 140, lineHeight: 1.05, opacity: 1 },
+  { id: 'technical-mono-subtitle', name: 'Mono Subtitle', preview: 'input layer', text: 'Input orchestration layer', fontFamily: 'Space Mono, IBM Plex Mono, Menlo, monospace', fontSize: 20, fontWeight: 500, fill: '#8D9A96', textAlign: 'left', charSpacing: 20, lineHeight: 1.2, opacity: 1 },
+  { id: 'technical-body', name: 'Technical Body', preview: 'Body', text: 'Readable technical explanation for a dark infographic card.', fontFamily: 'Space Mono, IBM Plex Mono, Menlo, monospace', fontSize: 18, fontWeight: 400, fill: '#DDE7E2', textAlign: 'left', charSpacing: 0, lineHeight: 1.32, opacity: 0.92 },
+  { id: 'technical-small-label', name: 'Technical Label', preview: 'LABEL', text: 'STATUS LABEL', fontFamily: 'Space Mono, IBM Plex Mono, Menlo, monospace', fontSize: 12, fontWeight: 800, fill: '#8D9A96', textAlign: 'left', charSpacing: 220, lineHeight: 1, opacity: 1 },
+  { id: 'technical-accent-text', name: 'Accent Text', preview: 'ACTIVE', text: 'ACTIVE SIGNAL', fontFamily: 'Space Mono, IBM Plex Mono, Menlo, monospace', fontSize: 16, fontWeight: 800, fill: '#38F08C', textAlign: 'left', charSpacing: 120, lineHeight: 1, opacity: 1 },
+  { id: 'technical-caption', name: 'Caption', preview: 'note 001', text: 'system note 001', fontFamily: 'Space Mono, IBM Plex Mono, Menlo, monospace', fontSize: 13, fontWeight: 500, fill: '#75827E', textAlign: 'left', charSpacing: 20, lineHeight: 1.15, opacity: 0.86 },
+  { id: 'technical-code-terminal', name: 'Code/Terminal Text', preview: '$ run', text: '$ run workflow --trace', fontFamily: 'Space Mono, IBM Plex Mono, Menlo, monospace', fontSize: 16, fontWeight: 500, fill: '#B8F7D0', textAlign: 'left', charSpacing: 10, lineHeight: 1.35, opacity: 1 },
+  { id: 'technical-diagram-node', name: 'Diagram Text', preview: 'NODE', text: 'PROCESS NODE', fontFamily: 'Space Mono, IBM Plex Mono, Menlo, monospace', fontSize: 15, fontWeight: 800, fill: '#F4F7F5', textAlign: 'center', charSpacing: 100, lineHeight: 1.1, opacity: 1 },
+  { id: 'technical-status-label', name: 'Status Label', preview: 'ONLINE', text: 'ONLINE', fontFamily: 'Space Mono, IBM Plex Mono, Menlo, monospace', fontSize: 12, fontWeight: 800, fill: '#38F08C', textAlign: 'center', charSpacing: 160, lineHeight: 1, opacity: 1 },
 ];

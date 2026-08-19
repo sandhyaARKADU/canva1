@@ -11,7 +11,9 @@ import {
 } from 'lucide-react';
 import { useEditorStore } from '../../../store/useEditorStore';
 import { getPosterTrack } from '../../../types/timeline';
+import type { TimelineAudioClip, TimelineFps, TimelineProject } from '../../../types/timeline';
 import type {
+  VideoExportAudioFile,
   VideoExportFormat,
   VideoExportQuality,
 } from '../../../types/videoExport';
@@ -29,6 +31,7 @@ import {
   PosterSceneRenderer,
 } from '../../../utils/sceneTimelineRenderer';
 import { frameTimestampMs } from '../../../utils/animationEvaluator';
+import { SUPPORTED_VIDEO_FPS, VIDEO_COMPOSITION } from '../../../config/design';
 
 interface VideoExportDialogProps {
   isOpen: boolean;
@@ -42,6 +45,61 @@ const qualityBitrate = {
   high: 10,
 } satisfies Record<VideoExportQuality, number>;
 
+const AUDIO_TRACK_LABELS = {
+  bgmusic: 'Background Music',
+  voiceover: 'Voice-over',
+  sfx: 'Sound Effects',
+} satisfies Record<TimelineAudioClip['trackType'], string>;
+
+const audioFileExtension = (clip: TimelineAudioClip, blob: Blob) => {
+  const nameExtension = clip.name.match(/\.(aac|m4a|mp3|ogg|wav|webm)$/i)?.[0].toLowerCase();
+  if (nameExtension) return nameExtension;
+  if (blob.type.includes('mpeg')) return '.mp3';
+  if (blob.type.includes('mp4')) return '.m4a';
+  if (blob.type.includes('aac')) return '.aac';
+  if (blob.type.includes('ogg')) return '.ogg';
+  if (blob.type.includes('wav')) return '.wav';
+  if (blob.type.includes('webm')) return '.webm';
+  return '.audio';
+};
+
+const activeAudioClipsForExport = (timeline: TimelineProject) => (
+  (timeline.audioClips || []).filter((clip) => !clip.muted && Boolean(clip.assetUrl))
+);
+
+const audioSummaryForTimeline = (timeline: TimelineProject) => {
+  const labels = Array.from(new Set(
+    activeAudioClipsForExport(timeline).map((clip) => AUDIO_TRACK_LABELS[clip.trackType]),
+  ));
+  return labels.length ? labels.join(' + ') : 'None';
+};
+
+const prepareTimelineForExport = async (
+  timeline: TimelineProject,
+): Promise<{ timeline: TimelineProject; audioFiles: VideoExportAudioFile[] }> => {
+  const exportTimeline = JSON.parse(JSON.stringify(timeline)) as TimelineProject;
+  const audioFiles: VideoExportAudioFile[] = [];
+
+  for (const clip of exportTimeline.audioClips || []) {
+    if (clip.muted || !clip.assetUrl) continue;
+    if (!clip.assetUrl.startsWith('data:') && !clip.assetUrl.startsWith('blob:')) continue;
+
+    const response = await fetch(clip.assetUrl);
+    if (!response.ok) {
+      throw new Error(`${AUDIO_TRACK_LABELS[clip.trackType]} source is unavailable for export.`);
+    }
+    const blob = await response.blob();
+    if (!blob.size) {
+      throw new Error(`${AUDIO_TRACK_LABELS[clip.trackType]} source is empty.`);
+    }
+    const fileName = `audio-${clip.id}${audioFileExtension(clip, blob)}`;
+    audioFiles.push({ clipId: clip.id, fileName, blob });
+    clip.assetUrl = `uploaded-audio://${clip.id}`;
+  }
+
+  return { timeline: exportTimeline, audioFiles };
+};
+
 export const VideoExportDialog: React.FC<VideoExportDialogProps> = ({
   isOpen,
   initialFormat,
@@ -51,9 +109,9 @@ export const VideoExportDialog: React.FC<VideoExportDialogProps> = ({
   const setTimelineRecording = store.setTimelineRecording;
   const clips = getPosterTrack(store.timelineProject).clips.filter((clip) => clip.visible);
   const [format, setFormat] = useState<VideoExportFormat>(initialFormat);
-  const [width, setWidth] = useState(store.canvasWidth);
-  const [height, setHeight] = useState(store.canvasHeight);
-  const [fps, setFps] = useState<24 | 30 | 60>(store.timelineProject.fps);
+  const width = VIDEO_COMPOSITION.width;
+  const height = VIDEO_COMPOSITION.height;
+  const fps = store.timelineProject.fps;
   const [quality, setQuality] = useState<VideoExportQuality>('high');
   const [status, setStatus] = useState<VideoRenderStatus | null>(null);
   const [error, setError] = useState('');
@@ -70,6 +128,13 @@ export const VideoExportDialog: React.FC<VideoExportDialogProps> = ({
   const estimatedMb = useMemo(() => (
     Math.max((store.timelineProject.durationMs / 1000) * qualityBitrate[quality] / 8, 0)
   ), [quality, store.timelineProject.durationMs]);
+  const estimatedFrames = useMemo(() => (
+    Math.max(Math.ceil((store.timelineProject.durationMs / 1000) * fps), store.timelineProject.durationMs > 0 ? 1 : 0)
+  ), [fps, store.timelineProject.durationMs]);
+  const audioSummary = useMemo(
+    () => audioSummaryForTimeline(store.timelineProject),
+    [store.timelineProject],
+  );
 
   const poll = async (jobId: string) => {
     try {
@@ -109,7 +174,7 @@ export const VideoExportDialog: React.FC<VideoExportDialogProps> = ({
         job_id: '',
         status: 'queued',
         progress: 1,
-        stage: 'Saving all poster pages…',
+        stage: 'Preparing poster pages',
         total_frames: 0,
         rendered_frames: 0,
       });
@@ -127,10 +192,25 @@ export const VideoExportDialog: React.FC<VideoExportDialogProps> = ({
       if (missingPages.length > 0) {
         throw new Error(`Cannot export: ${missingPages[0]}.`);
       }
+      setStatus((current) => current ? {
+        ...current,
+        progress: 2,
+        stage: 'Preparing audio tracks',
+      } : current);
+      const activeAudioClips = activeAudioClipsForExport(timeline);
+      const {
+        timeline: exportTimeline,
+        audioFiles,
+      } = await prepareTimelineForExport(timeline);
       const totalFrames = Math.max(
-        Math.ceil((store.timelineProject.durationMs / 1000) * fps),
+        Math.ceil((exportTimeline.durationMs / 1000) * fps),
         1,
       );
+      console.info('[EXPORT FPS]', {
+        fps,
+        durationMs: exportTimeline.durationMs,
+        totalFrames,
+      });
       const response = await createVideoRenderJob({
         projectId: store.projectId,
         settings: {
@@ -139,17 +219,18 @@ export const VideoExportDialog: React.FC<VideoExportDialogProps> = ({
           height,
           fps,
           quality,
-          includeAudio: Boolean(timeline.audioClips?.length || timeline.audio),
+          includeAudio: activeAudioClips.length > 0,
         },
-        timeline,
+        timeline: exportTimeline,
         totalFrames,
+        audioFiles,
       });
       renderJobId = response.job_id;
       setStatus({
         job_id: response.job_id,
         status: response.status,
         progress: 1,
-        stage: 'Loading project',
+        stage: 'Preparing poster pages',
         total_frames: totalFrames,
         rendered_frames: 0,
       });
@@ -158,14 +239,14 @@ export const VideoExportDialog: React.FC<VideoExportDialogProps> = ({
       const outputCanvas = document.createElement('canvas');
       renderer = new PosterSceneRenderer(outputCanvas, () => ({
         pages,
-        timeline,
+        timeline: exportTimeline,
         width,
         height,
       }));
       setStatus((current) => current ? {
         ...current,
         progress: 3,
-        stage: 'Loading fonts and assets',
+        stage: 'Rendering poster pages',
       } : current);
       await renderer.prepare();
 
@@ -176,7 +257,7 @@ export const VideoExportDialog: React.FC<VideoExportDialogProps> = ({
         if (abortController.signal.aborted) throw new DOMException('Video export cancelled.', 'AbortError');
         const timestampMs = Math.min(
           frameTimestampMs(frameIndex, fps),
-          Math.max(timeline.durationMs - 0.001, 0),
+          Math.max(exportTimeline.durationMs - 0.001, 0),
         );
         renderer.render(timestampMs);
         frameBatch.push(await canvasToPngBlob(outputCanvas));
@@ -197,7 +278,7 @@ export const VideoExportDialog: React.FC<VideoExportDialogProps> = ({
       setStatus((current) => current ? {
         ...current,
         progress: Math.max(current.progress, 70),
-        stage: 'Applying transitions',
+        stage: activeAudioClips.length > 0 ? 'Preparing background music' : 'Finalizing MP4',
       } : current);
       const encodingStatus = await finalizeVideoRenderJob(response.job_id);
       setStatus(encodingStatus);
@@ -271,25 +352,23 @@ export const VideoExportDialog: React.FC<VideoExportDialogProps> = ({
           <label className="text-[10px] text-zinc-500">Resolution
             <select
               value={`${width}x${height}`}
-              onChange={(event) => {
-                const [nextWidth, nextHeight] = event.target.value.split('x').map(Number);
-                setWidth(nextWidth);
-                setHeight(nextHeight);
-              }}
+              onChange={() => undefined}
               disabled={busy}
               className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-zinc-200"
             >
-              <option value={`${store.canvasWidth}x${store.canvasHeight}`}>Original · {store.canvasWidth} × {store.canvasHeight}</option>
-              <option value="1080x1350">Portrait · 1080 × 1350</option>
-              <option value="1080x1080">Square · 1080 × 1080</option>
-              <option value="1920x1080">Landscape · 1920 × 1080</option>
+              <option value={`${VIDEO_COMPOSITION.width}x${VIDEO_COMPOSITION.height}`}>Fixed 4:5 · {VIDEO_COMPOSITION.width} × {VIDEO_COMPOSITION.height}</option>
             </select>
           </label>
           <label className="text-[10px] text-zinc-500">Frame rate
-            <select value={fps} onChange={(event) => setFps(Number(event.target.value) as 24 | 30 | 60)} disabled={busy} className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-zinc-200">
-              <option value={24}>24 FPS</option>
-              <option value={30}>30 FPS</option>
-              <option value={60}>60 FPS</option>
+            <select
+              value={fps}
+              onChange={(event) => store.setTimelineFps(Number(event.target.value) as TimelineFps)}
+              disabled={busy}
+              className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-zinc-200"
+            >
+              {SUPPORTED_VIDEO_FPS.map((optionFps) => (
+                <option key={optionFps} value={optionFps}>{optionFps} FPS</option>
+              ))}
             </select>
           </label>
           <label className="text-[10px] text-zinc-500">Quality
@@ -303,7 +382,11 @@ export const VideoExportDialog: React.FC<VideoExportDialogProps> = ({
 
         <div className="mx-5 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3 text-[10px] text-zinc-500">
           <div className="flex justify-between"><span>Estimated output</span><span className="text-zinc-300">≈ {estimatedMb.toFixed(1)} MB</span></div>
-          <div className="mt-1 flex justify-between"><span>Audio</span><span>Unavailable · video exports without audio</span></div>
+          <div className="mt-1 flex justify-between"><span>Timeline frames</span><span className="font-mono text-zinc-300">{estimatedFrames} @ {fps} FPS</span></div>
+          <div className="mt-1 flex justify-between">
+            <span>Audio</span>
+            <span className={audioSummary === 'None' ? 'text-zinc-500' : 'text-emerald-300'}>{audioSummary}</span>
+          </div>
         </div>
 
         {(busy || status) && (

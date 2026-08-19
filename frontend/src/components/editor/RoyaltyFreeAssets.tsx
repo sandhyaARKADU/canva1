@@ -7,7 +7,6 @@ import {
   Grid3x3,
   LayoutGrid,
   Heart,
-  Layers,
   Palette,
 } from 'lucide-react';
 import { useEditorStore } from '../../store/useEditorStore';
@@ -525,7 +524,7 @@ type GradientAssetPayload = {
 };
 
 export const RoyaltyFreeAssets: React.FC = () => {
-  const { canvas, saveHistory } = useEditorStore();
+  const { canvas, saveHistory, setSelectedObject } = useEditorStore();
   const [activeTab, setActiveTab] = useState<AssetTab>('images');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -754,6 +753,17 @@ export const RoyaltyFreeAssets: React.FC = () => {
     setAssetError('');
   };
 
+  const handleSearchChange = (value: string) => {
+    setSearchQuery(value);
+    setImagePage(1);
+    setImageTotal(0);
+    setAssetError('');
+    if (value.trim()) {
+      setSelectedCategory(null);
+      setAssetCollection('all');
+    }
+  };
+
   const rememberRecentAsset = (asset: ImageResult) => {
     setRecentAssets((current) => {
       const next = [asset, ...current.filter((item) => item.id !== asset.id)].slice(0, RECENT_ASSET_LIMIT);
@@ -898,6 +908,7 @@ export const RoyaltyFreeAssets: React.FC = () => {
       img.setCoords();
       targetCanvas.bringToFront(img);
       targetCanvas.setActiveObject(img);
+      setSelectedObject(img);
       targetCanvas.renderAll();
       targetCanvas.requestRenderAll();
       if (metadata && 'src' in metadata && 'thumbnail' in metadata) {
@@ -1031,7 +1042,6 @@ export const RoyaltyFreeAssets: React.FC = () => {
       <div className="flex border-b border-zinc-800 shrink-0">
         {[
           { id: 'images' as AssetTab, label: 'Images', icon: Image },
-          { id: 'elements' as AssetTab, label: 'Elements', icon: Layers },
           { id: 'gradients' as AssetTab, label: 'Gradients', icon: Palette },
         ].map((tab) => {
           const Icon = tab.icon;
@@ -1070,7 +1080,7 @@ export const RoyaltyFreeAssets: React.FC = () => {
                 type="text"
                 placeholder={selectedImageCategory ? `Search ${selectedImageCategory.name} assets...` : 'Search assets, photos, graphics, backgrounds, or topics'}
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => handleSearchChange(e.target.value)}
                 className="w-full bg-zinc-900 border border-zinc-800 focus:border-violet-500 rounded-lg py-2.5 pl-10 pr-4 text-sm text-zinc-200 outline-none transition-colors placeholder:text-zinc-600"
               />
             </div>

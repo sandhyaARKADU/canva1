@@ -12,11 +12,11 @@ from fastapi import HTTPException
 from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy.orm import Session
 
-from config import settings
+from config import resolve_runtime_path, settings
 from database import Project, UploadedAsset, User
 
 
-MEDIA_ROOT = Path(__file__).resolve().parent.parent / "media" / "uploads"
+MEDIA_ROOT = resolve_runtime_path(settings.MEDIA_ROOT) / "uploads"
 ALLOWED_FORMATS = {
     "PNG": ("image/png", ".png"),
     "JPEG": ("image/jpeg", ".jpg"),
@@ -161,7 +161,13 @@ def persist_uploaded_image(
             height=prepared.height,
             thumbnail_storage_path=str(thumbnail_path),
             thumbnail_url=f"{relative}/thumbnail.png",
-            metadata_json={**prepared.metadata, **(extra_metadata or {})},
+            metadata_json={
+                **prepared.metadata,
+                "originalFilename": original_filename or filename,
+                "storedFilename": filename,
+                "storageKey": f"uploads/{user.id}/{asset_id}/{filename}",
+                **(extra_metadata or {}),
+            },
             asset_role=asset_role,
         )
         db.add(record)

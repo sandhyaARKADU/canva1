@@ -20,6 +20,8 @@ import { preloadFontsFromCanvasJson } from './fontLoader';
 import { DEFAULT_ASSET_FALLBACK_SVG, preloadImageAsset, resolveAssetUrl } from './assetUrlResolver';
 import type { SceneTimelineRenderer } from './masterTimelineManager';
 import { renderConnectorAnimationsAtTime } from './connectorAnimationManager';
+import { VIDEO_COMPOSITION } from '../config/design';
+import { calculatePosterVideoSceneLayout, validatePosterScene } from './posterVideoComposition';
 
 const editorOnly = (object: fabric.Object) => (
   object.get('editorOnly' as keyof fabric.Object) === true
@@ -48,15 +50,18 @@ export const isRenderableImageElement = (object: fabric.Object): boolean => {
   return true;
 };
 
-const parseDimensions = (data: string, fallbackWidth: number, fallbackHeight: number) => {
+const parseDimensions = (data: string) => {
   try {
-    const parsed = JSON.parse(data);
+    JSON.parse(data);
     return {
-      width: Math.max(Number(parsed.width) || fallbackWidth, 1),
-      height: Math.max(Number(parsed.height) || fallbackHeight, 1),
+      width: VIDEO_COMPOSITION.width,
+      height: VIDEO_COMPOSITION.height,
     };
   } catch {
-    return { width: fallbackWidth, height: fallbackHeight };
+    return {
+      width: VIDEO_COMPOSITION.width,
+      height: VIDEO_COMPOSITION.height,
+    };
   }
 };
 
@@ -75,6 +80,127 @@ type BaseObjectState = {
 const objectValue = (object: fabric.Object, key: string) => (
   object.get(key as keyof fabric.Object) as unknown
 );
+
+const applyBackgroundFilters = (image: fabric.Image) => {
+  const filters = [];
+  if (fabric.Image.filters?.Blur) {
+    filters.push(new fabric.Image.filters.Blur({ blur: 0.28 }));
+  }
+  if (fabric.Image.filters?.Brightness) {
+    filters.push(new fabric.Image.filters.Brightness({ brightness: -0.15 }) as never);
+  }
+  image.filters = filters;
+  if (filters.length) image.applyFilters();
+};
+
+const normalizePosterVideoObjects = (canvas: fabric.StaticCanvas) => {
+  const objects = canvas.getObjects();
+  objects
+    .filter((object) => (
+      object.type === 'image'
+      && objectValue(object, 'isSmartFitForeground') === true
+      && objectValue(object, 'isSmartFitBackground') !== true
+    ))
+    .forEach((object) => {
+      const foreground = object as fabric.Image;
+      const element = foreground.getElement() as HTMLImageElement | undefined;
+      if (!element?.naturalWidth || !element.naturalHeight) return;
+      const source = String(objectValue(foreground, 'sourceUrl') || objectValue(foreground, 'assetUrl') || '');
+      const scene = calculatePosterVideoSceneLayout(source, element.naturalWidth, element.naturalHeight, {
+        id: String(objectValue(foreground, 'smartFitPairId') || objectValue(foreground, 'id') || ''),
+        backgroundMode: 'blurred-duplicate',
+      });
+      validatePosterScene(scene);
+      foreground.set({
+        width: scene.foreground.naturalWidth,
+        height: scene.foreground.naturalHeight,
+        originX: 'left',
+        originY: 'top',
+        left: scene.foreground.left,
+        top: scene.foreground.top,
+        scaleX: scene.foreground.scale,
+        scaleY: scene.foreground.scale,
+        angle: 0,
+        skewX: 0,
+        skewY: 0,
+        flipX: false,
+        flipY: false,
+        cropX: 0,
+        cropY: 0,
+        posterFitData: {
+          scene,
+          designWidth: scene.composition.width,
+          designHeight: scene.composition.height,
+          originalWidth: scene.foreground.naturalWidth,
+          originalHeight: scene.foreground.naturalHeight,
+          originalAspectRatio: scene.foreground.naturalWidth / scene.foreground.naturalHeight,
+          fitMode: 'contain',
+          image: {
+            src: source,
+            left: scene.foreground.left,
+            top: scene.foreground.top,
+            scaleX: scene.foreground.scale,
+            scaleY: scene.foreground.scale,
+            angle: 0,
+          },
+          background: {
+            mode: 'blurred-duplicate',
+            blur: scene.background.blur,
+            brightness: scene.background.brightness,
+          },
+        },
+      } as Record<string, unknown>);
+
+      const pairId = String(objectValue(foreground, 'smartFitPairId') || objectValue(foreground, 'id') || scene.id);
+      let background = objects.find((candidate) => (
+        objectValue(candidate, 'smartFitPairId') === pairId
+        && objectValue(candidate, 'isSmartFitBackground') === true
+        && candidate.type === 'image'
+      )) as fabric.Image | undefined;
+
+      if (!background) {
+        background = new fabric.Image(element, {
+          crossOrigin: 'anonymous',
+          isSmartFitBackground: true,
+          smartFitPairId: pairId,
+          excludeFromLayers: true,
+          excludeFromExport: false,
+          locked: true,
+          selectable: false,
+          evented: false,
+        } as Record<string, unknown>);
+        canvas.add(background);
+        canvas.sendToBack(background);
+      }
+
+      background.setElement(element);
+      background.set({
+        originX: 'center',
+        originY: 'center',
+        left: scene.background.left,
+        top: scene.background.top,
+        scaleX: scene.background.scale,
+        scaleY: scene.background.scale,
+        angle: 0,
+        skewX: 0,
+        skewY: 0,
+        flipX: false,
+        flipY: false,
+        cropX: 0,
+        cropY: 0,
+        visible: true,
+        selectable: false,
+        evented: false,
+        locked: true,
+        excludeFromLayers: true,
+        excludeFromExport: false,
+      } as Record<string, unknown>);
+      applyBackgroundFilters(background);
+      canvas.sendToBack(background);
+      foreground.setCoords();
+      background.setCoords();
+    });
+};
 
 class PreparedFabricScene {
   readonly canvas: fabric.StaticCanvas;
@@ -207,15 +333,11 @@ class PreparedFabricScene {
   }
 }
 
-const prepareFabricScene = async (
-  page: EditorPage,
-  fallbackWidth: number,
-  fallbackHeight: number,
-) => {
+const prepareFabricScene = async (page: EditorPage) => {
   if (!page.data) throw new Error(`${page.name} has no saved canvas data.`);
   await preloadFontsFromCanvasJson(page.data);
   if ('fonts' in document) await document.fonts.ready;
-  const dimensions = parseDimensions(page.data, fallbackWidth, fallbackHeight);
+  const dimensions = parseDimensions(page.data);
   const element = document.createElement('canvas');
   const staticCanvas = new fabric.StaticCanvas(element, {
     width: dimensions.width,
@@ -264,6 +386,8 @@ const prepareFabricScene = async (
     })
   );
 
+  normalizePosterVideoObjects(staticCanvas);
+
   staticCanvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
   staticCanvas.renderAll();
 
@@ -281,13 +405,9 @@ const prepareFabricScene = async (
   return new PreparedFabricScene(staticCanvas, element);
 };
 
-export const renderPageToCanvas = async (
-  page: EditorPage,
-  fallbackWidth: number,
-  fallbackHeight: number,
-) => {
-  const scene = await prepareFabricScene(page, fallbackWidth, fallbackHeight);
-  const dimensions = parseDimensions(page.data, fallbackWidth, fallbackHeight);
+export const renderPageToCanvas = async (page: EditorPage) => {
+  const scene = await prepareFabricScene(page);
+  const dimensions = parseDimensions(page.data);
   const output = document.createElement('canvas');
   output.width = dimensions.width;
   output.height = dimensions.height;
@@ -350,12 +470,12 @@ export class PosterSceneRenderer implements SceneTimelineRenderer {
   }
 
   async prepare() {
-    const { pages, timeline, width, height } = this.getState();
+    const { pages, timeline } = this.getState();
     const pageIds = new Set(getPosterTrack(timeline).clips.map((clip) => clip.pageId));
     await Promise.all(pages.filter((page) => pageIds.has(page.id)).map(async (page) => {
       const cacheKey = `${page.id}:${page.updatedAt || page.data.length}`;
       if (this.cache.has(cacheKey)) return;
-      const scene = await prepareFabricScene(page, width, height);
+      const scene = await prepareFabricScene(page);
       Array.from(this.cache.entries())
         .filter(([key]) => key.startsWith(`${page.id}:`))
         .forEach(([key, staleScene]) => {

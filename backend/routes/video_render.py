@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import uuid
 from math import ceil
@@ -18,6 +19,8 @@ from schemas.video_render import VideoRenderCreated, VideoRenderStatusResponse
 from services.video_render_service import (
     FORMAT_CODECS,
     RENDER_ROOT,
+    VIDEO_COMPOSITION_HEIGHT,
+    VIDEO_COMPOSITION_WIDTH,
     VideoRenderValidationError,
     cleanup_expired_render_files,
     parse_timeline_json,
@@ -31,7 +34,19 @@ from services.video_render_service import (
 router = APIRouter(prefix="/api/video", tags=["video"])
 MAX_SCENE_BYTES = 25 * 1024 * 1024
 MAX_FRAME_BYTES = 12 * 1024 * 1024
+MAX_AUDIO_BYTES = 50 * 1024 * 1024
+MAX_EXPORT_AUDIO_FILES = 24
 MAX_RENDER_FRAMES = 36_000
+AUDIO_EXTENSIONS_BY_TYPE = {
+    "audio/aac": ".aac",
+    "audio/mp4": ".m4a",
+    "audio/mpeg": ".mp3",
+    "audio/ogg": ".ogg",
+    "audio/wav": ".wav",
+    "audio/webm": ".webm",
+    "audio/x-wav": ".wav",
+    "application/octet-stream": ".audio",
+}
 
 
 def _owned_project(db: Session, user: User, project_id: str) -> Project:
@@ -103,8 +118,11 @@ async def _persist_scene(upload: UploadFile, destination: Path) -> None:
             if image.format != "PNG":
                 raise HTTPException(status_code=415, detail="Every render scene must be a valid PNG image.")
             width, height = image.size
-            if width < 1 or height < 1 or width > 8192 or height > 8192:
-                raise HTTPException(status_code=400, detail="A render scene has unsupported dimensions.")
+            if image.size != (VIDEO_COMPOSITION_WIDTH, VIDEO_COMPOSITION_HEIGHT):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Every render scene must already be composed at 1080 × 1350.",
+                )
     except (UnidentifiedImageError, OSError) as error:
         raise HTTPException(status_code=400, detail="A render scene is not a valid image.") from error
 
@@ -138,6 +156,24 @@ async def _persist_frame(
         raise HTTPException(status_code=400, detail="An animation frame is not a valid image.") from error
 
 
+def _safe_audio_extension(upload: UploadFile) -> str:
+    suffix = Path(upload.filename or "").suffix.lower()
+    if suffix in {".aac", ".m4a", ".mp3", ".ogg", ".wav", ".webm"}:
+        return suffix
+    return AUDIO_EXTENSIONS_BY_TYPE.get(upload.content_type or "", ".audio")
+
+
+async def _persist_audio(upload: UploadFile, destination: Path) -> None:
+    if upload.content_type not in AUDIO_EXTENSIONS_BY_TYPE:
+        raise HTTPException(status_code=415, detail="Every export audio file must be MP3, WAV, M4A, AAC, OGG, or WebM audio.")
+    payload = await upload.read(MAX_AUDIO_BYTES + 1)
+    if not payload:
+        raise HTTPException(status_code=400, detail="An export audio file is empty.")
+    if len(payload) > MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail="An export audio file exceeds the 50 MB limit.")
+    destination.write_bytes(payload)
+
+
 def _visible_clip_count(timeline: dict) -> int:
     tracks = timeline.get("tracks") if isinstance(timeline.get("tracks"), list) else []
     poster_track = next((track for track in tracks if track.get("type") == "poster"), {})
@@ -156,7 +192,7 @@ def _reject_duplicate_job(db: Session, user: User, project: Project) -> None:
 
 
 @router.post("/render/frames", response_model=VideoRenderCreated, status_code=202)
-def create_frame_video_render(
+async def create_frame_video_render(
     project_id: Annotated[str, Form()],
     format: Annotated[str, Form()],
     width: Annotated[int, Form()],
@@ -166,12 +202,16 @@ def create_frame_video_render(
     timeline_json: Annotated[str, Form()],
     total_frames: Annotated[int, Form()],
     include_audio: Annotated[bool, Form()] = False,
+    audio_file_ids: Annotated[str, Form()] = "[]",
+    audio_files: Annotated[list[UploadFile] | None, File()] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     project = _owned_project(db, current_user, project_id)
     if not _ffmpeg_available():
       raise HTTPException(status_code=503, detail="Video rendering is unavailable because FFmpeg is not configured.")
+    width = VIDEO_COMPOSITION_WIDTH
+    height = VIDEO_COMPOSITION_HEIGHT
     try:
         timeline = parse_timeline_json(timeline_json)
         _, duration_ms = validate_render_request(
@@ -191,9 +231,39 @@ def create_frame_video_render(
     if total_frames > MAX_RENDER_FRAMES:
         raise HTTPException(status_code=400, detail=f"Video export supports up to {MAX_RENDER_FRAMES} frames.")
     _reject_duplicate_job(db, current_user, project)
+    print(f"[VIDEO EXPORT FPS] project_id={project.id} fps={fps} duration_ms={duration_ms} total_frames={total_frames}")
     cleanup_expired_render_files()
     job_id = f"video_{uuid.uuid4().hex}"
-    (RENDER_ROOT / job_id).mkdir(parents=True, exist_ok=False)
+    job_directory = RENDER_ROOT / job_id
+    job_directory.mkdir(parents=True, exist_ok=False)
+    try:
+        pending_audio_files = list(audio_files or [])
+        audio_ids = json.loads(audio_file_ids or "[]")
+        if pending_audio_files:
+            if not isinstance(audio_ids, list) or len(audio_ids) != len(pending_audio_files):
+                raise HTTPException(status_code=400, detail="Audio file metadata does not match uploaded audio files.")
+            audio_clips = timeline.get("audioClips") if isinstance(timeline.get("audioClips"), list) else []
+            upload_map: dict[str, Path] = {}
+            for index, (clip_id, upload) in enumerate(zip(audio_ids, pending_audio_files)):
+                safe_clip_id = str(clip_id or "").strip()
+                if not safe_clip_id:
+                    raise HTTPException(status_code=400, detail="Audio file metadata contains an empty clip id.")
+                destination = job_directory / f"audio-{index:03d}-{uuid.uuid4().hex}{_safe_audio_extension(upload)}"
+                await _persist_audio(upload, destination)
+                upload_map[safe_clip_id] = destination
+            for clip in audio_clips:
+                if isinstance(clip, dict) and str(clip.get("id") or "") in upload_map:
+                    clip["assetUrl"] = str(upload_map[str(clip.get("id") or "")])
+            if isinstance(timeline.get("audio"), dict):
+                clip = timeline["audio"]
+                if str(clip.get("id") or "") in upload_map:
+                    clip["assetUrl"] = str(upload_map[str(clip.get("id") or "")])
+    except HTTPException:
+        shutil.rmtree(job_directory, ignore_errors=True)
+        raise
+    except json.JSONDecodeError as error:
+        shutil.rmtree(job_directory, ignore_errors=True)
+        raise HTTPException(status_code=400, detail="Audio file metadata is invalid.") from error
     job = VideoRenderJob(
         id=job_id,
         user_id=current_user.id,
@@ -303,13 +373,16 @@ async def create_video_render(
     project = _owned_project(db, current_user, project_id)
     if not _ffmpeg_available():
       raise HTTPException(status_code=503, detail="Video rendering is unavailable because FFmpeg is not configured.")
+    width = VIDEO_COMPOSITION_WIDTH
+    height = VIDEO_COMPOSITION_HEIGHT
     try:
         timeline = parse_timeline_json(timeline_json)
-        validate_render_request(timeline, len(scenes), format, width, height, fps, quality)
+        _, duration_ms = validate_render_request(timeline, len(scenes), format, width, height, fps, quality)
     except VideoRenderValidationError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
     _reject_duplicate_job(db, current_user, project)
+    print(f"[VIDEO EXPORT FPS] project_id={project.id} fps={fps} duration_ms={duration_ms} scenes={len(scenes)}")
 
     cleanup_expired_render_files()
     job_id = f"video_{uuid.uuid4().hex}"

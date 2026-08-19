@@ -1,3 +1,4 @@
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -5,6 +6,7 @@ from services.video_render_service import (
     VideoRenderValidationError,
     build_ffmpeg_command,
     build_frame_sequence_command,
+    cleanup_render_inputs,
     validate_render_request,
 )
 
@@ -144,6 +146,29 @@ class VideoRenderServiceTests(unittest.TestCase):
         self.assertIn("libx264", command)
         self.assertIn("yuv420p", command)
         self.assertEqual(duration_ms, 12000)
+
+    def test_cleanup_render_inputs_removes_frames_but_keeps_output(self):
+        with tempfile.TemporaryDirectory() as temporary_root:
+            job_directory = Path(temporary_root) / "video_job"
+            job_directory.mkdir()
+            output_path = job_directory / "final.mp4"
+            output_path.write_bytes(b"video")
+            (job_directory / "frame-000000.png").write_bytes(b"frame")
+            (job_directory / "scene-001.png").write_bytes(b"scene")
+            (job_directory / "audio-000-input.mp3").write_bytes(b"audio")
+
+            from services import video_render_service
+            original_root = video_render_service.RENDER_ROOT
+            video_render_service.RENDER_ROOT = Path(temporary_root)
+            try:
+                cleanup_render_inputs(job_directory, output_path)
+            finally:
+                video_render_service.RENDER_ROOT = original_root
+
+            self.assertTrue(output_path.exists())
+            self.assertFalse((job_directory / "frame-000000.png").exists())
+            self.assertFalse((job_directory / "scene-001.png").exists())
+            self.assertFalse((job_directory / "audio-000-input.mp3").exists())
 
     def test_frame_sequence_command_rejects_empty_sequence(self):
         with self.assertRaises(VideoRenderValidationError):

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { fabric } from 'fabric';
 import { apiFetch, getAuthToken } from '../services/apiClient';
+import { DESIGN_HEIGHT, DESIGN_WIDTH } from '../config/design';
 import { CUSTOM_FABRIC_PROPERTIES } from '../utils/editorElementFactory';
 import type { TextSelectionRange } from '../utils/textSelectionStyles';
 import { ensureFontLoaded, preloadFontsFromCanvasJson } from '../utils/fontLoader';
@@ -55,50 +56,11 @@ const resolveBlankCanvasBackground = (background?: string | null) => {
     : background as string;
 };
 
-function getCanvasDimensionsFromProjectData(projectData?: string | null) {
-  if (!projectData) return null;
-  try {
-    const parsed = JSON.parse(projectData);
-    if (Number(parsed?.width) > 0 && Number(parsed?.height) > 0) {
-      return { width: Number(parsed.width), height: Number(parsed.height) };
-    }
-    const objects = Array.isArray(parsed?.objects) ? parsed.objects : [];
-    const posterMetadata = objects.find((object: any) =>
-      object?.teckstudioObjectType === 'posterSpecMetadata' &&
-      Number(object?.posterSpecCanvasWidth) > 0 &&
-      Number(object?.posterSpecCanvasHeight) > 0
-    );
-    if (posterMetadata) {
-      return {
-        width: Number(posterMetadata.posterSpecCanvasWidth),
-        height: Number(posterMetadata.posterSpecCanvasHeight),
-      };
-    }
-    const posterBackground = objects.find((object: any) =>
-      object?.teckstudioObjectType === 'posterSpec' &&
-      object?.posterRole === 'background' &&
-      Number(object?.width) > 0 &&
-      Number(object?.height) > 0
-    );
-    if (posterBackground) {
-      return { width: Number(posterBackground.width), height: Number(posterBackground.height) };
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
 type ProjectCanvasPayload = {
   data?: string | null;
   width?: number | null;
   height?: number | null;
   background_color?: string | null;
-};
-
-const positiveDimension = (value: unknown, fallback: number) => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : fallback;
 };
 
 const DEFAULT_VIEWPORT_TRANSFORM: [number, number, number, number, number, number] = [1, 0, 0, 1, 0, 0];
@@ -154,8 +116,8 @@ function normalizeLoadedTextStyles(canvas: fabric.Canvas) {
 }
 
 function normalizeProjectCanvasJson(project: ProjectCanvasPayload) {
-  const fallbackWidth = positiveDimension(project.width, 800);
-  const fallbackHeight = positiveDimension(project.height, 800);
+  const fallbackWidth = DESIGN_WIDTH;
+  const fallbackHeight = DESIGN_HEIGHT;
   const fallbackBackground = project.background_color || DEFAULT_CANVAS_BACKGROUND;
 
   if (!project.data) {
@@ -188,9 +150,8 @@ function normalizeProjectCanvasJson(project: ProjectCanvasPayload) {
     throw new Error('Project canvas objects are invalid. The design cannot be loaded.');
   }
 
-  const dataDimensions = getCanvasDimensionsFromProjectData(project.data);
-  const width = positiveDimension(parsed.width, dataDimensions?.width || fallbackWidth);
-  const height = positiveDimension(parsed.height, dataDimensions?.height || fallbackHeight);
+  const width = DESIGN_WIDTH;
+  const height = DESIGN_HEIGHT;
   parsed.version = parsed.version || '5.3.0';
   parsed.width = width;
   parsed.height = height;
@@ -290,6 +251,36 @@ function prepareCanvasObjects(canvas: fabric.Canvas) {
     }
     if (object.selectable === undefined) object.set('selectable', true);
     if (object.evented === undefined) object.set('evented', true);
+    if (object.type === 'image') {
+      const aspectLocked = object.get('imageLockedAspectRatio' as keyof fabric.Object) !== false
+        && object.get('lockUniScaling' as keyof fabric.Object) !== false;
+      object.set({
+        hasControls: object.hasControls !== false,
+        hasBorders: true,
+        lockUniScaling: aspectLocked,
+        imageLockedAspectRatio: aspectLocked,
+        centeredRotation: true,
+        transparentCorners: false,
+        cornerStyle: 'circle',
+        cornerColor: '#8b5cf6',
+        cornerStrokeColor: '#ffffff',
+        borderColor: '#8b5cf6',
+        cornerSize: 10,
+        touchCornerSize: 28,
+        padding: 6,
+      } as Record<string, unknown>);
+      object.setControlsVisibility?.({
+        mt: !aspectLocked,
+        mb: !aspectLocked,
+        ml: !aspectLocked,
+        mr: !aspectLocked,
+        tl: true,
+        tr: true,
+        bl: true,
+        br: true,
+        mtr: true,
+      });
+    }
     object.setCoords();
   });
 }
@@ -391,8 +382,8 @@ async function applyProjectCanvas(canvas: fabric.Canvas, project: ProjectCanvasP
 }
 
 function clearCanvasToProjectSize(canvas: fabric.Canvas, project: ProjectCanvasPayload = {}) {
-  const width = positiveDimension(project.width, 800);
-  const height = positiveDimension(project.height, 800);
+  const width = DESIGN_WIDTH;
+  const height = DESIGN_HEIGHT;
   const background = project.background_color || DEFAULT_CANVAS_BACKGROUND;
   ensureCanvasViewport(canvas);
   canvas.clear();
@@ -583,9 +574,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   rulersEnabled: true,
   showGuides: true,
 
-  // Canvas dimensions defaults (1080 x 1080 Instagram Square standard)
-  canvasWidth: 1080,
-  canvasHeight: 1080,
+  // Canvas dimensions defaults (1080 x 1350 4:5 poster standard)
+  canvasWidth: DESIGN_WIDTH,
+  canvasHeight: DESIGN_HEIGHT,
   canvasBackgroundColor: DEFAULT_CANVAS_BACKGROUND,
   currentPresetId: null,
   showSafeArea: false,
@@ -597,7 +588,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   timelineProject: createDefaultTimelineProject(),
   timelinePlaybackState: 'paused',
   timelinePlaybackRate: 1,
-  timelineMuted: true,
+  timelineMuted: false,
   timelineAudioUnlocked: false,
   timelineRecording: false,
   timelineActiveVideoCount: 0,
@@ -1018,6 +1009,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const data = await response.json().catch(() => null);
 
       if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          localStorage.removeItem('teckstudio_auth_token');
+          localStorage.removeItem('teckstudio_user');
+          failLoad('Your session expired. Please sign in again to load this design.');
+          window.location.assign('/login');
+          return;
+        }
         failLoad(data?.detail || data?.error || `Unable to load this project (${response.status}).`);
         return;
       }
@@ -1610,7 +1608,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     });
   },
   setTimelineFps: (fps) => {
-    set({ timelineProject: { ...get().timelineProject, fps } });
+    const timeline = get().timelineProject;
+    set({ timelineProject: normalizeTimelineProject({ ...timeline, fps }) });
+    console.info('[FPS STATE]', {
+      fps,
+      durationMs: timeline.durationMs,
+      expectedFrames: Math.max(Math.ceil((timeline.durationMs / 1000) * fps), 1),
+    });
     get().saveHistory();
   },
   setTimelineZoom: (zoom) => set({
@@ -1743,8 +1747,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({ timelineProject: nextTimeline });
   },
 
-  setCanvasDimensions: (width, height) => {
-    set({ canvasWidth: width, canvasHeight: height });
+  setCanvasDimensions: () => {
+    const { canvas } = get();
+    if (canvas && (canvas.getWidth() !== DESIGN_WIDTH || canvas.getHeight() !== DESIGN_HEIGHT)) {
+      canvas.setDimensions({ width: DESIGN_WIDTH, height: DESIGN_HEIGHT });
+      canvas.requestRenderAll();
+    }
+    set({ canvasWidth: DESIGN_WIDTH, canvasHeight: DESIGN_HEIGHT });
   },
 
   setCanvasBackgroundColor: (color) => {
@@ -1758,27 +1767,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   setCurrentPreset: (presetId) => set({ currentPresetId: presetId }),
 
-  resizeCanvas: (width, height) => {
+  resizeCanvas: () => {
     const { canvas } = get();
     if (!canvas) return;
-    const oldW = canvas.getWidth() || 800;
-    const oldH = canvas.getHeight() || 800;
-    const scaleX = width / oldW;
-    const scaleY = height / oldH;
-
-    // Scale all objects proportionally
-    canvas.getObjects().forEach((obj) => {
-      const left = (obj.left || 0) * scaleX;
-      const top = (obj.top || 0) * scaleY;
-      obj.set({ left, top });
-      if (obj.scaleX !== undefined) obj.set({ scaleX: (obj.scaleX || 1) * scaleX });
-      if (obj.scaleY !== undefined) obj.set({ scaleY: (obj.scaleY || 1) * scaleY });
-      obj.setCoords();
-    });
-
-    canvas.setWidth(width);
-    canvas.setHeight(height);
-    set({ canvasWidth: width, canvasHeight: height });
+    canvas.setDimensions({ width: DESIGN_WIDTH, height: DESIGN_HEIGHT });
+    set({ canvasWidth: DESIGN_WIDTH, canvasHeight: DESIGN_HEIGHT });
     canvas.renderAll();
     get().saveHistory();
   },

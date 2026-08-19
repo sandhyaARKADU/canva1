@@ -58,6 +58,19 @@ const resolveProgress = (
   return rawProgress;
 };
 
+const easeConnectorProgress = (
+  progress: number,
+  easing: Required<DiagramConnectorAnimationConfig>['easing'],
+) => {
+  const value = clamp01(progress);
+  if (easing === 'ease-in') return value * value;
+  if (easing === 'ease-out') return 1 - ((1 - value) * (1 - value));
+  if (easing === 'ease-in-out') return value < 0.5
+    ? 2 * value * value
+    : 1 - (Math.pow(-2 * value + 2, 2) / 2);
+  return value;
+};
+
 const getStandaloneGeometry = (path: AnimatedPath): Geometry | null => {
   const parsedPath = path.path as unknown[] | undefined;
   if (!parsedPath || parsedPath.length === 0) return null;
@@ -99,6 +112,7 @@ export class ConnectorAnimationManager {
   private frame: number | null = null;
   private lastTimestamp = 0;
   private elapsed = 0;
+  private timelineTimeMs = 0;
   private playing = true;
   private exporting = false;
   private destroyed = false;
@@ -178,10 +192,10 @@ export class ConnectorAnimationManager {
     return true;
   }
 
-  private getTiming(animation: Required<DiagramConnectorAnimationConfig>) {
+  private getTiming(animation: Required<DiagramConnectorAnimationConfig>, timeMs = this.elapsed) {
     const duration = animation.duration / animation.speed;
     const start = animation.delay + animation.startDelay + animation.sequenceOrder * 250;
-    const local = this.elapsed - start;
+    const local = timeMs - start;
     if (local < 0) return { active: false, progress: 0, cycleIndex: 0 };
     const oneShot = !animation.loop
       || animation.direction === 'forward-once'
@@ -195,7 +209,7 @@ export class ConnectorAnimationManager {
     if (cycleTime > duration) return { active: false, progress: 1, cycleIndex };
     return {
       active: true,
-      progress: resolveProgress(clamp01(cycleTime / duration), animation.direction, cycleIndex),
+      progress: easeConnectorProgress(resolveProgress(clamp01(cycleTime / duration), animation.direction, cycleIndex), animation.easing),
       cycleIndex,
     };
   }
@@ -207,6 +221,7 @@ export class ConnectorAnimationManager {
     }
     if (!this.lastTimestamp) this.lastTimestamp = timestamp;
     this.elapsed += Math.min(64, Math.max(0, timestamp - this.lastTimestamp));
+    this.timelineTimeMs = this.elapsed;
     this.lastTimestamp = timestamp;
     let hasActiveTarget = false;
     this.getTargets().forEach((target) => {
@@ -224,7 +239,7 @@ export class ConnectorAnimationManager {
             || target.animation.direction === 'reverse-once'
               ? 1
               : -1
-          ) * this.elapsed * 0.045 * target.animation.speed,
+          ) * this.timelineTimeMs * 0.045 * target.animation.speed,
           dirty: true,
         });
       } else {
@@ -314,13 +329,51 @@ export class ConnectorAnimationManager {
     context.stroke();
   }
 
+  private drawConnectorSegment(
+    context: CanvasRenderingContext2D,
+    target: AnimationTarget,
+    startAmount: number,
+    endAmount: number,
+    samples = 28,
+  ) {
+    const start = clamp01(Math.min(startAmount, endAmount));
+    const end = clamp01(Math.max(startAmount, endAmount));
+    if (end <= start) return;
+    context.lineWidth = Math.max(2, target.config.width || 2);
+    context.beginPath();
+    for (let index = 0; index <= samples; index += 1) {
+      const amount = start + ((end - start) * (index / samples));
+      const point = target.geometry.pointAt(amount);
+      if (index === 0) context.moveTo(point.x, point.y);
+      else context.lineTo(point.x, point.y);
+    }
+    context.stroke();
+  }
+
+  private drawMovingDashes(
+    context: CanvasRenderingContext2D,
+    target: AnimationTarget,
+    timeMs: number,
+  ) {
+    context.save();
+    context.setLineDash([target.animation.dashLength, target.animation.dashGap]);
+    context.lineDashOffset = (
+      target.animation.direction === 'reverse' || target.animation.direction === 'reverse-once'
+        ? 1
+        : -1
+    ) * timeMs * 0.045 * target.animation.speed;
+    this.drawConnectorSegment(context, target, 0, 1, 48);
+    context.restore();
+  }
+
   private drawEndpointPulse(
     context: CanvasRenderingContext2D,
     target: AnimationTarget,
     progress: number,
+    timeMs: number,
   ) {
     const animation = target.animation;
-    const phase = modulo(this.elapsed, animation.pulseDuration) / animation.pulseDuration;
+    const phase = modulo(timeMs, animation.pulseDuration) / animation.pulseDuration;
     const radius = animation.particleSize * (1 + phase * (animation.pulseScale - 1));
     const originalAlpha = context.globalAlpha;
     context.globalAlpha = originalAlpha * (1 - phase);
@@ -329,14 +382,19 @@ export class ConnectorAnimationManager {
     context.globalAlpha = originalAlpha;
   }
 
-  private drawTarget(context: CanvasRenderingContext2D, target: AnimationTarget) {
+  private drawTarget(context: CanvasRenderingContext2D, target: AnimationTarget, timeMs = this.elapsed) {
     if (!this.targetIsVisible(target)) return;
-    const timing = this.getTiming(target.animation);
-    if (!timing.active) return;
+    const timing = this.getTiming(target.animation, timeMs);
     const animation = target.animation;
+    if (!timing.active && !(animation.type === 'draw-in' && timing.progress === 1)) return;
     this.configureContext(context, animation);
 
-    if (animation.type === 'moving-dots') {
+    if (animation.type === 'draw-in') {
+      this.drawConnectorSegment(context, target, 0, timing.progress);
+      if (timing.progress >= 0.98) this.drawArrowhead(context, target.geometry.pointAt(1), animation.arrowheadSize, animation.arrowheadStyle === 'open-arrow');
+    } else if (animation.type === 'moving-dashes') {
+      this.drawMovingDashes(context, target, timeMs);
+    } else if (animation.type === 'moving-dots') {
       for (let index = 0; index < animation.particleCount; index += 1) {
         const offset = Math.min(0.95, animation.dotSpacing / Math.max(1, target.geometry.length)) * index;
         const forwardAmount = modulo(timing.progress - offset, 1);
@@ -377,10 +435,10 @@ export class ConnectorAnimationManager {
         this.drawDot(context, target.geometry.pointAt(1 - timing.progress), animation.pulseSize);
       }
     }
-    this.drawEndpointPulse(context, target, timing.progress);
+    this.drawEndpointPulse(context, target, timing.progress, timeMs);
   }
 
-  private drawOverlay() {
+  private drawOverlay(timeMs = this.timelineTimeMs) {
     if (this.exporting || this.isReducedMotion()) return;
     const context = (this.canvas as fabric.Canvas & {
       contextContainer?: CanvasRenderingContext2D;
@@ -398,14 +456,20 @@ export class ConnectorAnimationManager {
     );
     this.getTargets().forEach((target) => {
       context.save();
-      this.drawTarget(context, target);
+      this.drawTarget(context, target, timeMs);
       context.restore();
     });
     context.restore();
   }
 
   renderAtTimestamp(context: CanvasRenderingContext2D, timestampMs: number) {
-    this.elapsed = Math.max(timestampMs, 0);
+    this.timelineTimeMs = Math.max(timestampMs, 0);
+    this.elapsed = this.timelineTimeMs;
+    this.playing = false;
+    if (this.frame !== null) {
+      window.cancelAnimationFrame(this.frame);
+      this.frame = null;
+    }
     context.save();
     const viewport = (this.canvas as fabric.Canvas).viewportTransform || fabric.iMatrix;
     context.transform(
@@ -418,7 +482,7 @@ export class ConnectorAnimationManager {
     );
     this.getTargets().forEach((target) => {
       context.save();
-      this.drawTarget(context, target);
+      this.drawTarget(context, target, this.timelineTimeMs);
       context.restore();
     });
     context.restore();
@@ -441,6 +505,7 @@ export class ConnectorAnimationManager {
 
   restartAll() {
     this.elapsed = 0;
+    this.timelineTimeMs = 0;
     this.stopped.clear();
     this.getTargets().forEach((target) => target.path.set('strokeDashOffset', 0));
     this.playAll();
@@ -636,7 +701,7 @@ function evalConnectorTiming(
   const cycleTime = modulo(local, cycleLength);
   if (cycleTime > duration) return { active: false, progress: 1, cycleIndex };
   const rawProgress = clamp01(cycleTime / duration);
-  const progress = resolveProgress(rawProgress, animation.direction, cycleIndex);
+  const progress = easeConnectorProgress(resolveProgress(rawProgress, animation.direction, cycleIndex), animation.easing);
   return { active: true, progress, cycleIndex };
 }
 
@@ -686,6 +751,43 @@ function drawConnectorFlowTrail(
   ctx.stroke();
 }
 
+function drawConnectorSegment(
+  ctx: CanvasRenderingContext2D,
+  target: AnimationTarget,
+  startAmount: number,
+  endAmount: number,
+  samples = 28,
+) {
+  const start = clamp01(Math.min(startAmount, endAmount));
+  const end = clamp01(Math.max(startAmount, endAmount));
+  if (end <= start) return;
+  ctx.lineWidth = Math.max(2, target.config.width || 2);
+  ctx.beginPath();
+  for (let index = 0; index <= samples; index += 1) {
+    const amount = start + ((end - start) * (index / samples));
+    const point = target.geometry.pointAt(amount);
+    if (index === 0) ctx.moveTo(point.x, point.y);
+    else ctx.lineTo(point.x, point.y);
+  }
+  ctx.stroke();
+}
+
+function drawConnectorMovingDashes(
+  ctx: CanvasRenderingContext2D,
+  target: AnimationTarget,
+  timeMs: number,
+) {
+  ctx.save();
+  ctx.setLineDash([target.animation.dashLength, target.animation.dashGap]);
+  ctx.lineDashOffset = (
+    target.animation.direction === 'reverse' || target.animation.direction === 'reverse-once'
+      ? 1
+      : -1
+  ) * timeMs * 0.045 * target.animation.speed;
+  drawConnectorSegment(ctx, target, 0, 1, 48);
+  ctx.restore();
+}
+
 /**
  * Pure deterministic connector animation renderer.
  * Safe for both fabric.Canvas (live editor) and fabric.StaticCanvas (export offscreen canvas).
@@ -720,9 +822,8 @@ export function renderConnectorAnimationsAtTime(
     ) continue;
 
     const timing = evalConnectorTiming(target.animation, timeMs);
-    if (!timing.active) continue;
-
     const animation = target.animation;
+    if (!timing.active && !(animation.type === 'draw-in' && timing.progress === 1)) continue;
     context.save();
     context.globalAlpha = animation.opacity;
     context.fillStyle = animation.flowColor;
@@ -734,7 +835,12 @@ export function renderConnectorAnimationsAtTime(
       context.shadowBlur = animation.glowStrength;
     }
 
-    if (animation.type === 'moving-dots') {
+    if (animation.type === 'draw-in') {
+      drawConnectorSegment(context, target, 0, timing.progress);
+      if (timing.progress >= 0.98) drawConnectorArrowhead(context, target.geometry.pointAt(1), animation.arrowheadSize, animation.arrowheadStyle === 'open-arrow');
+    } else if (animation.type === 'moving-dashes') {
+      drawConnectorMovingDashes(context, target, timeMs);
+    } else if (animation.type === 'moving-dots') {
       for (let i = 0; i < animation.particleCount; i++) {
         const offset = Math.min(0.95, animation.dotSpacing / Math.max(1, target.geometry.length)) * i;
         const forwardAmount = modulo(timing.progress - offset, 1);

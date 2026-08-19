@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { fabric } from 'fabric';
 import { useEditorStore } from '../../store/useEditorStore';
+import { DESIGN_HEIGHT, DESIGN_WIDTH } from '../../config/design';
 import { useSmartGuides } from '../../hooks/useSmartGuides';
 import { useDistanceMeasurement } from '../../hooks/useDistanceMeasurement';
 import { usePenTool } from '../../hooks/usePenTool';
@@ -55,6 +56,7 @@ import {
   convertPosterRegionToText,
   enterPosterTextEditing,
   isPosterEditableText,
+  normalizePosterEditableTextTransform,
   syncPosterEditableTextMetadata,
 } from '../../utils/posterConversionCanvas';
 
@@ -98,8 +100,8 @@ export const CanvasWorkspace: React.FC = () => {
     };
 
     const fc = new fabric.Canvas(canvasRef.current, {
-      width: 1080,
-      height: 1080,
+      width: DESIGN_WIDTH,
+      height: DESIGN_HEIGHT,
       backgroundColor: '#000000',
       preserveObjectStacking: true,
       enableRetinaScaling: true,
@@ -195,8 +197,19 @@ export const CanvasWorkspace: React.FC = () => {
     };
 
     const openTextPropertiesPanel = (object: fabric.Object | null | undefined) => {
+      const objectType = object?.get('objectType' as keyof fabric.Object);
+      const teckstudioObjectType = object?.get('teckstudioObjectType' as keyof fabric.Object);
+      const category = object?.get('elementCategory' as keyof fabric.Object);
       if (
-        object?.get('objectType' as keyof fabric.Object) !== 'editable-import-text'
+        teckstudioObjectType === 'diagramArrow'
+        || teckstudioObjectType === 'diagramConnectorPath'
+        || category === 'Technical / Infographic'
+      ) {
+        window.dispatchEvent(new CustomEvent('teckstudio:open-panel', { detail: { panel: 'properties' } }));
+        return;
+      }
+      if (
+        objectType !== 'editable-import-text'
         && !isRoundedHighlightText(object)
       ) return;
       window.dispatchEvent(new CustomEvent('teckstudio:open-panel', { detail: { panel: 'text-styles' } }));
@@ -472,6 +485,9 @@ export const CanvasWorkspace: React.FC = () => {
         }
         saveHistory();
         return;
+      }
+      if (event.target && normalizePosterEditableTextTransform(event.target)) {
+        setSelectedObject(event.target);
       }
       if (event.target) updateAttachedConnectors(fc, event.target);
       if (connectorModeRef.current) {
@@ -1072,7 +1088,7 @@ export const CanvasWorkspace: React.FC = () => {
             }}
           >
             <div className="absolute top-2 left-2 px-2 py-0.5 bg-cyan-950/90 text-[9px] font-bold text-cyan-300 rounded border border-cyan-500/50 shadow">
-              Instagram Safe Area (1080 × 1080)
+              Poster Safe Area (1080 × 1350)
             </div>
           </div>
         )}

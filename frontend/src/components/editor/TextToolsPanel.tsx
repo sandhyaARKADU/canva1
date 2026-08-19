@@ -80,6 +80,7 @@ export const TextToolsPanel: React.FC = () => {
       lineHeight: preset.lineHeight || 1.1,
       stroke: preset.stroke || '',
       strokeWidth: preset.strokeWidth || 0,
+      opacity: preset.opacity ?? 1,
     };
     if (!partial) styles.textAlign = preset.textAlign;
     return applyTextSelectionStyles(styles);
@@ -131,6 +132,7 @@ export const TextToolsPanel: React.FC = () => {
       lineHeight: preset.lineHeight || 1.1,
       stroke: preset.stroke,
       strokeWidth: preset.strokeWidth || 0,
+      opacity: preset.opacity ?? 1,
       shadow: preset.shadow ? new fabric.Shadow(preset.shadow) : undefined,
       left: canvas.getWidth() / 2 - 280,
       top: canvas.getHeight() / 2 - preset.fontSize / 2,
@@ -222,11 +224,49 @@ export const TextToolsPanel: React.FC = () => {
       </div>
 
       <div>
-        <div className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wide text-zinc-500">
-          <Type className="h-3.5 w-3.5" /> Text Presets
+        <div className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wide text-emerald-300">
+          <Type className="h-3.5 w-3.5" /> Technical Styles
         </div>
         <div className="grid grid-cols-2 gap-2">
-          {TEXT_PRESETS.filter((preset) => preset.category !== 'heading').slice(3).map((preset) => (
+          {TEXT_PRESETS.filter((preset) => [
+            'technical-hero-title',
+            'prompt-harness-wide-tracking',
+            'technical-section-heading',
+            'technical-mono-subtitle',
+            'technical-small-label',
+            'technical-diagram-node',
+            'technical-accent-text',
+            'prompt-harness-footer-heading',
+          ].includes(preset.id)).map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              onMouseDown={preserveSelection}
+              onClick={() => void addTextPreset(preset)}
+              className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-left transition hover:border-emerald-400/60"
+            >
+              <span className="block truncate text-sm font-black text-zinc-100">{preset.preview}</span>
+              <span className="mt-1 block truncate text-[9px] text-zinc-500">{preset.name}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <div className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wide text-zinc-500">
+          <Type className="h-3.5 w-3.5" /> Other Text Presets
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {TEXT_PRESETS.filter((preset) => preset.category !== 'heading' && ![
+            'technical-hero-title',
+            'prompt-harness-wide-tracking',
+            'technical-section-heading',
+            'technical-mono-subtitle',
+            'technical-small-label',
+            'technical-diagram-node',
+            'technical-accent-text',
+            'prompt-harness-footer-heading',
+          ].includes(preset.id)).slice(3).map((preset) => (
             <button
               key={preset.id}
               type="button"

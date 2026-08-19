@@ -36,7 +36,7 @@ import { fabric } from 'fabric';
 import { alignObjectToPage } from '../../utils/textSelectionStyles';
 import type { PageAlignment } from '../../utils/textSelectionStyles';
 import { uploadImageAsset } from '../../services/uploadsApi';
-import { replaceFabricImageAsset } from '../../utils/uploadedImageCanvas';
+import { replaceFabricImageAsset, resetUploadedImageObject } from '../../utils/uploadedImageCanvas';
 import { UPLOAD_IMAGE_RULES } from '../../config/uploads';
 import { enterInlineTextEditing, isEditableTextObject } from '../../utils/textSelectionStyles';
 import { enterPosterTextEditing, isPosterEditableText } from '../../utils/posterConversionCanvas';
@@ -136,7 +136,7 @@ export const ElementToolbar: React.FC = () => {
     const centerX = canvasRect.left + (bounds.left + bounds.width / 2) * zoom + vpt[4];
     const topY = canvasRect.top + bounds.top * zoom + vpt[5];
 
-    const toolbarWidth = selectedObject.type === 'image' ? 660 : 480;
+    const toolbarWidth = selectedObject.type === 'image' ? 720 : 480;
     const gap = 10;
 
     let left = centerX - toolbarWidth / 2;
@@ -314,6 +314,15 @@ export const ElementToolbar: React.FC = () => {
     }
   };
 
+  const handleResetImage = () => {
+    if (selectedObject.type !== 'image') return;
+    resetUploadedImageObject(selectedObject as fabric.Image, canvas);
+    setOpacity(1);
+    setStrokeWidth(0);
+    setIsLocked(true);
+    saveHistory();
+  };
+
   const openCropMode = () => {
     window.dispatchEvent(new CustomEvent('teckstudio:open-panel', { detail: { panel: 'properties' } }));
     window.setTimeout(() => window.dispatchEvent(new Event('teckstudio:start-image-crop')), 0);
@@ -461,6 +470,7 @@ export const ElementToolbar: React.FC = () => {
   const isMultiSelect = selectedObject.type === 'activeSelection';
   const isGroup = selectedObject.type === 'group';
   const isVisible = selectedObject.visible !== false;
+  const isImage = selectedObject.type === 'image';
 
   // ─── Alignment submenu items ─────────────────────────────────────────────
   const alignmentItems: { id: string; label: string; icon: React.ReactNode; alignment: PageAlignment }[] = [
@@ -493,7 +503,7 @@ export const ElementToolbar: React.FC = () => {
             <div className="h-5 w-px bg-zinc-800" />
           </>
         )}
-        {selectedObject.type === 'image' && (
+        {isImage && (
           <>
             <input
               ref={replaceInputRef}
@@ -528,10 +538,18 @@ export const ElementToolbar: React.FC = () => {
             <button
               type="button"
               onClick={() => window.dispatchEvent(new CustomEvent('teckstudio:open-panel', { detail: { panel: 'effects' } }))}
-              className="rounded-md p-1 text-fuchsia-300 hover:bg-fuchsia-500/10"
+              className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[9px] font-bold text-fuchsia-300 hover:bg-fuchsia-500/10"
               title="Open image filters and background tools"
             >
-              <WandSparkles className="h-3.5 w-3.5" />
+              <WandSparkles className="h-3.5 w-3.5" /> Effects
+            </button>
+            <button
+              type="button"
+              onClick={handleResetImage}
+              className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[9px] font-bold text-zinc-300 hover:bg-zinc-800"
+              title="Reset image crop, filters, opacity, border, shadow, flip, rotation, and size"
+            >
+              <RotateCcw className="h-3.5 w-3.5" /> Reset
             </button>
             <MediaFittingControls object={selectedObject} compact />
             {imageMessage && <span role="status" className="max-w-28 truncate text-[8px] text-zinc-500" title={imageMessage}>{imageMessage}</span>}
@@ -540,15 +558,17 @@ export const ElementToolbar: React.FC = () => {
         )}
 
         {/* Fill Color */}
-        <div className="flex items-center gap-1 border-r border-zinc-800 pr-2">
-          <input
-            type="color"
-            value={fillColor.startsWith('#') ? fillColor : '#8b5cf6'}
-            onChange={(e) => handleFillChange(e.target.value)}
-            className="w-5 h-5 rounded border border-zinc-700 bg-transparent cursor-pointer"
-            title="Fill Color"
-          />
-        </div>
+        {!isImage && (
+          <div className="flex items-center gap-1 border-r border-zinc-800 pr-2">
+            <input
+              type="color"
+              value={fillColor.startsWith('#') ? fillColor : '#8b5cf6'}
+              onChange={(e) => handleFillChange(e.target.value)}
+              className="w-5 h-5 rounded border border-zinc-700 bg-transparent cursor-pointer"
+              title="Fill Color"
+            />
+          </div>
+        )}
 
         {/* Border */}
         <div className="flex items-center gap-1 border-r border-zinc-800 pr-2">

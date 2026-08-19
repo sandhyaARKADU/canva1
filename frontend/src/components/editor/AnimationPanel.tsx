@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { fabric } from 'fabric';
 import { useEditorStore } from '../../store/useEditorStore';
+import type { FabricObjectAnimationType } from '../../types/timeline';
+import type { DiagramConnectorAnimationConfig, DiagramConnectorAnimationDirection } from '../../utils/architectureDiagramTypes';
 import {
   EyeOff,
   Eye,
@@ -19,11 +21,182 @@ interface AnimationDef {
   run: (obj: fabric.Object, canvas: fabric.Canvas) => void;
 }
 
+
+const OBJECT_ANIMATION_OPTIONS: Array<{ value: FabricObjectAnimationType | 'none'; label: string }> = [
+  { value: 'none', label: 'None' },
+  { value: 'fade-in', label: 'Fade In' },
+  { value: 'scale-in', label: 'Scale In' },
+  { value: 'slide-left', label: 'Slide Left' },
+  { value: 'slide-right', label: 'Slide Right' },
+  { value: 'slide-up', label: 'Slide Up' },
+  { value: 'slide-down', label: 'Slide Down' },
+  { value: 'pulse', label: 'Pulse' },
+  { value: 'blink', label: 'Blink' },
+  { value: 'draw', label: 'Draw In' },
+];
+
+const CONNECTOR_ANIMATION_OPTIONS: Array<{ value: DiagramConnectorAnimationConfig['type'] | 'none'; label: string }> = [
+  { value: 'none', label: 'None' },
+  { value: 'draw-in', label: 'Draw In' },
+  { value: 'travelling-pulse', label: 'Traveling Dot' },
+  { value: 'moving-dots', label: 'Flow' },
+  { value: 'moving-dashes', label: 'Dash Flow' },
+  { value: 'travelling-arrowhead', label: 'Traveling Arrow' },
+  { value: 'flow-trail', label: 'Flow Trail' },
+];
+
+const CONNECTOR_DIRECTIONS: Array<{ value: DiagramConnectorAnimationDirection; label: string }> = [
+  { value: 'forward', label: 'Left → Right / Forward' },
+  { value: 'reverse', label: 'Right → Left / Reverse' },
+  { value: 'forward-once', label: 'Forward Once' },
+  { value: 'reverse-once', label: 'Reverse Once' },
+  { value: 'bidirectional', label: 'Bidirectional' },
+  { value: 'alternating', label: 'Alternating' },
+];
+
+const EASING_OPTIONS = ['linear', 'ease-in', 'ease-out', 'ease-in-out'] as const;
+
+const objectValue = (object: fabric.Object, key: string) => object.get(key as keyof fabric.Object) as unknown;
+const isConnectorObject = (object: fabric.Object) => (
+  objectValue(object, 'teckstudioObjectType') === 'diagramArrow' ||
+  objectValue(object, 'teckstudioObjectType') === 'diagramConnectorPath'
+);
+
+const readNumber = (value: unknown, fallback: number) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
 export const AnimationPanel: React.FC = () => {
-  const { canvas, selectedObject } = useEditorStore();
+  const { canvas, selectedObject, saveHistory } = useEditorStore();
   const [isAnimating, setIsAnimating] = useState(false);
+  const [animationType, setAnimationType] = useState<string>('none');
+  const [startMs, setStartMs] = useState(0);
+  const [durationMs, setDurationMs] = useState(800);
+  const [delayMs, setDelayMs] = useState(0);
+  const [easing, setEasing] = useState<typeof EASING_OPTIONS[number]>('ease-out');
+  const [direction, setDirection] = useState<DiagramConnectorAnimationDirection>('forward');
+  const [loop, setLoop] = useState(false);
+
+
+  const selectedIsConnector = selectedObject ? isConnectorObject(selectedObject) : false;
+
+  useEffect(() => {
+    if (!selectedObject) return;
+    if (isConnectorObject(selectedObject)) {
+      const config = (
+        objectValue(selectedObject, 'diagramArrowConfig') ||
+        objectValue(selectedObject, 'diagramConnectorConfig') ||
+        {}
+      ) as { animation?: DiagramConnectorAnimationConfig };
+      const animation = config.animation || {};
+      setAnimationType(animation.enabled === true ? String(animation.type || 'moving-dashes') : 'none');
+      setStartMs(readNumber(animation.delay, 0));
+      setDurationMs(readNumber(animation.duration, 1200));
+      setDelayMs(readNumber(animation.startDelay, 0));
+      setEasing(animation.easing || 'linear');
+      setDirection(animation.direction || 'forward');
+      setLoop(animation.loop !== false && animation.direction !== 'forward-once' && animation.direction !== 'reverse-once');
+      return;
+    }
+    const configured = objectValue(selectedObject, 'objectAnimations') as Array<Record<string, unknown>> | undefined;
+    const legacy = objectValue(selectedObject, 'animationConfig') as Record<string, unknown> | undefined;
+    const first = configured?.[0] || legacy || {};
+    const nextType = String(first.type || first.animationType || 'none');
+    setAnimationType(nextType);
+    setStartMs(readNumber(first.startMs, 0));
+    setDurationMs(readNumber(first.durationMs || first.duration, 800));
+    setDelayMs(readNumber(first.delayMs || first.delay, 0));
+    setEasing((first.easing as typeof EASING_OPTIONS[number]) || 'ease-out');
+    setDirection('forward');
+    setLoop(first.loop === true);
+  }, [selectedObject]);
 
   if (!canvas || !selectedObject) return null;
+
+  const commitTimelineAnimation = (patch: Partial<{
+    animationType: string;
+    startMs: number;
+    durationMs: number;
+    delayMs: number;
+    easing: typeof EASING_OPTIONS[number];
+    direction: DiagramConnectorAnimationDirection;
+    loop: boolean;
+  }>) => {
+    const next = {
+      animationType,
+      startMs,
+      durationMs,
+      delayMs,
+      easing,
+      direction,
+      loop,
+      ...patch,
+    };
+    setAnimationType(next.animationType);
+    setStartMs(next.startMs);
+    setDurationMs(next.durationMs);
+    setDelayMs(next.delayMs);
+    setEasing(next.easing);
+    setDirection(next.direction);
+    setLoop(next.loop);
+
+    if (selectedIsConnector) {
+      const configKey = objectValue(selectedObject, 'teckstudioObjectType') === 'diagramConnectorPath'
+        ? 'diagramConnectorConfig'
+        : 'diagramArrowConfig';
+      const currentConfig = (objectValue(selectedObject, configKey) || {}) as Record<string, unknown>;
+      const currentAnimation = (currentConfig.animation || {}) as DiagramConnectorAnimationConfig;
+      const connectorType = next.animationType === 'none' ? currentAnimation.type || 'moving-dashes' : next.animationType;
+      const connectorAnimation: DiagramConnectorAnimationConfig = {
+        ...currentAnimation,
+        enabled: next.animationType !== 'none',
+        type: connectorType as DiagramConnectorAnimationConfig['type'],
+        direction: next.direction,
+        duration: Math.max(100, next.durationMs),
+        delay: Math.max(0, next.startMs),
+        startDelay: Math.max(0, next.delayMs),
+        easing: next.easing,
+        loop: next.loop,
+      };
+      selectedObject.set({
+        [configKey]: {
+          ...currentConfig,
+          animation: connectorAnimation,
+        },
+      } as Record<string, unknown>);
+    } else if (next.animationType === 'none') {
+      selectedObject.set({
+        objectAnimations: [],
+        animationConfig: { format: 'fabric-keyframe', animationType: 'none' },
+      } as Record<string, unknown>);
+    } else {
+      const persisted = {
+        id: crypto.randomUUID(),
+        type: next.animationType as FabricObjectAnimationType,
+        startMs: Math.max(0, next.startMs),
+        durationMs: Math.max(100, next.durationMs),
+        delayMs: Math.max(0, next.delayMs),
+        easing: next.easing,
+        loop: next.loop,
+      };
+      selectedObject.set({
+        objectAnimations: [persisted],
+        animationConfig: {
+          format: 'fabric-keyframe',
+          animationType: persisted.type,
+          startMs: persisted.startMs,
+          durationMs: persisted.durationMs,
+          delayMs: persisted.delayMs,
+          easing: persisted.easing,
+          loop: persisted.loop,
+        },
+      } as Record<string, unknown>);
+    }
+    selectedObject.setCoords();
+    canvas.requestRenderAll();
+    saveHistory();
+  };
 
   /* ------------------------------------------------------------------ */
   /*  Helper – wraps fabric.util.animate with a promise so we can chain  */
@@ -310,6 +483,56 @@ export const AnimationPanel: React.FC = () => {
       >
         Animations
       </h3>
+
+      <div className="mb-3 rounded-xl border border-white/[0.08] bg-zinc-950/60 p-3">
+        <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">
+          Timeline Animation Settings
+        </div>
+        <div className="grid grid-cols-2 gap-2 text-[10px]">
+          <label className="flex flex-col gap-1 text-zinc-500">
+            Animation Type
+            <select
+              value={animationType}
+              onChange={(event) => commitTimelineAnimation({ animationType: event.target.value })}
+              className="rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-zinc-200 outline-none focus:border-violet-500"
+            >
+              {(selectedIsConnector ? CONNECTOR_ANIMATION_OPTIONS : OBJECT_ANIMATION_OPTIONS).map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-zinc-500">
+            Start Time (ms)
+            <input type="number" min={0} step={100} value={startMs} onChange={(event) => commitTimelineAnimation({ startMs: Number(event.target.value) || 0 })} className="rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-zinc-200 outline-none focus:border-violet-500" />
+          </label>
+          <label className="flex flex-col gap-1 text-zinc-500">
+            Duration (ms)
+            <input type="number" min={100} step={100} value={durationMs} onChange={(event) => commitTimelineAnimation({ durationMs: Number(event.target.value) || 800 })} className="rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-zinc-200 outline-none focus:border-violet-500" />
+          </label>
+          <label className="flex flex-col gap-1 text-zinc-500">
+            Delay (ms)
+            <input type="number" min={0} step={100} value={delayMs} onChange={(event) => commitTimelineAnimation({ delayMs: Number(event.target.value) || 0 })} className="rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-zinc-200 outline-none focus:border-violet-500" />
+          </label>
+          <label className="flex flex-col gap-1 text-zinc-500">
+            Easing
+            <select value={easing} onChange={(event) => commitTimelineAnimation({ easing: event.target.value as typeof EASING_OPTIONS[number] })} className="rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-zinc-200 outline-none focus:border-violet-500">
+              {EASING_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+            </select>
+          </label>
+          {selectedIsConnector && (
+            <label className="flex flex-col gap-1 text-zinc-500">
+              Direction
+              <select value={direction} onChange={(event) => commitTimelineAnimation({ direction: event.target.value as DiagramConnectorAnimationDirection })} className="rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-zinc-200 outline-none focus:border-violet-500">
+                {CONNECTOR_DIRECTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+          )}
+        </div>
+        <label className="mt-2 flex items-center gap-2 text-[10px] font-semibold text-zinc-400">
+          <input type="checkbox" checked={loop} onChange={(event) => commitTimelineAnimation({ loop: event.target.checked })} className="accent-violet-500" />
+          Loop On/Off
+        </label>
+      </div>
 
       <div
         style={{

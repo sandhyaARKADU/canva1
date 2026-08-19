@@ -15,6 +15,7 @@ export const createVideoRenderJob = async ({
   settings,
   timeline,
   totalFrames,
+  audioFiles = [],
 }: VideoRenderPayload): Promise<VideoRenderCreateResponse> => {
   const formData = new FormData();
   formData.append('project_id', projectId);
@@ -26,12 +27,28 @@ export const createVideoRenderJob = async ({
   formData.append('include_audio', String(settings.includeAudio));
   formData.append('timeline_json', JSON.stringify(timeline));
   formData.append('total_frames', String(totalFrames));
+  formData.append('audio_file_ids', JSON.stringify(audioFiles.map((file) => file.clipId)));
+  console.info('[EXPORT FPS]', {
+    fps: settings.fps,
+    totalFrames,
+    timelineFps: timeline.fps,
+    durationMs: timeline.durationMs,
+  });
+  audioFiles.forEach((file) => {
+    formData.append('audio_files', file.blob, file.fileName);
+  });
   const response = await apiFetch('/api/video/render/frames', {
     method: 'POST',
     body: formData,
     timeoutMs: 120_000,
   });
-  if (!response.ok) throw await responseError(response, 'Unable to create the video render job.');
+  if (!response.ok) {
+    const error = await responseError(response, 'Unable to create the video render job.');
+    if (error.message.includes('Part exceeded maximum size')) {
+      throw new Error('Export payload exceeded the server multipart text-field limit. Large media must be uploaded as files, not embedded in timeline JSON.');
+    }
+    throw error;
+  }
   return response.json();
 };
 

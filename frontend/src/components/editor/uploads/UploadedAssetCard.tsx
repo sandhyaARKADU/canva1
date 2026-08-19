@@ -52,7 +52,7 @@ export const UploadedAssetCard = React.memo<UploadedAssetCardProps>(({
           <ImagePlus className="h-3 w-3" /> Add as Image
         </button>
         <button type="button" onClick={() => onMakeEditable(asset)} className="flex items-center justify-center gap-1 rounded-md bg-violet-600 px-1.5 py-1.5 text-[8px] font-bold text-white hover:bg-violet-500">
-          <ScanText className="h-3 w-3" /> Make Editable
+          <ScanText className="h-3 w-3" /> Edit Text
         </button>
       </div>
       <div className="mt-1 grid grid-cols-2 gap-1">

@@ -158,6 +158,8 @@ const normalizeObjectAnimationType = (value: unknown): FabricObjectAnimationType
     'wobble',
     'shake',
     'draw',
+    'blink',
+    'scale-in',
   ];
   if (exactTypes.includes(type as FabricObjectAnimationType)) {
     return type as FabricObjectAnimationType;
@@ -174,6 +176,8 @@ const normalizeObjectAnimationType = (value: unknown): FabricObjectAnimationType
   if (type.includes('wobble')) return 'wobble';
   if (type.includes('shake')) return 'shake';
   if (type.includes('draw')) return 'draw';
+  if (type.includes('blink')) return 'blink';
+  if (type.includes('scale')) return 'scale-in';
   return 'none';
 };
 
@@ -290,6 +294,12 @@ export const evaluateObjectAnimationAtTime = ({
     result.translateX = Math.sin(progress * Math.PI * 4) * (animation.distance || 12);
   } else if (animation.type === 'draw') {
     result.strokeProgress = progress;
+  } else if (animation.type === 'blink') {
+    result.opacity = progress < 0.5 ? 0.15 : 1;
+  } else if (animation.type === 'scale-in') {
+    result.scaleX = 0.6 + (0.4 * progress);
+    result.scaleY = result.scaleX;
+    result.opacity = progress;
   }
   return result;
 };

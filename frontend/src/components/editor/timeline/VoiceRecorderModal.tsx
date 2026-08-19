@@ -8,6 +8,8 @@ interface VoiceRecorderModalProps {
   onClose: () => void;
 }
 
+const nowMs = () => window.performance?.now?.() ?? Date.now();
+
 export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({
   isOpen,
   onClose,
@@ -73,14 +75,14 @@ export const VoiceRecorderModal: React.FC<VoiceRecorderModalProps> = ({
       setIsRecording(true);
       setRecordingDurationMs(0);
 
-      const startTime = Date.now();
+      const startTime = nowMs();
       timerRef.current = window.setInterval(() => {
-        setRecordingDurationMs(Date.now() - startTime);
+        setRecordingDurationMs(nowMs() - startTime);
       }, 100);
 
       // Setup live visualizer
       visualizeMicStream(stream);
-    } catch (err) {
+    } catch {
       setMicError('Microphone access denied or not available.');
     }
   };

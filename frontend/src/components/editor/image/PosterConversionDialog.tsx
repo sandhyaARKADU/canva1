@@ -294,9 +294,9 @@ export const PosterConversionDialog: React.FC<PosterConversionDialogProps> = ({
             <ScanText className="h-5 w-5" />
           </div>
           <div className="min-w-0 flex-1">
-            <h2 id="poster-conversion-title" className="text-sm font-bold text-zinc-100">Make uploaded image editable</h2>
+            <h2 id="poster-conversion-title" className="text-sm font-bold text-zinc-100">Edit text in uploaded image</h2>
             <p className="mt-1 max-w-3xl text-[11px] leading-5 text-zinc-400">
-              TECKSTUDIO detects editable text regions without replacing, dimming, recolouring, or resizing the original poster.
+              TECKSTUDIO keeps the original image visually untouched and marks detected text regions for editing.
             </p>
           </div>
           <button type="button" disabled={step === 'creating'} onClick={() => { reset(); onClose(); }} className="rounded-lg p-1 text-zinc-500 hover:bg-zinc-800 hover:text-white disabled:opacity-30" aria-label="Close poster conversion">
@@ -311,8 +311,8 @@ export const PosterConversionDialog: React.FC<PosterConversionDialogProps> = ({
                 <h3 className="text-[10px] font-bold uppercase tracking-[0.15em] text-zinc-500">Conversion mode</h3>
                 <div className="mt-3 grid gap-3">
                   {([
-                    ['quick', 'Quick Text Detection', 'Detect text regions and keep every original poster pixel visible until you choose a region to edit.'],
-                    ['full', 'Detailed Poster Analysis', 'Also analyse poster colours for reference without placing colour masks or overlays on the canvas.'],
+                    ['quick', 'Quick Text Edit', 'Detect text and keep the original poster visible. Local clean patches are created only when you edit a region.'],
+                    ['full', 'Detailed Text Edit', 'Also analyse colours for reference while preserving all graphics and backgrounds as the original image.'],
                   ] as const).map(([value, label, description]) => (
                     <button key={value} type="button" onClick={() => setMode(value)} className={`rounded-xl border p-4 text-left transition ${mode === value ? 'border-violet-500/60 bg-violet-500/10' : 'border-zinc-800 bg-zinc-950 hover:border-zinc-700'}`}>
                       <span className="flex items-center gap-2 text-xs font-bold text-zinc-100">{mode === value && <Check className="h-4 w-4 text-violet-300" />}{label}</span>
@@ -322,13 +322,13 @@ export const PosterConversionDialog: React.FC<PosterConversionDialogProps> = ({
                 </div>
               </section>
               <section>
-                <h3 className="text-[10px] font-bold uppercase tracking-[0.15em] text-zinc-500">Pixel-perfect base</h3>
+                <h3 className="text-[10px] font-bold uppercase tracking-[0.15em] text-zinc-500">Original-preserving output</h3>
                 <div className="mt-3 rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-4">
-                  <div className="flex items-center gap-2 text-xs font-bold text-emerald-200"><Check className="h-4 w-4" /> Original image stays visible</div>
+                  <div className="flex items-center gap-2 text-xs font-bold text-emerald-200"><Check className="h-4 w-4" /> Original image + editable text</div>
                   <ul className="mt-3 space-y-2 text-[10px] leading-5 text-zinc-400">
-                    <li>No global inpainting or processed preview layer</li>
-                    <li>No opacity, blend-mode, brightness, or colour change</li>
-                    <li>Only the text region you select later receives a local clean patch</li>
+                    <li>The uploaded image remains visible and locked as the base layer</li>
+                    <li>Detected regions are invisible until selected, so the poster does not change</li>
+                    <li>Double-click a region to create a local clean patch and editable text</li>
                   </ul>
                 </div>
               </section>

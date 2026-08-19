@@ -22,7 +22,7 @@ import { BackgroundPatterns } from './components/editor/BackgroundPatterns';
 import { TimelinePanel } from './components/editor/TimelinePanel';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useEditorStore } from './store/useEditorStore';
-import { Sparkles, Image, Layers, Palette, Wand2, Maximize, ShieldCheck, Type, Download, Bookmark, Grid3x3 } from 'lucide-react';
+import { Sparkles, Image, Layers, Palette, Wand2, Maximize, ShieldCheck, Download, Grid3x3 } from 'lucide-react';
 
 type RightPanel = 'ai' | 'assets' | 'brand' | 'properties' | 'effects' | 'resize' | 'audit' | 'colors' | 'text-styles' | 'export' | 'templates' | 'patterns';
 const RIGHT_PANELS: RightPanel[] = ['ai', 'assets', 'brand', 'properties', 'effects', 'resize', 'audit', 'colors', 'text-styles', 'export', 'templates', 'patterns'];
@@ -126,13 +126,11 @@ const App: React.FC = () => {
             {[
               { id: 'ai' as RightPanel, label: 'AI', icon: Sparkles, active: 'text-violet-400 border-b-2 border-violet-400 bg-violet-500/5' },
               { id: 'colors' as RightPanel, label: 'Colors', icon: Palette, active: 'text-orange-400 border-b-2 border-orange-400 bg-orange-500/5' },
-              { id: 'text-styles' as RightPanel, label: 'Text', icon: Type, active: 'text-blue-400 border-b-2 border-blue-400 bg-blue-500/5' },
               { id: 'assets' as RightPanel, label: 'Assets', icon: Image, active: 'text-cyan-400 border-b-2 border-cyan-400 bg-cyan-500/5' },
               { id: 'effects' as RightPanel, label: 'Effects', icon: Wand2, active: 'text-fuchsia-400 border-b-2 border-fuchsia-400 bg-fuchsia-500/5' },
               { id: 'patterns' as RightPanel, label: 'Pattern', icon: Grid3x3, active: 'text-emerald-400 border-b-2 border-emerald-400 bg-emerald-500/5' },
               { id: 'resize' as RightPanel, label: 'Resize', icon: Maximize, active: 'text-cyan-400 border-b-2 border-cyan-400 bg-cyan-500/5' },
               { id: 'brand' as RightPanel, label: 'Brand', icon: Palette, active: 'text-pink-400 border-b-2 border-pink-400 bg-pink-500/5' },
-              { id: 'templates' as RightPanel, label: 'Template', icon: Bookmark, active: 'text-amber-400 border-b-2 border-amber-400 bg-amber-500/5' },
               { id: 'export' as RightPanel, label: 'Export', icon: Download, active: 'text-emerald-400 border-b-2 border-emerald-400 bg-emerald-500/5' },
               { id: 'audit' as RightPanel, label: 'Audit', icon: ShieldCheck, active: 'text-emerald-400 border-b-2 border-emerald-400 bg-emerald-500/5' },
               { id: 'properties' as RightPanel, label: 'Props', icon: Layers, active: 'text-amber-400 border-b-2 border-amber-400 bg-amber-500/5' },
@@ -142,7 +140,7 @@ const App: React.FC = () => {
                 <button
                   key={tab.id}
                   onClick={() => setRightPanel(tab.id)}
-                  className={`flex items-center justify-center gap-1 py-2 px-1.5 text-[9px] font-semibold transition-all cursor-pointer whitespace-nowrap ${
+                  className={`flex shrink-0 items-center justify-center gap-1 py-2 px-1.5 text-[9px] font-semibold transition-all cursor-pointer whitespace-nowrap ${
                     rightPanel === tab.id
                       ? tab.active
                       : 'text-zinc-500 hover:text-zinc-300 border-b-2 border-transparent'

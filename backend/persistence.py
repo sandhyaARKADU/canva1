@@ -9,6 +9,8 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 import requests
+
+from config import resolve_runtime_path, settings
 from sqlalchemy.orm import Session
 
 from database import GeneratedAsset
@@ -16,7 +18,7 @@ from database import GenerationJob
 from database import UploadedAsset
 
 
-MEDIA_ROOT = Path(__file__).resolve().parent / "media"
+MEDIA_ROOT = resolve_runtime_path(settings.MEDIA_ROOT)
 GENERATED_ASSET_DIR = MEDIA_ROOT / "generated_assets"
 UPLOAD_DIR = MEDIA_ROOT / "uploads"
 

@@ -45,6 +45,7 @@ export type PosterTextBlock = {
   text: string;
   confidence: number;
   reading_order: number;
+  role?: 'heading' | 'subheading' | 'body' | 'caption' | 'label' | 'footer';
   bounding_box: { x: number; y: number; width: number; height: number };
   normalized_bounding_box: { x: number; y: number; width: number; height: number };
   polygon: number[][];

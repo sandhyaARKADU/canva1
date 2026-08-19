@@ -188,11 +188,38 @@ def _normalize_text_blocks(ocr_result: dict, width: int, height: int) -> list[di
                 "rotation": float(style.get("rotation") or 0),
             },
         })
-    return _merge_text_rows(
+    return _assign_text_roles(_merge_text_rows(
         [block for block in blocks if block["text"]],
         width,
         height,
-    )
+    ), height)
+
+
+def _assign_text_roles(blocks: list[dict], height: int) -> list[dict]:
+    if not blocks:
+        return blocks
+    largest_font = max(float(block["style"].get("font_size") or 0) for block in blocks)
+    ordered = sorted(blocks, key=lambda block: block["reading_order"])
+    for index, block in enumerate(ordered):
+        box = block["bounding_box"]
+        font_size = float(block["style"].get("font_size") or 0)
+        text = str(block.get("text") or "")
+        relative_y = (box["y"] + box["height"] / 2) / max(1, height)
+        word_count = len(text.split())
+        if relative_y >= 0.86:
+            role = "footer"
+        elif font_size >= largest_font * 0.86 and index <= 2:
+            role = "heading"
+        elif font_size >= largest_font * 0.68 and word_count <= 10:
+            role = "subheading"
+        elif word_count <= 4 and box["height"] <= height * 0.08:
+            role = "label"
+        elif font_size <= largest_font * 0.48 or word_count <= 6:
+            role = "caption"
+        else:
+            role = "body"
+        block["role"] = role
+    return sorted(ordered, key=lambda block: block["reading_order"])
 
 
 def _build_text_mask(size: tuple[int, int], blocks: list[dict]) -> Image.Image:
@@ -447,20 +474,16 @@ def analyze_poster_image(
     palette = _extract_palette(source)
     _check_cancelled(cancelled)
 
+    _report(progress, "Finalising text metadata", 80)
     regions = []
-    if mode == "full":
-        _report(progress, "Detecting editable regions", 80)
-        regions = _detect_colour_regions(source, palette)
-        if not regions:
-            warnings.append("No reliable flat-colour regions were found; complex artwork remains raster.")
-    else:
-        _report(progress, "Detecting editable regions", 80)
     _check_cancelled(cancelled)
 
     if not text_blocks:
         warnings.append("No readable text was detected.")
-    warnings.append("The original poster remains unchanged until a detected text region is converted.")
-    warnings.append("Uploaded posters are flattened images; fonts and complex effects may require manual adjustment.")
+    warnings.append("The original uploaded poster is preserved as a fallback and is not recompressed.")
+    warnings.append("Only a user-selected text region receives a local clean patch when that region is edited.")
+    warnings.append("Backgrounds, photos, graphics, icons, and decorative elements remain the original image.")
+    warnings.append("Complex text backgrounds and exact fonts may require manual adjustment after conversion.")
     return PosterAnalysisArtifacts(
         width=source.width,
         height=source.height,

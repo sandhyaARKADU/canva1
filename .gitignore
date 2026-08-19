@@ -41,9 +41,20 @@ yarn-debug.log*
 yarn-error.log*
 frontend/.npm-cache/
 
-# Runtime/generated media
+
+# Runtime uploads and generated media
 backend/media/generated_assets/
 backend/media/uploads/
+backend/media/processed-images/
+backend/media/fonts/
+
+# Temporary video rendering
+backend/media/video-renders/
+backend/tmp/
+backend/.runtime/
+
+# Generated render frames
+backend/media/**/frame-*.png
 
 # Local database/runtime files
 *.sqlite

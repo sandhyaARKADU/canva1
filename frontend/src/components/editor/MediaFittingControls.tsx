@@ -206,7 +206,7 @@ export const MediaFittingControls: React.FC<MediaFittingControlsProps> = ({
           <span className="text-[11px] font-semibold text-zinc-200">Image Fit Mode</span>
         </div>
         <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[8px] font-bold tracking-wider text-violet-400 border border-violet-500/20">
-          1080 × 1080 1:1
+          1080 × 1350 4:5
         </span>
       </div>
 
@@ -246,7 +246,7 @@ export const MediaFittingControls: React.FC<MediaFittingControlsProps> = ({
               ? 'border-violet-500 bg-violet-600/20 text-white shadow-md'
               : 'border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:text-zinc-200'
           }`}
-          title="Fill Frame: Crop image to fill 1080x1080 square"
+          title="Fill Frame: Crop image to fill the 1080 × 1350 portrait frame"
         >
           <Maximize2 className="h-3.5 w-3.5" />
           Fill Frame
@@ -259,7 +259,7 @@ export const MediaFittingControls: React.FC<MediaFittingControlsProps> = ({
               ? 'border-amber-500 bg-amber-500/20 text-amber-200 shadow-md'
               : 'border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:text-zinc-200'
           }`}
-          title="Stretch: Stretch to 1080x1080 (warning: distorts aspect ratio)"
+          title="Stretch: Stretch to 1080 × 1350 (warning: distorts aspect ratio)"
         >
           <Scaling className="h-3.5 w-3.5" />
           Stretch

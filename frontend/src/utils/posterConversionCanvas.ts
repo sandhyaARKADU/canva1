@@ -56,6 +56,21 @@ const naturalDimensions = (source: fabric.Image) => ({
   height: Math.max(1, Number(source.get('naturalHeight' as keyof fabric.Object)) || source.height || 1),
 });
 
+const roleLabel = (block: Pick<PosterTextBlock, 'role'>) => {
+  const role = block.role || 'body';
+  const labels: Record<string, string> = {
+    heading: 'Main Heading',
+    subheading: 'Subtitle Text',
+    body: 'Body Text',
+    caption: 'Caption Text',
+    label: 'Label Text',
+    footer: 'Footer Text',
+  };
+  return labels[role] || 'Editable Text';
+};
+
+const readableSnippet = (text: string) => text.replace(/\s+/g, ' ').trim().slice(0, 48);
+
 export const normalizedBoxToSourceBox = (source: fabric.Image, box: NormalizedBox) => {
   const natural = naturalDimensions(source);
   return {
@@ -210,9 +225,10 @@ export async function convertPosterToEditableDesign(
   source: fabric.Image,
   result: PosterAnalysisResult,
   acceptedBlocks: PosterTextBlock[],
-  _referenceMode: PosterReferenceMode,
+  referenceMode: PosterReferenceMode,
 ) {
-  if (!acceptedBlocks.length) throw new Error('Accept at least one detected text block before enabling editable regions.');
+  void referenceMode;
+  if (!acceptedBlocks.length) throw new Error('Accept at least one detected text block before enabling editable text regions.');
   const conversionId = createObjectId('poster-conversion');
   const sourceAssetId = readString(source, 'assetId') || result.source.asset_id;
   const previousSourceState = {
@@ -230,7 +246,8 @@ export async function convertPosterToEditableDesign(
   source.filters = [];
   source.applyFilters();
   source.set({
-    name: 'Original Imported Poster',
+    name: 'Original Image',
+    displayName: 'Original Image',
     objectType: 'editable-import-source',
     posterConversionId: conversionId,
     posterConversionRole: 'source',
@@ -245,11 +262,22 @@ export async function convertPosterToEditableDesign(
     posterSourceDimensions: { width: result.source.width, height: result.source.height },
     posterDisplayTransform: sourceTransformSnapshot(source),
     posterOriginalObjectState: previousSourceState,
+    posterEditableAsset: {
+      assetId: sourceAssetId,
+      originalSrc: result.source.url,
+      naturalWidth: result.source.width,
+      naturalHeight: result.source.height,
+      detectedTextRegions: acceptedBlocks,
+      generationStatus: 'completed',
+      version: 1,
+    },
     visible: true,
     opacity: 1,
     globalCompositeOperation: 'source-over',
     selectable: true,
     evented: true,
+    hasControls: true,
+    locked: true,
     lockMovementX: true,
     lockMovementY: true,
     lockScalingX: true,
@@ -259,14 +287,36 @@ export async function convertPosterToEditableDesign(
   } as Record<string, unknown>);
   source.setCoords();
 
-  const hotspots = acceptedBlocks.map((block) => createHotspot(source, block, conversionId, sourceAssetId));
-  hotspots.forEach((hotspot) => canvas.add(hotspot));
+  const sourceIndex = canvas.getObjects().indexOf(source);
+  const reviewRequired = acceptedBlocks
+    .filter((block) => block.confidence < 0.75)
+    .map((block) => block.id);
+  const hotspots = acceptedBlocks
+    .sort((first, second) => first.reading_order - second.reading_order)
+    .map((block) => createHotspot(source, block, conversionId, sourceAssetId));
+  hotspots.forEach((hotspot, index) => {
+    canvas.add(hotspot);
+    canvas.moveTo(hotspot, Math.max(0, sourceIndex + 1 + index));
+  });
+
+  source.set({
+    posterConvertedRegionIds: [],
+    posterConversionSummary: {
+      textLayerCount: 0,
+      detectedTextCount: acceptedBlocks.length,
+      highConfidenceCount: acceptedBlocks.length - reviewRequired.length,
+      reviewRequiredRegionIds: [...new Set(reviewRequired)],
+      localPatchCount: 0,
+      visualState: 'original-preserved',
+    },
+  } as Record<string, unknown>);
+
   canvas.setActiveObject(source);
   canvas.requestRenderAll();
 
   if (import.meta.env.DEV) {
     const transform = sourceTransformSnapshot(source);
-    console.debug('[TECKSTUDIO] Pixel-perfect editable import', {
+    console.debug('[TECKSTUDIO] Text-editable import preserves original image', {
       source: `${result.source.width} × ${result.source.height}`,
       canvas: `${canvas.getWidth()} × ${canvas.getHeight()}`,
       rendered: `${source.getScaledWidth()} × ${source.getScaledHeight()}`,
@@ -276,10 +326,23 @@ export async function convertPosterToEditableDesign(
       zoom: canvas.getZoom(),
       viewportTransform: canvas.viewportTransform,
       displayTransform: transform,
+      editableHotspots: hotspots.length,
+      textLayers: 0,
+      localPatches: 0,
+      reviewRequired: reviewRequired.length,
     });
   }
 
-  return { conversionId, created: hotspots, source, hotspots, textObjects: [] as fabric.IText[] };
+  return {
+    conversionId,
+    created: [source, ...hotspots],
+    source,
+    background: source,
+    hotspots,
+    patches: [] as fabric.Image[],
+    textObjects: [] as Array<fabric.IText | fabric.Textbox>,
+    reviewRequired: [...new Set(reviewRequired)],
+  };
 }
 
 const createPatchObject = async (
@@ -323,6 +386,8 @@ const createPatchObject = async (
     naturalHeight: patch.asset.height,
     selectable: false,
     evented: false,
+    locked: true,
+    excludeFromLayers: true,
     staticExportSupported: true,
   } as Record<string, unknown>);
   return image;
@@ -357,13 +422,20 @@ const createTextObject = async (
   });
 
   const mapped = mapNormalizedBoxToCanvas(source, block.normalized_bounding_box);
-  const text = new fabric.IText(overrides.text ?? block.text, {
+  const displayScaleX = Math.max(0.001, Math.abs(mapped.transform.scaleX));
+  const displayScaleY = Math.max(0.001, Math.abs(mapped.transform.scaleY));
+  const displayWidth = Math.max(8, mapped.box.width * displayScaleX);
+  const displayHeight = Math.max(8, mapped.box.height * displayScaleY);
+  const currentText = overrides.text ?? block.text;
+  const baseFontSize = Math.max(8, block.style.font_size * displayScaleY);
+  await document.fonts.load(`${fontStyle} ${weight} ${baseFontSize}px "${family}"`);
+  const commonTextOptions = {
     left: mapped.center.x,
     top: mapped.center.y,
     originX: 'center',
     originY: 'center',
     fontFamily: family,
-    fontSize: Math.max(8, block.style.font_size),
+    fontSize: baseFontSize,
     fontWeight: block.style.font_weight,
     fontStyle,
     fill: overrides.fill || block.style.fill,
@@ -374,14 +446,26 @@ const createTextObject = async (
     lineHeight: block.style.line_height,
     charSpacing: Math.round((block.style.letter_spacing / Math.max(8, block.style.font_size)) * 1000),
     angle: mapped.transform.angle + block.style.rotation,
-  } as fabric.ITextOptions);
+  } as fabric.ITextOptions;
+  const isSingleLine = !currentText.includes('\n') && currentText.length <= 48;
+  const text = isSingleLine ? new fabric.IText(currentText, {
+    ...commonTextOptions,
+  } as fabric.ITextOptions) : new fabric.Textbox(currentText, {
+    ...commonTextOptions,
+    width: displayWidth,
+    splitByGrapheme: false,
+  } as fabric.ITextboxOptions);
+  text.initDimensions();
   const measuredWidth = Math.max(1, text.width || 1);
   const measuredHeight = Math.max(1, text.height || 1);
-  const fitScale = Math.min(mapped.box.width / measuredWidth, mapped.box.height / measuredHeight);
-  const currentText = overrides.text ?? block.text;
+  const fitRatio = Math.min(displayWidth / measuredWidth, displayHeight / measuredHeight, 1);
+  if (fitRatio < 1) {
+    text.set('fontSize', Math.max(8, (text.fontSize || 8) * fitRatio));
+    text.initDimensions();
+  }
   text.set({
     id: textObjectId,
-    name: `Text – “${currentText.replace(/\s+/g, ' ').slice(0, 48)}”`,
+    name: `${roleLabel(block)} – “${readableSnippet(currentText)}”`,
     objectType: 'editable-import-text',
     posterConversionId: conversionId,
     posterConversionRole: 'text',
@@ -396,6 +480,7 @@ const createTextObject = async (
     posterSourceAssetId: readString(source, 'posterSourceAssetId'),
     posterPatchAssetId: patchAssetId,
     posterCleanPatchId: patchObjectId,
+    posterTextRole: block.role || 'body',
     posterFontMatch: {
       requestedFamily: block.style.font_family_guess,
       appliedFamily: family,
@@ -403,8 +488,8 @@ const createTextObject = async (
     },
     ocrSourceAssetId: readString(source, 'posterSourceAssetId'),
     ocrConfidence: block.confidence,
-    scaleX: Math.abs(mapped.transform.scaleX) * fitScale,
-    scaleY: Math.abs(mapped.transform.scaleY) * fitScale,
+    scaleX: 1,
+    scaleY: 1,
     editable: true,
     selectable: true,
     evented: true,
@@ -420,6 +505,7 @@ const createTextObject = async (
     excludeFromExport: false,
     staticExportSupported: true,
   } as Record<string, unknown>);
+  text.initDimensions();
   text.setCoords();
   return text;
 };
@@ -487,7 +573,7 @@ export function preparePosterEditableTextObject(object: fabric.Object | null | u
     : readString(textObject, 'posterCurrentText') || readString(textObject, 'posterOriginalText');
   const explicitlyLocked = textObject.get('locked' as keyof fabric.Object) === true;
   textObject.set({
-    name: `Text – “${currentText.replace(/\s+/g, ' ').slice(0, 48)}”`,
+    name: `${roleLabel(readTextBlock(textObject) || { role: 'body' })} – “${readableSnippet(currentText)}”`,
     posterCurrentText: currentText,
     posterConverted: true,
     editable: true,
@@ -510,10 +596,37 @@ export function preparePosterEditableTextObject(object: fabric.Object | null | u
 export function syncPosterEditableTextMetadata(object: fabric.Object | null | undefined) {
   if (!preparePosterEditableTextObject(object)) return false;
   const textObject = object as fabric.IText;
+  const currentText = textObject.text || '';
   textObject.set({
-    posterCurrentText: textObject.text || '',
-    name: `Text – “${(textObject.text || '').replace(/\s+/g, ' ').slice(0, 48)}”`,
+    posterCurrentText: currentText,
+    name: `${roleLabel(readTextBlock(textObject) || { role: 'body' })} – “${readableSnippet(currentText)}”`,
   } as Record<string, unknown>);
+  return true;
+}
+
+export function normalizePosterEditableTextTransform(object: fabric.Object | null | undefined) {
+  if (!isPosterEditableText(object)) return false;
+  const textObject = object as fabric.Textbox;
+  if (textObject.isEditing) return false;
+  const scaleX = textObject.scaleX || 1;
+  const scaleY = textObject.scaleY || 1;
+  if (Math.abs(scaleX - 1) < 0.001 && Math.abs(scaleY - 1) < 0.001) return false;
+
+  const center = textObject.getCenterPoint();
+  const nextFontSize = Math.max(8, Math.min(300, Math.round((textObject.fontSize || 16) * Math.abs(scaleY))));
+  const nextWidth = textObject.type === 'textbox'
+    ? Math.max(8, (textObject.width || 8) * Math.abs(scaleX))
+    : textObject.width;
+  textObject.set({
+    fontSize: nextFontSize,
+    width: nextWidth,
+    scaleX: 1,
+    scaleY: 1,
+  } as fabric.ITextboxOptions & Record<string, unknown>);
+  textObject.initDimensions?.();
+  textObject.setPositionByOrigin(center, 'center', 'center');
+  textObject.setCoords();
+  syncPosterEditableTextMetadata(textObject);
   return true;
 }
 

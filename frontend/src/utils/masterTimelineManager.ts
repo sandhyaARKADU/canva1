@@ -3,6 +3,7 @@ import { useEditorStore } from '../store/useEditorStore';
 import type {
   FabricObjectAnimation,
   FabricObjectAnimationConfig,
+  TimelineAudioClip,
   TimelineAudioTrack,
   TimelineKeyframe,
   TimelineVideoTrack,
@@ -14,6 +15,7 @@ import {
   normalizeObjectAnimation,
 } from './animationEvaluator';
 import { renderConnectorAnimationsAtTime } from './connectorAnimationManager';
+import { apiUrl } from '../services/apiClient';
 
 export interface CanvasVideoBinding {
   object: fabric.Image;
@@ -31,6 +33,29 @@ export interface SceneTimelineRenderer {
 type AudioBinding = {
   track: TimelineAudioTrack;
   audio: HTMLAudioElement;
+};
+
+const resolvePlayableMediaUrl = (assetUrl: string) => {
+  if (!assetUrl) return '';
+  if (assetUrl.startsWith('/media/')) return apiUrl(assetUrl);
+  return assetUrl;
+};
+
+const shouldUseCorsForMedia = (assetUrl: string) => {
+  if (typeof window === 'undefined') return false;
+  try {
+    const url = new URL(assetUrl, window.location.href);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.origin !== window.location.origin;
+  } catch {
+    return false;
+  }
+};
+
+const configureMediaSource = (media: HTMLMediaElement, assetUrl: string) => {
+  const resolvedUrl = resolvePlayableMediaUrl(assetUrl);
+  media.crossOrigin = shouldUseCorsForMedia(resolvedUrl) ? 'anonymous' : null;
+  media.src = resolvedUrl;
+  return resolvedUrl;
 };
 
 const numberValue = (value: unknown, fallback: number) => {
@@ -158,8 +183,8 @@ class MasterTimelineManager {
       existing.audio.pause();
       existing.audio.removeAttribute('src');
     }
-    const audio = new Audio(track.assetUrl);
-    audio.crossOrigin = 'anonymous';
+    const audio = new Audio();
+    configureMediaSource(audio, track.assetUrl);
     audio.preload = 'auto';
     audio.muted = useEditorStore.getState().timelineMuted || track.muted;
     this.audioBindings.set(track.id, { track, audio });
@@ -215,7 +240,6 @@ class MasterTimelineManager {
     const mediaEndMs = Math.max(
       0,
       ...this.getVideoTracks().map((track) => track.endTime * 1000),
-      ...this.getAudioTracks().map((track) => track.endTime * 1000),
     );
     if (mediaEndMs > 0) {
       useEditorStore.setState({
@@ -229,12 +253,13 @@ class MasterTimelineManager {
     const durationMs = state.timelineProject.durationMs;
     if (durationMs <= 0) throw new Error('Add at least one poster page or video before playback.');
     if (this.currentTimeMs >= durationMs) this.seekMs(0);
-    await this.sceneRenderer?.prepare();
+    await this.unlockAudio();
     state.setTimelinePreviewActive(true);
     state.setTimelinePlaybackState('playing');
     this.playbackStartedAt = performance.now();
     this.playbackStartOffsetMs = this.currentTimeMs;
     this.syncMediaPlayback(true);
+    await this.sceneRenderer?.prepare();
     this.synchronizeAll(true);
     if (this.animationFrame === null) this.animationFrame = requestAnimationFrame(this.tick);
   }
@@ -282,6 +307,9 @@ class MasterTimelineManager {
     this.audioBindings.forEach(({ audio }) => {
       audio.playbackRate = playbackRate;
     });
+    this.clipAudioElements.forEach((audio) => {
+      audio.playbackRate = playbackRate;
+    });
   }
 
   setMuted(muted: boolean) {
@@ -304,6 +332,7 @@ class MasterTimelineManager {
       this.audioDestination = this.audioContext.createMediaStreamDestination();
       this.videoBindings.forEach(({ video }) => this.connectMediaElement(video));
       this.audioBindings.forEach(({ audio }) => this.connectMediaElement(audio));
+      this.clipAudioElements.forEach((audio) => this.connectMediaElement(audio));
     }
     await this.audioContext.resume();
     useEditorStore.getState().setTimelineAudioUnlocked(true);
@@ -312,6 +341,44 @@ class MasterTimelineManager {
 
   getCaptureAudioTracks() {
     return this.audioDestination?.stream.getAudioTracks() || [];
+  }
+
+  getDebugSnapshot() {
+    const state = useEditorStore.getState();
+    const audioClipEntries = Array.from(this.clipAudioElements.entries()).map(([clipId, audio]) => {
+      const clip = state.timelineProject.audioClips?.find((candidate) => candidate.id === clipId);
+      const gain = this.gainNodes.get(audio);
+      return {
+        clipId,
+        trackType: clip?.trackType,
+        assetUrl: clip?.assetUrl,
+        resolvedSrc: audio.src,
+        currentSrc: audio.currentSrc,
+        paused: audio.paused,
+        muted: audio.muted,
+        volume: audio.volume,
+        currentTime: audio.currentTime,
+        readyState: audio.readyState,
+        networkState: audio.networkState,
+        crossOrigin: audio.crossOrigin,
+        gain: gain?.gain.value,
+        error: audio.error
+          ? {
+              code: audio.error.code,
+              message: audio.error.message,
+            }
+          : null,
+      };
+    });
+    return {
+      currentTimeMs: this.currentTimeMs,
+      timelineCurrentTimeMs: state.timelineProject.currentTimeMs,
+      durationMs: state.timelineProject.durationMs,
+      playbackState: state.timelinePlaybackState,
+      timelineMuted: state.timelineMuted,
+      audioContextState: this.audioContext?.state || 'missing',
+      audioClipEntries,
+    };
   }
 
   private connectMediaElement(media: HTMLMediaElement) {
@@ -397,6 +464,7 @@ class MasterTimelineManager {
       this.synchronizeVideo(binding, timeSeconds, playing && index < 4)
     ));
     this.audioBindings.forEach((binding) => this.synchronizeAudio(binding, timeSeconds, playing));
+    this.synchronizeAudioClips(this.currentTimeMs, playing);
   }
 
   private synchronizeVideo(binding: CanvasVideoBinding, time: number, playing: boolean) {
@@ -430,8 +498,6 @@ class MasterTimelineManager {
     binding.renderFrame();
     if (playing && video.paused) {
       void video.play().catch(() => {
-        video.muted = true;
-        useEditorStore.getState().setTimelineMuted(true);
         void video.play().catch(() => undefined);
       });
     } else if (!playing) {
@@ -441,7 +507,9 @@ class MasterTimelineManager {
 
   private synchronizeAudio(binding: AudioBinding, time: number, playing: boolean) {
     const { track, audio } = binding;
-    const inRange = time >= track.startTime && time <= track.endTime;
+    const timelineEnd = useEditorStore.getState().timelineProject.durationMs / 1000;
+    const trackEndTime = Math.min(track.endTime, timelineEnd);
+    const inRange = time >= track.startTime && time < trackEndTime;
     if (!inRange) {
       audio.pause();
       return;
@@ -465,7 +533,8 @@ class MasterTimelineManager {
     const isVoiceoverActive = audioClips.some((clip) => {
       if (clip.trackType !== 'voiceover' || clip.muted) return false;
       const effectiveDuration = clip.durationMs - clip.trimStartMs - clip.trimEndMs;
-      return timeMs >= clip.startTimeMs && timeMs <= clip.startTimeMs + effectiveDuration;
+      const clipEndMs = Math.min(clip.startTimeMs + effectiveDuration, timeline.durationMs);
+      return timeMs >= clip.startTimeMs && timeMs < clipEndMs;
     });
 
     const activeClipIds = new Set(audioClips.map((c) => c.id));
@@ -481,21 +550,23 @@ class MasterTimelineManager {
     });
 
     audioClips.forEach((clip) => {
-      let audio = this.clipAudioElements.get(clip.id);
-      if (!audio) {
-        audio = new Audio(clip.assetUrl);
-        this.clipAudioElements.set(clip.id, audio);
-      }
+      const audio = this.ensureAudioClipElement(clip);
 
-      const effectiveDurationMs = Math.max(clip.durationMs - clip.trimStartMs - clip.trimEndMs, 100);
-      const inRange = timeMs >= clip.startTimeMs && timeMs <= clip.startTimeMs + effectiveDurationMs;
+      const sourceDurationMs = Math.max(clip.durationMs - clip.trimStartMs - clip.trimEndMs, 100);
+      const playbackDurationMs = clip.trackType === 'bgmusic' && clip.loop
+        ? Math.max(timeline.durationMs - clip.startTimeMs, sourceDurationMs)
+        : sourceDurationMs;
+      const clipEndMs = Math.min(clip.startTimeMs + playbackDurationMs, timeline.durationMs);
+      const inRange = timeMs >= clip.startTimeMs && timeMs < clipEndMs;
 
       if (!inRange || clip.muted || state.timelineMuted) {
         audio.pause();
         return;
       }
 
-      const relativeTimeSec = (timeMs - clip.startTimeMs) / 1000;
+      const relativeTimeMs = Math.max(timeMs - clip.startTimeMs, 0);
+      const sourceOffsetMs = clip.loop ? relativeTimeMs % sourceDurationMs : Math.min(relativeTimeMs, sourceDurationMs);
+      const relativeTimeSec = sourceOffsetMs / 1000;
       const trimStartSec = clip.trimStartMs / 1000;
       const targetTimeSec = trimStartSec + relativeTimeSec;
 
@@ -517,21 +588,53 @@ class MasterTimelineManager {
         volume *= Math.max(0, Math.min(1, fadeFactor));
       }
 
-      const remainingMs = effectiveDurationMs - relativeTimeSec * 1000;
+      const remainingMs = clipEndMs - timeMs;
       if (clip.fadeOutMs && clip.fadeOutMs > 0 && remainingMs < clip.fadeOutMs) {
         const fadeFactor = remainingMs / clip.fadeOutMs;
         volume *= Math.max(0, Math.min(1, fadeFactor));
       }
 
-      audio.volume = Math.max(0, Math.min(1, volume));
+      const htmlVolume = Math.max(0, Math.min(1, volume));
+      audio.volume = htmlVolume;
+      audio.muted = false;
+      const gain = this.gainNodes.get(audio);
+      if (gain) gain.gain.value = Math.max(0, volume);
       audio.playbackRate = state.timelinePlaybackRate;
 
       if (playing && audio.paused) {
-        void audio.play().catch(() => undefined);
+        void audio.play().catch((error) => {
+          console.warn('[TECKSTUDIO] Timeline audio could not start:', error);
+        });
       } else if (!playing) {
         audio.pause();
       }
     });
+  }
+
+  private ensureAudioClipElement(clip: TimelineAudioClip) {
+    let audio = this.clipAudioElements.get(clip.id);
+    const resolvedUrl = resolvePlayableMediaUrl(clip.assetUrl);
+
+    if (!audio) {
+      audio = new Audio();
+      configureMediaSource(audio, clip.assetUrl);
+      audio.preload = 'auto';
+      audio.loop = false;
+      audio.muted = false;
+      audio.load();
+      this.clipAudioElements.set(clip.id, audio);
+      this.connectMediaElement(audio);
+      return audio;
+    }
+
+    if (audio.src !== resolvedUrl) {
+      audio.pause();
+      configureMediaSource(audio, clip.assetUrl);
+      audio.load();
+      this.connectMediaElement(audio);
+    }
+
+    return audio;
   }
 
   private applyObjectTimeline(localTimeMs: number) {
@@ -562,6 +665,7 @@ class MasterTimelineManager {
         }
       }
 
+      let strokeProgress: number | undefined;
       const configuredAnimations = objectValue(object, 'objectAnimations') as FabricObjectAnimation[] | undefined;
       const legacyConfig = objectValue(object, 'animationConfig') as FabricObjectAnimationConfig | undefined;
       const animations = (
@@ -611,6 +715,7 @@ class MasterTimelineManager {
           scaleX *= evaluation.scaleX;
           scaleY *= evaluation.scaleY;
           angle += evaluation.rotation;
+          if (evaluation.strokeProgress !== undefined) strokeProgress = evaluation.strokeProgress;
           if (evaluation.visibleTextLength !== undefined) {
             visibleTextLength = visibleTextLength === undefined
               ? evaluation.visibleTextLength
@@ -621,6 +726,15 @@ class MasterTimelineManager {
         object.set({ opacity, left, top, scaleX, scaleY, angle });
         if ('text' in object && visibleTextLength !== undefined) {
           (object as fabric.Text).set('text', fullText.slice(0, visibleTextLength));
+        }
+        if (strokeProgress !== undefined) {
+          const applyStrokeProgress = (target: fabric.Object) => {
+            if (target.type === 'line' || target.type === 'path') {
+              target.set('strokeDashArray', [Math.max(strokeProgress! * 1000, 0.001), 1000] as never);
+            }
+          };
+          if (object.type === 'group') (object as fabric.Group).forEachObject(applyStrokeProgress);
+          else applyStrokeProgress(object);
         }
       }
 
@@ -648,3 +762,12 @@ class MasterTimelineManager {
 
 export const masterTimelineManager = new MasterTimelineManager();
 
+declare global {
+  interface Window {
+    __teckstudioMasterTimelineManager?: MasterTimelineManager;
+  }
+}
+
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  window.__teckstudioMasterTimelineManager = masterTimelineManager;
+}

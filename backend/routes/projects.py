@@ -9,6 +9,7 @@ import random
 import string
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
+AUTOSAVE_VERSION_COALESCE_SECONDS = 60
 
 
 class ProjectCreate(BaseModel):
@@ -84,6 +85,37 @@ def generate_version_id():
 
 def generate_deleted_item_id():
     return "del_" + "".join(random.choices(string.ascii_lowercase + string.digits, k=12))
+
+
+def _should_coalesce_autosave(latest_version: DesignVersion | None, now: datetime) -> bool:
+    if not latest_version or latest_version.name != "Autosave" or not latest_version.created_at:
+        return False
+    elapsed = (now - latest_version.created_at).total_seconds()
+    return 0 <= elapsed < AUTOSAVE_VERSION_COALESCE_SECONDS
+
+
+def persist_project_data_version(db: Session, project: Project, data: str, now: datetime | None = None) -> None:
+    now = now or datetime.utcnow()
+    project.data = data
+    latest_version = db.query(DesignVersion).filter(
+        DesignVersion.project_id == project.id
+    ).order_by(DesignVersion.version_number.desc()).first()
+
+    if latest_version and latest_version.data == data:
+        return
+
+    if _should_coalesce_autosave(latest_version, now):
+        latest_version.data = data
+        latest_version.created_at = now
+        return
+
+    db.add(DesignVersion(
+        id=generate_version_id(),
+        project_id=project.id,
+        version_number=(latest_version.version_number + 1) if latest_version else 1,
+        name="Autosave",
+        data=data,
+    ))
 
 
 def to_project_response(project: Project) -> ProjectResponse:
@@ -310,17 +342,7 @@ def update_project(
     if req.name is not None:
         project.name = req.name
     if req.data is not None:
-        project.data = req.data
-        latest_version = db.query(DesignVersion).filter(
-            DesignVersion.project_id == project.id
-        ).order_by(DesignVersion.version_number.desc()).first()
-        db.add(DesignVersion(
-            id=generate_version_id(),
-            project_id=project.id,
-            version_number=(latest_version.version_number + 1) if latest_version else 1,
-            name="Autosave",
-            data=req.data,
-        ))
+        persist_project_data_version(db, project, req.data)
     if req.width is not None:
         project.width = req.width
     if req.height is not None:

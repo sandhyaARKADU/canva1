@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { fabric } from 'fabric';
 import { SunMedium, Contrast, Droplets, Image, Sparkles, RotateCcw } from 'lucide-react';
 import { useEditorStore } from '../../store/useEditorStore';
+import type { ImageEffectConfig } from '../../types/editorFeatures';
+import { DEFAULT_IMAGE_EFFECTS, applyImageEffectConfig, readImageEffectConfig } from '../../utils/imageEffects';
 
 type QuickFilter = 'grayscale' | 'sepia' | 'invert' | 'vintage' | 'blur';
 
@@ -13,19 +15,23 @@ const QUICK_FILTERS: { key: QuickFilter; label: string; icon: React.ReactNode }[
   { key: 'blur', label: 'Blur', icon: <SunMedium className="w-4 h-4" /> },
 ];
 
-const SEPIA_MATRIX = [
-  0.393, 0.769, 0.189, 0, 0,
-  0.349, 0.686, 0.168, 0, 0,
-  0.272, 0.534, 0.131, 0, 0,
-  0, 0, 0, 1, 0,
-];
+const QUICK_FILTER_CONFIG: Record<QuickFilter, ImageEffectConfig> = {
+  grayscale: { grayscale: true },
+  sepia: { sepia: true },
+  invert: { invert: true },
+  vintage: { sepia: true, contrast: -8, saturation: -20, exposure: 8, preset: 'Vintage' },
+  blur: { blur: 20 },
+};
 
-const VINTAGE_MATRIX = [
-  0.6279345635605994, 0.3202183420819267, 0.03689903846154085, 0, 0.03,
-  0.02578397704918933, 0.6441188644374771, 0.03276727685645, 0, 0.02,
-  0.0466055556782719, 0.0835755653471138, 0.5765625, 0, 0.05,
-  0, 0, 0, 1, 0,
-];
+const readQuickFilters = (config: Required<ImageEffectConfig>) => {
+  const next = new Set<QuickFilter>();
+  if (config.grayscale) next.add('grayscale');
+  if (config.sepia && config.preset !== 'Vintage') next.add('sepia');
+  if (config.invert) next.add('invert');
+  if (config.preset === 'Vintage') next.add('vintage');
+  if (config.blur > 0) next.add('blur');
+  return next;
+};
 
 export const ImageFilters: React.FC = () => {
   const { canvas, selectedObject, saveHistory } = useEditorStore();
@@ -35,13 +41,34 @@ export const ImageFilters: React.FC = () => {
   const [saturation, setSaturation] = useState(0);
   const [activeQuickFilters, setActiveQuickFilters] = useState<Set<QuickFilter>>(new Set());
 
-  // Reset local state when the selected object changes
   useEffect(() => {
-    setBrightness(0);
-    setContrast(0);
-    setSaturation(0);
-    setActiveQuickFilters(new Set());
+    const image = selectedObject?.type === 'image' ? selectedObject as fabric.Image : null;
+    const config = readImageEffectConfig(image);
+    setBrightness(config.brightness);
+    setContrast(config.contrast);
+    setSaturation(config.saturation);
+    setActiveQuickFilters(readQuickFilters(config));
   }, [selectedObject]);
+
+  const buildConfig = (
+    b: number,
+    c: number,
+    s: number,
+    quickFilters: Set<QuickFilter>,
+  ): ImageEffectConfig => {
+    const quickConfig = Array.from(quickFilters).reduce<ImageEffectConfig>((acc, key) => ({
+      ...acc,
+      ...QUICK_FILTER_CONFIG[key],
+    }), {});
+    return {
+      ...DEFAULT_IMAGE_EFFECTS,
+      ...quickConfig,
+      brightness: b,
+      contrast: c,
+      saturation: s,
+      preset: quickFilters.has('vintage') ? 'Vintage' : 'Custom',
+    };
+  };
 
   const applyFilters = useCallback(
     (
@@ -53,42 +80,7 @@ export const ImageFilters: React.FC = () => {
       if (!canvas || !selectedObject || selectedObject.type !== 'image') return;
 
       const img = selectedObject as fabric.Image;
-      const filters: fabric.IBaseFilter[] = [];
-
-      // Adjustment filters
-      if (b !== 0) {
-        filters.push(new fabric.Image.filters.Brightness({ brightness: b }));
-      }
-      if (c !== 0) {
-        filters.push(new fabric.Image.filters.Contrast({ contrast: c }));
-      }
-      if (s !== 0) {
-        filters.push(new fabric.Image.filters.Saturation({ saturation: s }));
-      }
-
-      // Quick filters
-      if (quickFilters.has('grayscale')) {
-        filters.push(new fabric.Image.filters.Grayscale());
-      }
-      if (quickFilters.has('sepia')) {
-        filters.push(
-          new fabric.Image.filters.ColorMatrix({ matrix: SEPIA_MATRIX }),
-        );
-      }
-      if (quickFilters.has('invert')) {
-        filters.push(new fabric.Image.filters.Invert());
-      }
-      if (quickFilters.has('vintage')) {
-        filters.push(
-          new fabric.Image.filters.ColorMatrix({ matrix: VINTAGE_MATRIX }),
-        );
-      }
-      if (quickFilters.has('blur')) {
-        filters.push(new fabric.Image.filters.Blur({ blur: 0.2 }));
-      }
-
-      img.filters = filters;
-      img.applyFilters();
+      applyImageEffectConfig(img, buildConfig(b, c, s, quickFilters));
       canvas.renderAll();
     },
     [canvas, selectedObject],
@@ -199,9 +191,9 @@ export const ImageFilters: React.FC = () => {
             </div>
             <input
               type="range"
-              min="-1"
-              max="1"
-              step="0.05"
+              min="-100"
+              max="100"
+              step="1"
               value={s.value}
               onChange={(e) => handleSliderChange(s.key, parseFloat(e.target.value))}
               className="w-full accent-violet-500 h-1 rounded-full cursor-pointer bg-zinc-800"

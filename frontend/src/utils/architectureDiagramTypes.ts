@@ -99,7 +99,8 @@ export type DiagramConnectorAnimationType =
   | 'moving-dots'
   | 'travelling-pulse'
   | 'travelling-arrowhead'
-  | 'flow-trail';
+  | 'flow-trail'
+  | 'draw-in';
 export type DiagramConnectorAnimationDirection =
   | 'forward'
   | 'reverse'
@@ -123,6 +124,7 @@ export type DiagramConnectorAnimationConfig = {
   duration?: number;
   delay?: number;
   loop?: boolean;
+  easing?: 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out';
   repeatDelay?: number;
   flowColor?: string;
   baseColor?: string;
@@ -187,6 +189,7 @@ export const DEFAULT_CONNECTOR_ANIMATION: Required<DiagramConnectorAnimationConf
   delay: 0,
   loop: true,
   repeatDelay: 250,
+  easing: 'linear',
   flowColor: AI_ARCHITECTURE_PALETTE.green,
   baseColor: AI_ARCHITECTURE_PALETTE.inactiveConnector,
   opacity: 1,
@@ -224,6 +227,7 @@ export function normalizeConnectorAnimation(
     duration: Math.max(200, Number(value.duration ?? 1800)),
     delay: Math.max(0, Number(value.delay ?? 0)),
     repeatDelay: Math.max(0, Number(value.repeatDelay ?? 250)),
+    easing: value.easing || 'linear',
     flowColor: value.flowColor || connectorColor,
     baseColor: value.baseColor || connectorColor,
     opacity: Math.max(0.05, Math.min(1, Number(value.opacity ?? 1))),
