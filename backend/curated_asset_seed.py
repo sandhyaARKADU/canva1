@@ -74,6 +74,7 @@ CANONICAL_CATEGORIES = [
     "infographics",
     "charts",
     "maps",
+    "technical-diagrams",
 ]
 
 
@@ -375,6 +376,27 @@ CATEGORY_SUBJECTS: dict[str, list[AssetSubject]] = {
         AssetSubject("interior", "Neutral Interior Corner", "minimal interior neutral clean", ("interior", "neutral", "clean", "corner")),
         AssetSubject("paper", "Blank Paper Composition", "minimal paper blank layout", ("paper", "blank", "layout", "whitespace")),
     ],
+    "technical-diagrams": [
+        AssetSubject("distributed-systems", "Distributed Systems Architecture", "distributed system architecture diagram distributed computing multiple servers network nodes", ("distributed", "system", "architecture", "diagram", "distributed-systems", "multiple-servers", "network-nodes")),
+        AssetSubject("system-architecture", "System Architecture Diagram", "system architecture diagram components services infrastructure database", ("system", "architecture", "diagram", "components", "services", "infrastructure")),
+        AssetSubject("client-server", "Client Server Architecture", "client server architecture diagram client server communication api backend database", ("client", "server", "architecture", "diagram", "communication", "backend")),
+        AssetSubject("microservices", "Microservices Architecture", "microservices architecture diagram api gateway services service mesh database per service", ("microservices", "architecture", "diagram", "api-gateway", "service-mesh", "backend")),
+        AssetSubject("backend-architecture", "Backend Architecture", "backend system architecture diagram api gateway app server cache queue database worker", ("backend", "architecture", "diagram", "api", "cache", "queue", "database")),
+        AssetSubject("database-architecture", "Database Architecture", "database architecture diagram schema storage replication cache query layer", ("database", "architecture", "diagram", "schema", "replication", "storage")),
+        AssetSubject("cloud-architecture", "Cloud Architecture", "cloud architecture diagram compute storage network database load balancer service", ("cloud", "architecture", "diagram", "compute", "storage", "network")),
+        AssetSubject("network-diagrams", "Network Diagram", "computer network architecture diagram router switch client server topology nodes", ("network", "diagram", "router", "switch", "server", "topology")),
+        AssetSubject("api-architecture", "API Gateway Architecture", "api gateway architecture diagram authentication client backend services database", ("api", "gateway", "architecture", "diagram", "authentication", "backend")),
+        AssetSubject("load-balancing", "Load Balancing Architecture", "load balancer architecture diagram traffic distribution multiple servers health checks", ("load", "balancing", "load-balancer", "architecture", "diagram", "traffic")),
+        AssetSubject("sharding", "Database Sharding Architecture", "database sharding architecture diagram shard router partition distributed database replicas", ("database", "sharding", "architecture", "diagram", "shard", "router", "partition")),
+        AssetSubject("distributed-database", "Distributed Database Architecture", "distributed database architecture diagram replication partitions nodes consensus router", ("distributed", "database", "architecture", "diagram", "replication", "partitions")),
+        AssetSubject("operating-systems", "Operating Systems Process Diagram", "operating systems process flow diagram scheduler memory kernel io", ("operating-system", "process", "kernel", "scheduler", "memory", "diagram")),
+        AssetSubject("process-flow", "Process Flow Diagram", "process flow diagram input process decision output workflow arrows", ("process", "flow", "diagram", "workflow", "decision", "input-output")),
+        AssetSubject("data-flow", "Data Flow Diagram", "data flow diagram ingestion processing storage output pipeline architecture", ("data", "flow", "diagram", "pipeline", "ingestion", "storage")),
+        AssetSubject("software-architecture", "Software Architecture", "software architecture diagram layers modules components services database", ("software", "architecture", "diagram", "layers", "modules", "components")),
+        AssetSubject("ai-architecture", "AI Architecture Diagram", "ai architecture diagram prompt model inference vector database agents pipeline", ("ai", "architecture", "diagram", "model", "inference", "vector-database")),
+        AssetSubject("machine-learning", "Machine Learning Architecture", "machine learning architecture diagram data pipeline training inference model registry", ("machine-learning", "architecture", "diagram", "training", "inference", "model")),
+        AssetSubject("devops-architecture", "DevOps Architecture", "devops architecture diagram ci cd pipeline build deploy monitor infrastructure", ("devops", "architecture", "diagram", "ci-cd", "pipeline", "monitoring")),
+    ],
 }
 
 
@@ -391,6 +413,7 @@ CATEGORY_PALETTES: dict[str, list[tuple[str, str, str, str]]] = {
     "animals": [("#422006", "#d97706", "#fde68a", "#fff7ed"), ("#164e63", "#38bdf8", "#f97316", "#ecfeff"), ("#365314", "#84cc16", "#facc15", "#f7fee7")],
     "people": [("#312e81", "#6366f1", "#f59e0b", "#eef2ff"), ("#831843", "#ec4899", "#fde68a", "#fdf2f8"), ("#1e293b", "#0ea5e9", "#fca5a5", "#f8fafc")],
     "minimal": [("#f5f5f4", "#e7e5e4", "#a8a29e", "#ffffff"), ("#f8fafc", "#e2e8f0", "#64748b", "#ffffff"), ("#fafafa", "#f4f4f5", "#18181b", "#ffffff")],
+    "technical-diagrams": [("#020617", "#111827", "#43D68A", "#E5E7EB"), ("#07111F", "#13233B", "#55A6FF", "#E0F2FE"), ("#12091F", "#211235", "#CF8CFF", "#FAF5FF")],
 }
 
 
@@ -671,6 +694,8 @@ def _texture(width: int, height: int, color: str, seed: int) -> str:
 
 
 def _render_scene(category: str, key: str, width: int, height: int, bg_a: str, bg_b: str, accent: str, light: str, seed: int) -> str:
+    if category == "technical-diagrams":
+        return _technical_diagram_scene(key, width, height, accent, light, seed)
     if category == "technology":
         return _technology_scene(key, width, height, accent, light, seed)
     if category == "nature":
@@ -710,6 +735,110 @@ def _render_scene(category: str, key: str, width: int, height: int, bg_a: str, b
     if category == "music":
         return _music_scene(key, width, height, accent, light, seed)
     return _minimal_scene(key, width, height, accent, light, seed)
+
+
+def _technical_diagram_scene(key: str, width: int, height: int, accent: str, light: str, seed: int) -> str:
+    unit = min(width, height)
+    stroke = max(4, unit * 0.006)
+    title = key.replace("-", " ").title()
+    muted = "#64748b"
+    card = "#111827"
+    ink = light
+
+    def label_for(value: str) -> str:
+        labels = {
+            "distributed-systems": "DISTRIBUTED SYSTEM",
+            "system-architecture": "SYSTEM ARCHITECTURE",
+            "client-server": "CLIENT SERVER",
+            "microservices": "MICROSERVICES",
+            "backend-architecture": "BACKEND ARCHITECTURE",
+            "database-architecture": "DATABASE ARCHITECTURE",
+            "cloud-architecture": "CLOUD ARCHITECTURE",
+            "network-diagrams": "NETWORK TOPOLOGY",
+            "api-architecture": "API ARCHITECTURE",
+            "load-balancing": "LOAD BALANCING",
+            "sharding": "DATABASE SHARDING",
+            "distributed-database": "DISTRIBUTED DATABASE",
+            "operating-systems": "OPERATING SYSTEM",
+            "process-flow": "PROCESS FLOW",
+            "data-flow": "DATA FLOW",
+            "software-architecture": "SOFTWARE ARCHITECTURE",
+            "ai-architecture": "AI ARCHITECTURE",
+            "machine-learning": "ML ARCHITECTURE",
+            "devops-architecture": "DEVOPS PIPELINE",
+        }
+        return labels.get(value, title.upper())
+
+    def node(x: float, y: float, w: float, h: float, text: str, color: str | None = None) -> str:
+        fill = color or card
+        return (
+            f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{unit*.025}" fill="{fill}" '
+            f'stroke="{accent}" stroke-width="{stroke}" filter="url(#softShadow)"/>'
+            f'<text x="{x + w/2}" y="{y + h*.54}" text-anchor="middle" dominant-baseline="middle" '
+            f'font-family="Inter, Arial, sans-serif" font-size="{max(24, unit*.032)}" font-weight="800" '
+            f'fill="{ink}" letter-spacing="{max(1, unit*.002)}">{escape(text)}</text>'
+        )
+
+    def db(x: float, y: float, w: float, h: float, text: str) -> str:
+        return (
+            f'<path d="M{x} {y + h*.2} C{x} {y}, {x + w} {y}, {x + w} {y + h*.2} '
+            f'V{y + h*.8} C{x + w} {y + h}, {x} {y + h}, {x} {y + h*.8} Z '
+            f'M{x} {y + h*.2} C{x} {y + h*.4}, {x + w} {y + h*.4}, {x + w} {y + h*.2} '
+            f'M{x} {y + h*.52} C{x} {y + h*.72}, {x + w} {y + h*.72}, {x + w} {y + h*.52}" '
+            f'fill="#0F172A" stroke="{accent}" stroke-width="{stroke}" filter="url(#softShadow)"/>'
+            f'<text x="{x + w/2}" y="{y + h*.55}" text-anchor="middle" dominant-baseline="middle" '
+            f'font-family="Inter, Arial, sans-serif" font-size="{max(22, unit*.028)}" font-weight="800" fill="{ink}">{escape(text)}</text>'
+        )
+
+    def arrow(x1: float, y1: float, x2: float, y2: float, dashed: bool = False) -> str:
+        dash = f' stroke-dasharray="{unit*.018} {unit*.014}"' if dashed else ""
+        angle = 0 if x2 >= x1 else 180
+        if abs(y2 - y1) > abs(x2 - x1):
+            angle = 90 if y2 >= y1 else -90
+        return (
+            f'<path d="M{x1} {y1} L{x2} {y2}" fill="none" stroke="{accent}" stroke-width="{stroke}" '
+            f'stroke-linecap="round"{dash}/>'
+            f'<path d="M{x2} {y2} l{-unit*.018} {-unit*.014} l{unit*.018} {unit*.038} l{unit*.018} {-unit*.038} Z" '
+            f'fill="{accent}" transform="rotate({angle} {x2} {y2})"/>'
+        )
+
+    header = (
+        f'<text x="{width*.50}" y="{height*.12}" text-anchor="middle" font-family="Inter, Arial, sans-serif" '
+        f'font-size="{max(44, unit*.06)}" font-weight="900" fill="{ink}" letter-spacing="{max(4, unit*.008)}">{label_for(key)}</text>'
+        f'<path d="M{width*.22} {height*.17} H{width*.78}" stroke="{accent}" stroke-width="{stroke*1.2}" stroke-linecap="round"/>'
+    )
+
+    left = width * 0.11
+    mid = width * 0.39
+    right = width * 0.67
+    top = height * 0.28
+    row = height * 0.21
+    w = width * 0.22
+    h = height * 0.12
+
+    if key in {"sharding", "distributed-database"}:
+        shards = "".join(db(width * (0.13 + i * 0.24), height * 0.64, width * 0.17, height * 0.13, f"SHARD {i + 1}") for i in range(3))
+        links = "".join(arrow(width * 0.50, height * 0.51, width * (0.215 + i * 0.24), height * 0.64, i == 1) for i in range(3))
+        return header + node(width*.19, top, w, h, "CLIENTS") + node(width*.39, height*.45, w, h, "ROUTER") + links + shards
+
+    if key in {"microservices", "api-architecture", "backend-architecture"}:
+        services = "".join(node(width * (0.18 + i * 0.22), height * 0.52, width * 0.16, height * 0.10, f"SERVICE {i + 1}") for i in range(3))
+        links = arrow(width*.33, height*.35, width*.44, height*.35) + arrow(width*.55, height*.41, width*.26, height*.52, True) + arrow(width*.55, height*.41, width*.48, height*.52, True) + arrow(width*.55, height*.41, width*.70, height*.52, True)
+        return header + node(width*.10, top, width*.20, h, "CLIENT") + node(width*.43, top, width*.24, h, "API GATEWAY") + links + services + db(width*.39, height*.74, width*.22, height*.13, "DATABASE")
+
+    if key in {"load-balancing", "distributed-systems", "network-diagrams"}:
+        servers = "".join(node(width * 0.62, height * (0.28 + i * 0.17), width * 0.22, height * 0.10, f"SERVER {i + 1}") for i in range(3))
+        links = arrow(width*.30, height*.42, width*.43, height*.42) + "".join(arrow(width*.55, height*.42, width*.62, height*(0.33 + i*.17), i == 1) for i in range(3))
+        return header + node(width*.10, height*.34, width*.20, h, "CLIENTS") + node(width*.43, height*.34, width*.12, h, "LB") + links + servers + db(width*.38, height*.73, width*.22, height*.12, "DB CLUSTER")
+
+    if key in {"cloud-architecture", "devops-architecture", "ai-architecture", "machine-learning"}:
+        cloud = f'<path d="M{width*.18} {height*.29} C{width*.22} {height*.19} {width*.34} {height*.18} {width*.41} {height*.27} C{width*.55} {height*.22} {width*.70} {height*.31} {width*.73} {height*.45} C{width*.82} {height*.48} {width*.84} {height*.65} {width*.71} {height*.70} H{width*.22} C{width*.08} {height*.69} {width*.07} {height*.49} {width*.18} {height*.43} Z" fill="#0F172A" stroke="{muted}" stroke-width="{stroke}" opacity="0.78"/>'
+        return header + cloud + node(width*.17, height*.38, width*.17, height*.09, "INPUT") + node(width*.41, height*.33, width*.20, height*.10, "PROCESS") + db(width*.45, height*.53, width*.19, height*.12, "STORE") + node(width*.66, height*.40, width*.17, height*.09, "OUTPUT") + arrow(width*.34, height*.425, width*.41, height*.38) + arrow(width*.61, height*.38, width*.66, height*.445) + arrow(width*.52, height*.43, width*.54, height*.53, True)
+
+    if key in {"process-flow", "data-flow", "operating-systems"}:
+        return header + node(left, top, w, h, "INPUT") + arrow(left+w, top+h/2, mid, top+h/2) + node(mid, top, w, h, "PROCESS") + arrow(mid+w, top+h/2, right, top+h/2) + node(right, top, w, h, "OUTPUT") + node(mid, top+row, w, h, "DECISION") + arrow(mid+w/2, top+h, mid+w/2, top+row, True) + db(right, top+row, w, h, "STATE")
+
+    return header + node(left, top, w, h, "CLIENT") + arrow(left+w, top+h/2, mid, top+h/2) + node(mid, top, w, h, "SERVICE") + arrow(mid+w, top+h/2, right, top+h/2) + db(right, top, w, h, "DATABASE") + node(mid, top+row, w, h, "CACHE") + arrow(mid+w/2, top+h, mid+w/2, top+row, True)
 
 
 def _technology_scene(key: str, width: int, height: int, accent: str, light: str, seed: int) -> str:

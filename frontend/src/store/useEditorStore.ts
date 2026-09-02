@@ -11,6 +11,7 @@ import {
   rehydrateTextEffects,
   removeGeneratedTextEffectLayers,
 } from '../utils/textEffects';
+import { removeStrayConnectorMarkers } from '../utils/posterLayoutTools';
 import type { TextEffectConfig } from '../types/editorFeatures';
 import { trackManualRoundedHighlightColorEdit } from '../utils/roundedHighlightText';
 import {
@@ -26,7 +27,16 @@ import {
   recolorArchitectureSymbol,
   setArchitectureSymbolStrokeWidth,
 } from '../utils/architectureDiagram';
-import { removeConnectorsForNode } from '../utils/diagramConnectors';
+import {
+  applyDiagramArrowStyle,
+  getDiagramArrowAppearance,
+  getConnectableObjectId,
+  removeConnectorsForNode,
+  removeDiagramConnector,
+  updateAllDiagramConnectors,
+} from '../utils/diagramConnectors';
+import { applyBoxStyle, getBoxAppearance } from '../utils/boxStyling';
+import type { DiagramConnectorType } from '../utils/architectureDiagramTypes';
 import { isPosterEditableText, rehydratePosterHotspots } from '../utils/posterConversionCanvas';
 import { rehydrateCanvasVideos } from '../utils/canvasVideo';
 import type {
@@ -44,7 +54,22 @@ import {
   createDefaultTimelineProject,
   getPosterTrack,
   normalizeTimelineProject,
+  resolveSceneAtTime,
 } from '../types/timeline';
+import {
+  TECHNICAL_REEL_PRESET_NAME,
+  TECHNICAL_REEL_SCENE_ANIMATION,
+  TECHNICAL_REEL_TRANSITION_MS,
+  TECHNICAL_REEL_TRANSITION_TYPE,
+  applyTechnicalReelPresetToCanvas,
+  applyTechnicalReelPresetToCanvasData,
+  durationForTechnicalReelScene,
+} from '../utils/technicalReelPreset';
+import {
+  TECHNICAL_REEL_REFERENCE_HEIGHT,
+  TECHNICAL_REEL_REFERENCE_WIDTH,
+  buildReferenceTechnicalReelPages,
+} from '../utils/technicalReelDesign';
 
 const DEFAULT_CANVAS_BACKGROUND = '#000000';
 const LEGACY_WHITE_BACKGROUNDS = new Set(['#fff', '#ffffff', 'white', 'rgb(255,255,255)', 'rgb(255, 255, 255)']);
@@ -57,13 +82,22 @@ const resolveBlankCanvasBackground = (background?: string | null) => {
 };
 
 type ProjectCanvasPayload = {
+  id?: string;
+  name?: string;
   data?: string | null;
   width?: number | null;
   height?: number | null;
   background_color?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 const DEFAULT_VIEWPORT_TRANSFORM: [number, number, number, number, number, number] = [1, 0, 0, 1, 0, 0];
+
+const normalizeCanvasDimension = (value: unknown, fallback: number) => {
+  const parsed = Math.round(Number(value));
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(10000, Math.max(100, parsed)) : fallback;
+};
 
 const createEmptyCanvasJson = (width: number, height: number, background = DEFAULT_CANVAS_BACKGROUND) => JSON.stringify({
   version: '5.3.0',
@@ -73,6 +107,20 @@ const createEmptyCanvasJson = (width: number, height: number, background = DEFAU
   objects: [],
   background,
 });
+
+const createFallbackProjectPayload = (projectId: string): ProjectCanvasPayload => {
+  const now = new Date().toISOString();
+  return {
+    id: projectId,
+    name: 'Recovered Design',
+    data: createEmptyCanvasJson(DESIGN_WIDTH, DESIGN_HEIGHT),
+    width: DESIGN_WIDTH,
+    height: DESIGN_HEIGHT,
+    background_color: DEFAULT_CANVAS_BACKGROUND,
+    createdAt: now,
+    updatedAt: now,
+  };
+};
 
 const normalizeViewportTransform = (value: unknown): [number, number, number, number, number, number] => {
   if (!Array.isArray(value) || value.length < 6) return [...DEFAULT_VIEWPORT_TRANSFORM];
@@ -116,8 +164,8 @@ function normalizeLoadedTextStyles(canvas: fabric.Canvas) {
 }
 
 function normalizeProjectCanvasJson(project: ProjectCanvasPayload) {
-  const fallbackWidth = DESIGN_WIDTH;
-  const fallbackHeight = DESIGN_HEIGHT;
+  const fallbackWidth = normalizeCanvasDimension(project.width, DESIGN_WIDTH);
+  const fallbackHeight = normalizeCanvasDimension(project.height, DESIGN_HEIGHT);
   const fallbackBackground = project.background_color || DEFAULT_CANVAS_BACKGROUND;
 
   if (!project.data) {
@@ -150,8 +198,8 @@ function normalizeProjectCanvasJson(project: ProjectCanvasPayload) {
     throw new Error('Project canvas objects are invalid. The design cannot be loaded.');
   }
 
-  const width = DESIGN_WIDTH;
-  const height = DESIGN_HEIGHT;
+  const width = normalizeCanvasDimension(project.width ?? parsed.width, DESIGN_WIDTH);
+  const height = normalizeCanvasDimension(project.height ?? parsed.height, DESIGN_HEIGHT);
   parsed.version = parsed.version || '5.3.0';
   parsed.width = width;
   parsed.height = height;
@@ -170,17 +218,42 @@ const fallbackObjectName = (object: fabric.Object, index: number) => {
   return `${type.charAt(0).toUpperCase()}${type.slice(1)} ${index + 1}`;
 };
 
+const EDITOR_HELPER_TYPES = new Set([
+  'diagramAnchor',
+  'diagramBendHandle',
+  'diagramEndpointHandle',
+  'diagramConnectorPreview',
+  'editorGuide',
+]);
+
 const isEditorOnlyObject = (object: fabric.Object) => (
   object.get('editorOnly' as keyof fabric.Object) === true ||
-  object.get('teckstudioObjectType' as keyof fabric.Object) === 'diagramAnchor' ||
-  object.get('teckstudioObjectType' as keyof fabric.Object) === 'editorGuide'
+  object.get('excludeFromSave' as keyof fabric.Object) === true ||
+  object.get('isEditorHelper' as keyof fabric.Object) === true ||
+  EDITOR_HELPER_TYPES.has(String(object.get('teckstudioObjectType' as keyof fabric.Object) || '')) ||
+  EDITOR_HELPER_TYPES.has(String(object.get('objectType' as keyof fabric.Object) || ''))
+);
+
+const isSerializedEditorHelperObject = (object: Record<string, unknown>) => (
+  object.editorOnly === true ||
+  object.excludeFromSave === true ||
+  object.isEditorHelper === true ||
+  EDITOR_HELPER_TYPES.has(String(object.teckstudioObjectType || '')) ||
+  EDITOR_HELPER_TYPES.has(String(object.objectType || ''))
 );
 
 const stripSerializedEditorObjects = (objects: unknown[]): unknown[] => objects
   .filter((object) => (
     !object ||
     typeof object !== 'object' ||
-    !(object as { editorOnly?: boolean }).editorOnly
+    (
+      !isSerializedEditorHelperObject(object as Record<string, unknown>)
+      && !(
+        String((object as { name?: string }).name || '').startsWith('Diagram connector — diagramConnector')
+        && !(object as { diagramConnectorId?: unknown }).diagramConnectorId
+        && !(object as { diagramConnectorRole?: unknown }).diagramConnectorRole
+      )
+    )
   ))
   .map((object) => {
     if (!object || typeof object !== 'object') return object;
@@ -206,9 +279,32 @@ type ProjectEditorMetadata = {
   timelineProject: TimelineProject;
 };
 
+const timelineForEditHydration = (timeline?: Partial<TimelineProject> | null) => (
+  normalizeTimelineProject({
+    ...timeline,
+    currentTimeMs: 0,
+  })
+);
+
+const timelineForPersistence = (timeline: TimelineProject) => (
+  normalizeTimelineProject({
+    ...timeline,
+    currentTimeMs: 0,
+  })
+);
+
 const serializePageCanvas = (canvas: fabric.Canvas) => {
-  const serialized = canvas.toJSON(CUSTOM_FABRIC_PROPERTIES) as { objects?: unknown[] };
+  removeStrayConnectorMarkers(canvas);
+  const serialized = canvas.toJSON(CUSTOM_FABRIC_PROPERTIES) as {
+    objects?: unknown[];
+    width?: number;
+    height?: number;
+    background?: unknown;
+  };
   serialized.objects = stripSerializedEditorObjects(serialized.objects || []);
+  serialized.width = canvas.getWidth();
+  serialized.height = canvas.getHeight();
+  serialized.background = canvas.backgroundColor;
   return JSON.stringify(serialized);
 };
 
@@ -225,11 +321,12 @@ const serializeCanvas = (canvas: fabric.Canvas, metadata?: ProjectEditorMetadata
   };
   serialized.teckstudioPages = state.pages;
   serialized.teckstudioActivePageId = state.activePageId;
-  serialized.teckstudioTimeline = state.timelineProject;
+  serialized.teckstudioTimeline = timelineForPersistence(state.timelineProject);
   return JSON.stringify(serialized);
 };
 
 function prepareCanvasObjects(canvas: fabric.Canvas) {
+  removeStrayConnectorMarkers(canvas);
   normalizeLoadedTextStyles(canvas);
   canvas.getObjects().forEach((object, index) => {
     if (!object.get('id' as keyof fabric.Object)) {
@@ -242,6 +339,31 @@ function prepareCanvasObjects(canvas: fabric.Canvas) {
       animationType?: string;
       fullText?: string;
     } | undefined;
+    const existingBaseState = object.get('baseAnimationState' as keyof fabric.Object);
+    const originalText = 'text' in object
+      ? String(object.get('originalText' as keyof fabric.Object) || animationConfig?.fullText || (object as fabric.Text).text || '')
+      : undefined;
+    if (!existingBaseState) {
+      object.set({
+        baseAnimationState: {
+          left: object.left ?? 0,
+          top: object.top ?? 0,
+          width: object.width ?? object.getScaledWidth?.() ?? 0,
+          height: object.height ?? object.getScaledHeight?.() ?? 0,
+          scaleX: object.scaleX ?? 1,
+          scaleY: object.scaleY ?? 1,
+          angle: object.angle ?? 0,
+          opacity: object.opacity ?? 1,
+          visible: object.visible !== false,
+          text: originalText,
+          strokeDashArray: object.strokeDashArray ? [...object.strokeDashArray] : undefined,
+          strokeDashOffset: Number(object.strokeDashOffset || 0),
+        },
+        originalText,
+        targetWidth: (object.width ?? object.getScaledWidth?.() ?? 0) * (object.scaleX ?? 1),
+        targetHeight: (object.height ?? object.getScaledHeight?.() ?? 0) * (object.scaleY ?? 1),
+      } as Record<string, unknown>);
+    }
     if (
       animationConfig?.fullText !== undefined
       && String(animationConfig.animationType || '').toLowerCase().includes('typewriter')
@@ -314,14 +436,24 @@ function loadCanvasFromJson(canvas: fabric.Canvas, json: string) {
               data: serializePageCanvas(canvas),
               updatedAt: new Date().toISOString(),
             }];
-          const activePageId = pages.some((page) => page.id === parsedMetadata.teckstudioActivePageId)
-            ? parsedMetadata.teckstudioActivePageId as string
+          const timelineProject = timelineForEditHydration(parsedMetadata.teckstudioTimeline);
+          const resolvedScene = resolveSceneAtTime(timelineProject, 0);
+          const resolvedPageId = resolvedScene.activeScene?.pageId;
+          const activePageId = resolvedPageId && pages.some((page) => page.id === resolvedPageId)
+            ? resolvedPageId
             : pages[0].id;
           useEditorStore.setState({
             pages,
             activePageId,
-            timelineProject: normalizeTimelineProject(parsedMetadata.teckstudioTimeline),
+            timelineProject,
+            selectedTimelineClipId: resolvedScene.activeScene?.id || null,
+            timelinePlaybackState: 'paused',
+            timelinePreviewActive: false,
           });
+          const activePage = pages.find((page) => page.id === activePageId);
+          if (activePage?.data) {
+            await loadPageCanvas(canvas, activePage.data);
+          }
           canvas.discardActiveObject();
           canvas.renderAll();
           resolve(serializeCanvas(canvas));
@@ -336,6 +468,16 @@ function loadCanvasFromJson(canvas: fabric.Canvas, json: string) {
 const loadPageCanvas = (canvas: fabric.Canvas, pageData: string) => (
   preloadFontsFromCanvasJson(pageData).then(() => new Promise<void>((resolve, reject) => {
     try {
+      try {
+        const parsed = JSON.parse(pageData) as { width?: unknown; height?: unknown };
+        const pageWidth = normalizeCanvasDimension(parsed.width, canvas.getWidth());
+        const pageHeight = normalizeCanvasDimension(parsed.height, canvas.getHeight());
+        if (canvas.getWidth() !== pageWidth || canvas.getHeight() !== pageHeight) {
+          canvas.setDimensions({ width: pageWidth, height: pageHeight });
+        }
+        useEditorStore.getState().setCanvasDimensions(pageWidth, pageHeight);
+      } catch {
+      }
       canvas.loadFromJSON(pageData, () => {
         void (async () => {
           ensureCanvasViewport(canvas);
@@ -382,8 +524,8 @@ async function applyProjectCanvas(canvas: fabric.Canvas, project: ProjectCanvasP
 }
 
 function clearCanvasToProjectSize(canvas: fabric.Canvas, project: ProjectCanvasPayload = {}) {
-  const width = DESIGN_WIDTH;
-  const height = DESIGN_HEIGHT;
+  const width = normalizeCanvasDimension(project.width, DESIGN_WIDTH);
+  const height = normalizeCanvasDimension(project.height, DESIGN_HEIGHT);
   const background = project.background_color || DEFAULT_CANVAS_BACKGROUND;
   ensureCanvasViewport(canvas);
   canvas.clear();
@@ -402,6 +544,7 @@ function clearCanvasToProjectSize(canvas: fabric.Canvas, project: ProjectCanvasP
 interface EditorState {
   canvas: fabric.Canvas | null;
   selectedObject: fabric.Object | null;
+  selectedObjectId: string | null;
   zoom: number;
   fillColor: string;
   strokeColor: string;
@@ -419,8 +562,12 @@ interface EditorState {
   projectCreatedAt: string;
   projectUpdatedAt: string;
   isProjectLoading: boolean;
+  isHydratingProject: boolean;
   projectLoadError: string;
   editorMode: 'design' | 'dev';
+  activeTool: 'select' | 'connector' | 'connector-draw';
+  activeConnectorType: DiagramConnectorType | null;
+  connectorMode: boolean;
   isPenMode: boolean;
   rulersEnabled: boolean;
   showGuides: boolean;
@@ -476,6 +623,7 @@ interface EditorState {
   loadProject: (projectId: string) => void;
   clearProjectLoadError: () => void;
   setEditorMode: (mode: 'design' | 'dev') => void;
+  setConnectorToolState: (state: { active: boolean; connectorType?: DiagramConnectorType | null }) => void;
   setPenMode: (active: boolean) => void;
   setRulersEnabled: (enabled: boolean) => void;
   setShowGuides: (show: boolean) => void;
@@ -496,6 +644,8 @@ interface EditorState {
   switchPage: (pageId: string) => Promise<void>;
   syncAllPages: () => Promise<EditorPage[]>;
   addPageToTimeline: (pageId: string) => void;
+  applyTechnicalReelPreset: () => Promise<void>;
+  appendReferenceTechnicalReel: () => Promise<void>;
   insertPageAfterClip: (pageId: string, afterClipId: string | null) => void;
   createAndAddPage: (afterClipId: string | null) => void;
   duplicatePageAndAddToTimeline: (pageId: string, afterClipId: string | null) => void;
@@ -536,6 +686,11 @@ interface EditorState {
   splitAudioClipAtPlayhead: (clipId: string) => void;
   setAudioDucking: (ducking: AudioDuckingConfig) => void;
 
+  // Animation selection sync — bumped whenever an animation is applied to the
+  // selected object so Property panels (which key off object identity) refresh.
+  selectionAnimationVersion: number;
+  bumpSelectionAnimation: () => void;
+
   // Operations
   saveHistory: () => void;
   undo: () => void;
@@ -551,6 +706,7 @@ interface EditorState {
 export const useEditorStore = create<EditorState>((set, get) => ({
   canvas: null,
   selectedObject: null,
+  selectedObjectId: null,
   zoom: 1,
   fillColor: '#8b5cf6', // purple accent default
   strokeColor: '#000000',
@@ -568,8 +724,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   projectCreatedAt: '',
   projectUpdatedAt: '',
   isProjectLoading: false,
+  isHydratingProject: false,
   projectLoadError: '',
   editorMode: 'design',
+  activeTool: 'select',
+  activeConnectorType: null,
+  connectorMode: false,
   isPenMode: false,
   rulersEnabled: true,
   showGuides: true,
@@ -582,7 +742,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   showSafeArea: false,
   safeAreaMargin: 108, // 10% safe area
   showGrid: false,
-  selectedPage: true, // Page is selected by default when editor opens
+  selectedPage: false, // Page is not selected by default when editor opens
   pages: [{ id: 'page-1', name: 'Page 1', data: '' }],
   activePageId: 'page-1',
   timelineProject: createDefaultTimelineProject(),
@@ -597,6 +757,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   history: [],
   historyIndex: -1,
+  selectionAnimationVersion: 0,
   
   setCanvas: (canvas) => {
     set({ canvas });
@@ -622,16 +783,37 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
   },
   
+  setConnectorToolState: ({ active, connectorType }) => set({
+    activeTool: active ? 'connector-draw' : 'select',
+    activeConnectorType: active ? connectorType || null : null,
+    connectorMode: active,
+  }),
+
   setSelectedObject: (selectedObject) => {
     if (!selectedObject) {
-      // When no element is selected, the page becomes active
-      set({ selectedObject: null, textSelectionRange: null, selectedPage: true });
+      // Empty canvas selection should leave the poster clean unless the page is explicitly selected.
+      set({ selectedObject: null, selectedObjectId: null, textSelectionRange: null, selectedPage: false });
       return;
     }
 
+    if (!getFabricObjectId(selectedObject)) {
+      selectedObject.set({
+        id: window.crypto?.randomUUID
+          ? window.crypto.randomUUID()
+          : `obj_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      } as Record<string, unknown>);
+      selectedObject.setCoords();
+    }
+
     const capturedRange = captureTextSelection(selectedObject);
-    const selectedFill = readSelectionStyleValue(selectedObject, 'fill', selectedObject.get('fill') || '#8b5cf6', capturedRange);
-    const selectedStroke = readSelectionStyleValue(selectedObject, 'stroke', selectedObject.get('stroke') || '#000000', capturedRange);
+    const arrowAppearance = getDiagramArrowAppearance(selectedObject);
+    const boxAppearance = arrowAppearance ? null : getBoxAppearance(selectedObject);
+    const selectedFill = arrowAppearance?.arrowColor
+      || boxAppearance?.fill
+      || readSelectionStyleValue(selectedObject, 'fill', selectedObject.get('fill') || '#8b5cf6', capturedRange);
+    const selectedStroke = arrowAppearance?.strokeColor
+      || boxAppearance?.stroke
+      || readSelectionStyleValue(selectedObject, 'stroke', selectedObject.get('stroke') || '#000000', capturedRange);
     const selectedFontFamily = readSelectionStyleValue(selectedObject, 'fontFamily', (selectedObject as any).get('fontFamily') || 'Outfit', capturedRange);
     const selectedFontSize = readSelectionStyleValue(selectedObject, 'fontSize', (selectedObject as any).get('fontSize') || 40, capturedRange);
     const selectedFontWeight = readSelectionStyleValue(selectedObject, 'fontWeight', (selectedObject as any).get('fontWeight') || 'normal', capturedRange);
@@ -645,12 +827,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const retainedRange = state.textSelectionRange?.objectId === selectedObjectId ? state.textSelectionRange : null;
       return {
       selectedObject,
+      selectedObjectId: selectedObjectId || null,
       selectedPage: false, // Element is selected, page is not
       textSelectionRange: capturedRange || retainedRange,
       fillColor: typeof selectedFill === 'string' && selectedFill !== 'Mixed' ? selectedFill : state.fillColor,
       strokeColor: typeof selectedStroke === 'string' && selectedStroke !== 'Mixed' ? selectedStroke : state.strokeColor,
-      strokeWidth: selectedObject.get('strokeWidth') || 0,
-      opacity: selectedObject.get('opacity') || 1,
+      strokeWidth: arrowAppearance?.strokeWidth ?? boxAppearance?.strokeWidth ?? Number(selectedObject.get('strokeWidth') || 0),
+      opacity: arrowAppearance?.opacity ?? boxAppearance?.opacity ?? Number(selectedObject.get('opacity') || 1),
       // Text properties (if it's a text object)
       fontFamily: typeof selectedFontFamily === 'string' && selectedFontFamily !== 'Mixed' ? selectedFontFamily : state.fontFamily,
       fontSize: typeof selectedFontSize === 'number' ? selectedFontSize : state.fontSize,
@@ -720,7 +903,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           set({ selectedObject: result.textObject, textSelectionRange: captureTextSelection(result.textObject) || textSelectionRange });
         }
       } else {
-        if (!recolorArchitectureSymbol(selectedObject, color)) selectedObject.set('fill', color);
+        if (!applyDiagramArrowStyle(canvas, selectedObject, { color }, { syncWholeArrowColor: true })
+          && !applyBoxStyle(canvas, selectedObject, { fill: color })
+          && !recolorArchitectureSymbol(selectedObject, color)) selectedObject.set('fill', color);
         selectedObject.setCoords();
         canvas.requestRenderAll();
       }
@@ -736,7 +921,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const result = applyTextStylesToSelectionOrObject(canvas, selectedObject, { stroke: color }, textSelectionRange);
         if (result.textObject) set({ selectedObject: result.textObject, textSelectionRange: captureTextSelection(result.textObject) || textSelectionRange });
       } else {
-        if (!recolorArchitectureSymbol(selectedObject, color)) selectedObject.set('stroke', color);
+        if (!applyDiagramArrowStyle(canvas, selectedObject, { color })
+          && !applyBoxStyle(canvas, selectedObject, { stroke: color })
+          && !recolorArchitectureSymbol(selectedObject, color)) selectedObject.set('stroke', color);
         selectedObject.setCoords();
         canvas.requestRenderAll();
       }
@@ -752,7 +939,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const result = applyTextStylesToSelectionOrObject(canvas, selectedObject, { strokeWidth: width }, textSelectionRange);
         if (result.textObject) set({ selectedObject: result.textObject, textSelectionRange: captureTextSelection(result.textObject) || textSelectionRange });
       } else {
-        if (!setArchitectureSymbolStrokeWidth(selectedObject, width)) selectedObject.set('strokeWidth', width);
+        if (!applyDiagramArrowStyle(canvas, selectedObject, { width })
+          && !applyBoxStyle(canvas, selectedObject, { strokeWidth: width })
+          && !setArchitectureSymbolStrokeWidth(selectedObject, width)) selectedObject.set('strokeWidth', width);
         selectedObject.setCoords();
         canvas.requestRenderAll();
       }
@@ -871,7 +1060,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({ opacity });
     const { canvas, selectedObject } = get();
     if (canvas && selectedObject) {
-      selectedObject.set('opacity', opacity);
+      if (!applyDiagramArrowStyle(canvas, selectedObject, { opacity })
+        && !applyBoxStyle(canvas, selectedObject, { opacity })) selectedObject.set('opacity', opacity);
       canvas.renderAll();
       get().saveHistory();
     }
@@ -943,12 +1133,29 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   loadProject: async (projectId) => {
     console.log('[TECKSTUDIO] loadProject called:', projectId);
-    set({ projectId, isProjectLoading: true, projectLoadError: '' });
+    set({
+      projectId,
+      isProjectLoading: true,
+      isHydratingProject: true,
+      projectLoadError: '',
+      timelinePlaybackState: 'paused',
+      timelinePreviewActive: false,
+    });
 
     const failLoad = (message: string, project?: ProjectCanvasPayload) => {
       const canvas = get().canvas;
       if (canvas) clearCanvasToProjectSize(canvas, project);
-      set({ isProjectLoading: false, projectLoadError: message, selectedObject: null, history: [], historyIndex: -1 });
+      set({
+        isProjectLoading: false,
+        isHydratingProject: false,
+        projectLoadError: message,
+        selectedObject: null,
+        selectedObjectId: null,
+        history: [],
+        historyIndex: -1,
+        timelinePlaybackState: 'paused',
+        timelinePreviewActive: false,
+      });
     };
 
     const finishLoad = async (project: ProjectCanvasPayload & { name?: string; createdAt?: string; updatedAt?: string }) => {
@@ -965,19 +1172,27 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }
 
       const loadedJson = await applyProjectCanvas(canvas, project);
+      const { masterTimelineManager: tlManager } = await import('../utils/masterTimelineManager');
+      tlManager.captureBaseStates();
+      tlManager.resetToEditMode(0);
       const loadedBackground =
         typeof canvas.backgroundColor === 'string' && canvas.backgroundColor
           ? canvas.backgroundColor
           : DEFAULT_CANVAS_BACKGROUND;
+      const hydratedTimeline = get().timelineProject;
+      const hydratedScene = resolveSceneAtTime(hydratedTimeline, 0);
       set({
         history: [loadedJson.json],
         historyIndex: 0,
         selectedObject: null,
+        selectedObjectId: null,
         isProjectLoading: false,
+        isHydratingProject: false,
         projectLoadError: '',
         canvasWidth: loadedJson.width,
         canvasHeight: loadedJson.height,
         canvasBackgroundColor: loadedBackground,
+        selectedTimelineClipId: hydratedScene.activeScene?.id || null,
       });
     };
 
@@ -988,7 +1203,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         const project = projects.find((p: any) => p.id === projectId);
         console.log('[TECKSTUDIO] localStorage project found:', project ? 'yes' : 'no');
         if (!project) {
-          failLoad('This local project could not be found. It may have been removed from this browser.');
+          const fallback = createFallbackProjectPayload(projectId);
+          projects.unshift(fallback);
+          localStorage.setItem('teckstudio_local_projects', JSON.stringify(projects));
+          console.warn('[TECKSTUDIO] Missing local project recovered:', projectId);
+          await finishLoad(fallback);
           return;
         }
         await finishLoad(project);
@@ -1014,6 +1233,31 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           localStorage.removeItem('teckstudio_user');
           failLoad('Your session expired. Please sign in again to load this design.');
           window.location.assign('/login');
+          return;
+        }
+        if (response.status === 404) {
+          const fallback = createFallbackProjectPayload(projectId);
+          const createResponse = await apiFetch('/api/projects', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              id: projectId,
+              name: fallback.name,
+              data: fallback.data,
+              width: fallback.width,
+              height: fallback.height,
+              background_color: fallback.background_color,
+            }),
+          });
+          const createdData = await createResponse.json().catch(() => null);
+          if (!createResponse.ok) {
+            failLoad(createdData?.detail || createdData?.error || `Unable to initialize this project (${createResponse.status}).`);
+            return;
+          }
+          console.warn('[TECKSTUDIO] Missing cloud project initialized:', projectId);
+          await finishLoad(createdData?.project || createdData || fallback);
           return;
         }
         failLoad(data?.detail || data?.error || `Unable to load this project (${response.status}).`);
@@ -1065,13 +1309,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         canvas.discardActiveObject();
         canvas.requestRenderAll();
       }
-      set({ selectedObject: null, textSelectionRange: null });
+      set({ selectedObject: null, selectedObjectId: null, textSelectionRange: null });
     }
   },
 
   syncActivePage: () => {
-    const { canvas, pages, activePageId, timelineProject } = get();
+    const { canvas, pages, activePageId, timelineProject, projectId } = get();
     if (!canvas) return pages;
+    if (get().isHydratingProject || get().timelinePreviewActive || get().timelinePlaybackState !== 'paused') {
+      return pages;
+    }
     const data = serializePageCanvas(canvas);
     let thumbnail: string | undefined;
     try {
@@ -1093,6 +1340,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             ...clip,
             name: activePage.name,
             thumbnailUrl: activePage.thumbnail,
+            projectId: projectId || clip.projectId,
+            canvasSnapshot: activePage.data,
           } : clip),
         })),
       }
@@ -1113,7 +1362,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       data: '',
       updatedAt: new Date().toISOString(),
     };
-    set({ pages: [...pages, page], activePageId: id, selectedObject: null });
+    set({ pages: [...pages, page], activePageId: id, selectedObject: null, selectedObjectId: null });
     if (canvas) {
       canvas.clear();
       canvas.setBackgroundColor(DEFAULT_CANVAS_BACKGROUND, () => canvas.requestRenderAll());
@@ -1252,7 +1501,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
     const data = target.data || createEmptyCanvasJson(canvas.getWidth(), canvas.getHeight());
     await loadPageCanvas(canvas, data);
-    set({ activePageId: pageId, selectedObject: null, selectedPage: true });
+    set({ activePageId: pageId, selectedObject: null, selectedObjectId: null, selectedPage: false });
     // Recapture base states after the new page's objects are loaded onto the canvas,
     // so masterTimelineManager.applyObjectTimeline() starts from correct base values.
     const { masterTimelineManager: tlManager } = await import('../utils/masterTimelineManager');
@@ -1266,14 +1515,23 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (!page) return;
     const timeline = get().timelineProject;
     const posterTrack = getPosterTrack(timeline);
+    const projectId = get().projectId || '';
     const clip: TimelineClip = {
       id: window.crypto?.randomUUID ? `clip-${window.crypto.randomUUID()}` : `clip-${Date.now()}`,
       sceneId: page.id,
       pageId: page.id,
+      projectId,
       name: page.name,
       thumbnailUrl: page.thumbnail,
       startMs: timeline.durationMs,
-      durationMs: 3000,
+      durationMs: durationForTechnicalReelScene(posterTrack.clips.length),
+      animationPreset: TECHNICAL_REEL_PRESET_NAME,
+      canvasSnapshot: page.data,
+      transition: {
+        type: TECHNICAL_REEL_TRANSITION_TYPE,
+        durationMs: TECHNICAL_REEL_TRANSITION_MS,
+      },
+      animation: TECHNICAL_REEL_SCENE_ANIMATION,
       visible: true,
       locked: false,
     };
@@ -1284,6 +1542,142 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       )),
     });
     set({ timelineProject: nextTimeline, selectedTimelineClipId: clip.id });
+    get().saveHistory();
+  },
+
+  applyTechnicalReelPreset: async () => {
+    const pages = await get().syncAllPages();
+    const { canvas, activePageId } = get();
+    const timeline = get().timelineProject;
+    const posterTrack = getPosterTrack(timeline);
+    if (posterTrack.clips.length === 0) return;
+
+    const clips = posterTrack.clips.map((clip, index) => ({
+      ...clip,
+      durationMs: durationForTechnicalReelScene(index),
+      animation: TECHNICAL_REEL_SCENE_ANIMATION,
+      animationPreset: TECHNICAL_REEL_PRESET_NAME,
+      projectId: get().projectId || clip.projectId,
+      canvasSnapshot: pages.find((page) => page.id === clip.pageId)?.data || clip.canvasSnapshot,
+      transition: index < posterTrack.clips.length - 1
+        ? {
+          type: TECHNICAL_REEL_TRANSITION_TYPE,
+          durationMs: TECHNICAL_REEL_TRANSITION_MS,
+        }
+        : clip.transition,
+      visible: clip.visible !== false,
+    }));
+    const pageDuration = new Map(clips.map((clip) => [clip.pageId, clip.durationMs]));
+    const now = new Date().toISOString();
+    const nextPages = pages.map((page) => {
+      const durationMs = pageDuration.get(page.id);
+      if (!durationMs) return page;
+      const result = applyTechnicalReelPresetToCanvasData(page.data, durationMs);
+      return result.data === page.data ? page : { ...page, data: result.data, updatedAt: now };
+    });
+    if (canvas && pageDuration.has(activePageId)) {
+      applyTechnicalReelPresetToCanvas(canvas, pageDuration.get(activePageId) || durationForTechnicalReelScene(0));
+    }
+    const transitions = clips.slice(0, -1).map((clip, index) => ({
+      id: window.crypto?.randomUUID
+        ? `transition-${window.crypto.randomUUID()}`
+        : `transition-${Date.now()}-${index}`,
+      fromClipId: clip.id,
+      toClipId: clips[index + 1].id,
+      type: TECHNICAL_REEL_TRANSITION_TYPE,
+      durationMs: TECHNICAL_REEL_TRANSITION_MS,
+    }));
+    const nextTimeline = normalizeTimelineProject({
+      ...timeline,
+      currentTimeMs: 0,
+      loopPreview: false,
+      fps: 30,
+      tracks: timeline.tracks.map((track) => (
+        track.type === 'poster' ? { ...track, clips } : track
+      )),
+      transitions,
+    });
+    set({
+      pages: nextPages,
+      timelineProject: nextTimeline,
+      selectedTimelineClipId: clips[0]?.id || get().selectedTimelineClipId,
+    });
+    const { masterTimelineManager: tlManager } = await import('../utils/masterTimelineManager');
+    tlManager.captureBaseStates();
+    console.info('[TECKSTUDIO] Applied timeline preset:', {
+      preset: TECHNICAL_REEL_PRESET_NAME,
+      scenes: clips.length,
+      durationMs: nextTimeline.durationMs,
+      fps: nextTimeline.fps,
+    });
+    get().saveHistory();
+  },
+
+  appendReferenceTechnicalReel: async () => {
+    const currentPages = await get().syncAllPages();
+    const { canvas } = get();
+    const referencePages = buildReferenceTechnicalReelPages(
+      TECHNICAL_REEL_REFERENCE_WIDTH,
+      TECHNICAL_REEL_REFERENCE_HEIGHT,
+    );
+    const referenceSceneNames = new Set(referencePages.map((page) => page.name));
+    const referenceSceneNamePattern = /\b(LLM FUNDAMENTALS|FOUNDATIONS\s*→\s*AI ENGINEERING|BEFORE YOU TOUCH AI|BACKEND CORE|ENGINEERING TOOLBELT)\b/i;
+    const preservedPages = currentPages.filter((page) => (
+      !referenceSceneNames.has(page.name)
+      && !referenceSceneNamePattern.test(page.name)
+    ));
+    const timeline = get().timelineProject;
+    const clipsToAdd = referencePages.map((page, index): TimelineClip => ({
+      id: window.crypto?.randomUUID ? `clip-${window.crypto.randomUUID()}` : `clip-${Date.now()}-${index}`,
+      sceneId: page.id,
+      pageId: page.id,
+      projectId: get().projectId || '',
+      name: page.name,
+      thumbnailUrl: page.thumbnail,
+      startMs: 0,
+      durationMs: durationForTechnicalReelScene(index),
+      animationPreset: TECHNICAL_REEL_PRESET_NAME,
+      canvasSnapshot: page.data,
+      transition: index < referencePages.length - 1
+        ? {
+          type: TECHNICAL_REEL_TRANSITION_TYPE,
+          durationMs: TECHNICAL_REEL_TRANSITION_MS,
+        }
+        : undefined,
+      animation: TECHNICAL_REEL_SCENE_ANIMATION,
+      visible: true,
+      locked: false,
+    }));
+    const transitions = clipsToAdd.slice(0, -1).map((clip, index) => ({
+        id: window.crypto?.randomUUID ? `transition-${window.crypto.randomUUID()}` : `transition-${Date.now()}-${index}`,
+        fromClipId: clip.id,
+        toClipId: clipsToAdd[index + 1].id,
+        type: TECHNICAL_REEL_TRANSITION_TYPE,
+        durationMs: TECHNICAL_REEL_TRANSITION_MS,
+      }));
+    set({
+      pages: [...preservedPages, ...referencePages],
+      activePageId: referencePages[0]?.id || get().activePageId,
+      selectedObject: null,
+      selectedObjectId: null,
+      selectedTimelineClipId: clipsToAdd[0]?.id || get().selectedTimelineClipId,
+      timelineProject: normalizeTimelineProject({
+        ...timeline,
+        fps: 30,
+        currentTimeMs: 0,
+        loopPreview: false,
+        tracks: timeline.tracks.map((track) => (
+          track.type === 'poster' ? { ...track, clips: clipsToAdd } : track
+        )),
+        transitions,
+      }),
+    });
+    if (canvas && referencePages[0]) {
+      get().setCanvasDimensions(TECHNICAL_REEL_REFERENCE_WIDTH, TECHNICAL_REEL_REFERENCE_HEIGHT);
+      await loadPageCanvas(canvas, referencePages[0].data);
+      set({ activePageId: referencePages[0].id });
+    }
+    await get().applyTechnicalReelPreset();
     get().saveHistory();
   },
 
@@ -1331,7 +1725,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       data: '',
       updatedAt: new Date().toISOString(),
     };
-    set({ pages: [...pages, page], activePageId: id, selectedObject: null });
+    set({ pages: [...pages, page], activePageId: id, selectedObject: null, selectedObjectId: null });
     if (canvas) {
       canvas.clear();
       canvas.setBackgroundColor('#000000', () => canvas.requestRenderAll());
@@ -1600,11 +1994,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   setTimelineCurrentTime: (currentTimeMs) => {
     const timeline = get().timelineProject;
+    const nextTimeline = {
+      ...timeline,
+      currentTimeMs: Math.min(Math.max(currentTimeMs, 0), timeline.durationMs),
+    };
+    const resolvedScene = resolveSceneAtTime(nextTimeline, nextTimeline.currentTimeMs);
     set({
-      timelineProject: {
-        ...timeline,
-        currentTimeMs: Math.min(Math.max(currentTimeMs, 0), timeline.durationMs),
-      },
+      timelineProject: nextTimeline,
+      selectedTimelineClipId: resolvedScene.activeScene?.id || get().selectedTimelineClipId,
     });
   },
   setTimelineFps: (fps) => {
@@ -1747,13 +2144,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({ timelineProject: nextTimeline });
   },
 
-  setCanvasDimensions: () => {
+  setCanvasDimensions: (width, height) => {
+    const nextWidth = normalizeCanvasDimension(width, DESIGN_WIDTH);
+    const nextHeight = normalizeCanvasDimension(height, DESIGN_HEIGHT);
     const { canvas } = get();
-    if (canvas && (canvas.getWidth() !== DESIGN_WIDTH || canvas.getHeight() !== DESIGN_HEIGHT)) {
-      canvas.setDimensions({ width: DESIGN_WIDTH, height: DESIGN_HEIGHT });
+    if (canvas && (canvas.getWidth() !== nextWidth || canvas.getHeight() !== nextHeight)) {
+      canvas.setDimensions({ width: nextWidth, height: nextHeight });
+      updateAllDiagramConnectors(canvas);
       canvas.requestRenderAll();
     }
-    set({ canvasWidth: DESIGN_WIDTH, canvasHeight: DESIGN_HEIGHT });
+    set({ canvasWidth: nextWidth, canvasHeight: nextHeight });
   },
 
   setCanvasBackgroundColor: (color) => {
@@ -1767,12 +2167,24 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   setCurrentPreset: (presetId) => set({ currentPresetId: presetId }),
 
-  resizeCanvas: () => {
+  resizeCanvas: (width, height) => {
     const { canvas } = get();
+    const nextWidth = normalizeCanvasDimension(width, DESIGN_WIDTH);
+    const nextHeight = normalizeCanvasDimension(height, DESIGN_HEIGHT);
+    set({ canvasWidth: nextWidth, canvasHeight: nextHeight });
     if (!canvas) return;
-    canvas.setDimensions({ width: DESIGN_WIDTH, height: DESIGN_HEIGHT });
-    set({ canvasWidth: DESIGN_WIDTH, canvasHeight: DESIGN_HEIGHT });
-    canvas.renderAll();
+    canvas.setDimensions({ width: nextWidth, height: nextHeight });
+    canvas.getObjects().forEach((object) => {
+      const bounds = object.getBoundingRect(true, true);
+      const nextLeft = Math.min(Math.max(Number(object.left || 0), -bounds.width + 24), Math.max(0, nextWidth - 24));
+      const nextTop = Math.min(Math.max(Number(object.top || 0), -bounds.height + 24), Math.max(0, nextHeight - 24));
+      if (nextLeft !== object.left || nextTop !== object.top) {
+        object.set({ left: nextLeft, top: nextTop } as Record<string, unknown>);
+        object.setCoords();
+      }
+    });
+    updateAllDiagramConnectors(canvas);
+    canvas.requestRenderAll();
     get().saveHistory();
   },
 
@@ -1787,9 +2199,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
   },
   
+  bumpSelectionAnimation: () => {
+    set((state) => ({ selectionAnimationVersion: state.selectionAnimationVersion + 1 }));
+  },
+
   saveHistory: async () => {
     const canvas = get().canvas;
     if (!canvas) return;
+    if (get().isHydratingProject || get().timelinePreviewActive || get().timelinePlaybackState !== 'paused') {
+      return;
+    }
 
     normalizeLoadedTextStyles(canvas);
     const pages = get().syncActivePage();
@@ -1870,7 +2289,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const state = history[prevIndex];
     
     loadCanvasFromJson(canvas, state).then(() => {
-      set({ historyIndex: prevIndex, selectedObject: null });
+      set({ historyIndex: prevIndex, selectedObject: null, selectedObjectId: null });
       localStorage.setItem('teckstudio_project_draft', state);
     }).catch((error) => {
       set({ projectLoadError: error instanceof Error ? error.message : 'Unable to restore undo state.' });
@@ -1885,7 +2304,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const state = history[nextIndex];
     
     loadCanvasFromJson(canvas, state).then(() => {
-      set({ historyIndex: nextIndex, selectedObject: null });
+      set({ historyIndex: nextIndex, selectedObject: null, selectedObjectId: null });
       localStorage.setItem('teckstudio_project_draft', state);
     }).catch((error) => {
       set({ projectLoadError: error instanceof Error ? error.message : 'Unable to restore redo state.' });
@@ -1899,30 +2318,31 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   deleteSelected: () => {
     const { canvas, selectedObject } = get();
     if (canvas && selectedObject) {
+      const deleteObject = (object: fabric.Object) => {
+        const sourceId = String(object.get('id' as keyof fabric.Object) || '');
+        if (sourceId) removeGeneratedTextEffectLayers(canvas, sourceId);
+        const connectorId = object.get('diagramConnectorId' as keyof fabric.Object);
+        const connectorType = String(object.get('teckstudioObjectType' as keyof fabric.Object) || '');
+        const connectorRole = String(object.get('diagramConnectorRole' as keyof fabric.Object) || '');
+        if (connectorId && (connectorType === 'diagramConnectorPath' || connectorRole)) {
+          removeDiagramConnector(canvas, connectorId);
+          return;
+        }
+        const nodeId = getConnectableObjectId(object);
+        if (nodeId) removeConnectorsForNode(canvas, String(nodeId));
+        canvas.remove(object);
+      };
       // If it's an active selection group, delete all objects in it
       if (selectedObject.type === 'activeSelection') {
         const activeSelection = selectedObject as fabric.ActiveSelection;
-        activeSelection.forEachObject((obj) => {
-          const sourceId = String(obj.get('id' as keyof fabric.Object) || '');
-          if (sourceId) removeGeneratedTextEffectLayers(canvas, sourceId);
-          const nodeId = obj.get('architectureNodeId' as keyof fabric.Object);
-          if (obj.get('teckstudioObjectType' as keyof fabric.Object) === 'architectureNode' && nodeId) {
-            removeConnectorsForNode(canvas, String(nodeId));
-          }
-          canvas.remove(obj);
-        });
+        activeSelection.forEachObject(deleteObject);
         canvas.discardActiveObject();
       } else {
-        const sourceId = String(selectedObject.get('id' as keyof fabric.Object) || '');
-        if (sourceId) removeGeneratedTextEffectLayers(canvas, sourceId);
-        const nodeId = selectedObject.get('architectureNodeId' as keyof fabric.Object);
-        if (selectedObject.get('teckstudioObjectType' as keyof fabric.Object) === 'architectureNode' && nodeId) {
-          removeConnectorsForNode(canvas, String(nodeId));
-        }
-        canvas.remove(selectedObject);
+        deleteObject(selectedObject);
       }
+      removeStrayConnectorMarkers(canvas);
       canvas.renderAll();
-      set({ selectedObject: null, selectedPage: true });
+      set({ selectedObject: null, selectedObjectId: null, selectedPage: false });
       get().saveHistory();
     }
   },
@@ -2008,7 +2428,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (canvas) {
       canvas.clear();
       canvas.setBackgroundColor(DEFAULT_CANVAS_BACKGROUND, canvas.renderAll.bind(canvas));
-      set({ selectedObject: null, canvasBackgroundColor: DEFAULT_CANVAS_BACKGROUND });
+      set({ selectedObject: null, selectedObjectId: null, canvasBackgroundColor: DEFAULT_CANVAS_BACKGROUND });
       get().saveHistory();
     }
   },

@@ -1,4 +1,5 @@
 export const AI_ARCHITECTURE_TEMPLATE_NAME = 'AI Chat System Architecture';
+export const DISTRIBUTED_SYSTEM_TEMPLATE_NAME = 'Distributed System Architecture';
 
 export const AI_ARCHITECTURE_PALETTE = {
   background: '#070A0F',
@@ -32,7 +33,21 @@ export type ArchitectureIconName =
   | 'auth'
   | 'stream'
   | 'queue'
-  | 'analytics';
+  | 'analytics'
+  | 'browser'
+  | 'mobile'
+  | 'desktop'
+  | 'loadBalancer'
+  | 'reverseProxy'
+  | 'cache'
+  | 'storage'
+  | 'payment'
+  | 'email'
+  | 'monitoring'
+  | 'logging'
+  | 'metrics'
+  | 'registry'
+  | 'identity';
 
 export type ArchitectureChipConfig = {
   id?: string;
@@ -91,8 +106,17 @@ export type DiagramConnectorRouting =
   | 'horizontal'
   | 'vertical'
   | 'elbow'
+  | 'orthogonal'
   | 'curved'
-  | 'bezier';
+  | 'bezier'
+  | 'loop';
+export type DiagramConnectorType =
+  | DiagramConnectorRouting
+  | 'arrow'
+  | 'double-arrow'
+  | 'dashed'
+  | 'dotted'
+  | 'dashed-arrow';
 export type DiagramArrowStyle = 'none' | 'arrow' | 'open-arrow' | 'circle' | 'diamond';
 export type DiagramConnectorAnimationType =
   | 'moving-dashes'
@@ -124,7 +148,7 @@ export type DiagramConnectorAnimationConfig = {
   duration?: number;
   delay?: number;
   loop?: boolean;
-  easing?: 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out';
+  easing?: 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out' | 'ease-out-back';
   repeatDelay?: number;
   flowColor?: string;
   baseColor?: string;
@@ -154,11 +178,19 @@ export type DiagramConnectorConfig = {
   connectorId?: string;
   sourceNodeId: string;
   targetNodeId: string;
+  sourceObjectId?: string;
+  targetObjectId?: string;
+  manualConnector?: boolean;
+  manualStartPoint?: { x: number; y: number };
+  manualEndPoint?: { x: number; y: number };
+  connectorType?: DiagramConnectorType;
+  lineStyle?: DiagramConnectorStyle;
   sourceAnchor?: ConnectorAnchor;
   targetAnchor?: ConnectorAnchor;
   routing?: DiagramConnectorRouting;
   style?: DiagramConnectorStyle;
   color?: string;
+  arrowheadColor?: string;
   width?: number;
   opacity?: number;
   dashLength?: number;

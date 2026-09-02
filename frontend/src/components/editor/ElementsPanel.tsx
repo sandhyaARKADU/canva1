@@ -23,10 +23,19 @@ import {
   type ShapeDefinition, type ShapeCategory,
 } from '../../utils/shapeRegistry';
 import {
-  ANIMATION_REGISTRY, ANIMATION_CATEGORIES, ANIMATIONS_BY_CATEGORY,
-  searchAnimations, getRecommendations, registerAnimation,
-  type AnimationDefinition, type AnimationCategory,
-} from '../../utils/animationRegistry';
+  EDITOR_ANIMATION_CATEGORIES,
+  EDITOR_ANIMATIONS_BY_CATEGORY,
+  EDITOR_ANIMATION_LIBRARY,
+  applyAnimationToSelectedObject,
+  applyEditorAnimationToObject,
+  getAppliedAnimationIds,
+  getAnimationTargets,
+  resolveAnimationSelection,
+  searchEditorAnimations,
+  type EditorAnimationCategory,
+  type EditorAnimationLibraryItem,
+} from '../../utils/editorAnimationLibrary';
+import { evaluateObjectAnimationAtTime } from '../../utils/animationEvaluator';
 import {
   GRAPHICS_REGISTRY, GRAPHIC_CATEGORIES, GRAPHICS_BY_CATEGORY, searchGraphics,
   type GraphicDefinition, type GraphicCategory,
@@ -36,9 +45,10 @@ import {
   type FormCategory,
 } from '../../utils/formsRegistry';
 import {
-  CHART_ELEMENTS, ELEMENT_SECTIONS, createChartElement,
+  CHART_ELEMENTS, ELEMENT_SECTIONS, addObjectToCanvas, createChartElement, createDiagramBoxElement,
 } from '../../utils/editorElementFactory';
 import type { EditorElement } from '../../types/elements';
+import type { FabricObjectAnimation } from '../../types/timeline';
 import {
   createArchitectureCard,
   createSegmentedHeaderBars,
@@ -58,7 +68,7 @@ import {
 import {
   getConnectorAnimationPreset,
 } from '../../utils/architectureDiagramTypes';
-import type { ArchitectureIconName } from '../../utils/architectureDiagramTypes';
+import type { ArchitectureIconName, DiagramConnectorConfig } from '../../utils/architectureDiagramTypes';
 import {
   TECHNICAL_ACCENTS,
   TECHNICAL_COMPONENT_ITEMS,
@@ -75,6 +85,13 @@ import {
   type TechnicalComponentId,
   type TechnicalElementId,
 } from '../../utils/technicalInfographicDesign';
+import {
+  TECHNICAL_REEL_ELEMENT_ITEMS,
+  TECHNICAL_REEL_PALETTE,
+  createTechnicalReelElement,
+  type TechnicalReelLibraryId,
+} from '../../utils/technicalReelDesign';
+import ProviderAssetPanel from './ProviderAssetPanel';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -138,6 +155,11 @@ const CATEGORY_CONFIGS: CategoryConfig[] = [
     subcategories: ['Illustrations', 'Decorative', 'Abstract', 'Business', 'Technology', 'Education', 'Medical', 'Social Media', 'Patterns'],
   },
   {
+    id: 'provider-assets', label: 'Connected Assets', icon: Globe2,
+    gradient: 'from-cyan-500/30 to-violet-500/30', iconColor: 'text-cyan-300',
+    type: 'interactive',
+  },
+  {
     id: 'videos', label: 'Videos', icon: Film,
     gradient: 'from-red-500/30 to-orange-500/30', iconColor: 'text-red-400',
     type: 'unsupported',
@@ -163,13 +185,28 @@ const CATEGORY_CONFIGS: CategoryConfig[] = [
     type: 'unsupported',
   },
   {
-    id: 'architecture', label: 'Architecture', icon: Network,
+    id: 'system-design', label: 'System Design', icon: Network,
     gradient: 'from-cyan-500/30 to-emerald-500/30', iconColor: 'text-cyan-400',
     type: 'interactive',
   },
   {
     id: 'technical-infographic', label: 'Technical Infographic', icon: Cpu,
     gradient: 'from-emerald-500/30 to-cyan-500/30', iconColor: 'text-emerald-400',
+    type: 'interactive',
+  },
+  {
+    id: 'technical-reel', label: 'Technical Reel', icon: Radio,
+    gradient: 'from-cyan-500/30 to-amber-500/30', iconColor: 'text-cyan-300',
+    type: 'interactive',
+  },
+  {
+    id: 'technical-icons', label: 'Technical Icons', icon: Cpu,
+    gradient: 'from-sky-500/30 to-teal-500/30', iconColor: 'text-sky-300',
+    type: 'interactive',
+  },
+  {
+    id: 'connectors', label: 'Connectors', icon: Workflow,
+    gradient: 'from-sky-500/30 to-violet-500/30', iconColor: 'text-sky-400',
     type: 'interactive',
   },
   {
@@ -221,6 +258,13 @@ const CATEGORY_CONFIGS: CategoryConfig[] = [
   },
 ];
 
+const ELEMENT_CATEGORY_GROUPS: Array<{ title: string; ids: string[] }> = [
+  { title: 'Media', ids: ['images', 'graphics', 'provider-assets', 'videos'] },
+  { title: 'Audio', ids: ['music', 'sound-effects', 'voiceover'] },
+  { title: 'Technical', ids: ['system-design', 'technical-infographic', 'technical-reel', 'technical-icons', 'connectors', 'code'] },
+  { title: 'Design', ids: ['shapes', '3d', 'animations', 'charts', 'forms', 'frames', 'grids', 'tables', 'sheets'] },
+];
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // SHAPE / LINE / FRAME / GRID DEFINITIONS
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -247,6 +291,25 @@ const TABLE_ITEMS = [
   { name: '4×4 Table', rows: 4, cols: 4 },
   { name: 'Pricing Table', rows: 3, cols: 4 },
   { name: 'Schedule', rows: 5, cols: 3 },
+];
+
+const CONNECTOR_PRESETS: Array<{
+  id: string;
+  name: string;
+  description: string;
+  preview: string;
+  config: Partial<DiagramConnectorConfig>;
+}> = [
+  { id: 'straight', name: 'Straight', description: 'Direct line, no arrow', preview: '────', config: { routing: 'straight', connectorType: 'straight', style: 'solid', lineStyle: 'solid', startArrow: 'none', endArrow: 'none', color: '#55A6FF', width: 2 } },
+  { id: 'arrow', name: 'Arrow', description: 'Straight arrow connector', preview: '───→', config: { routing: 'straight', connectorType: 'arrow', style: 'solid', lineStyle: 'solid', startArrow: 'none', endArrow: 'arrow', color: '#43D68A', width: 2 } },
+  { id: 'double-arrow', name: 'Double Arrow', description: 'Two-way relationship', preview: '←──→', config: { routing: 'straight', connectorType: 'double-arrow', style: 'solid', lineStyle: 'solid', startArrow: 'arrow', endArrow: 'arrow', color: '#CF8CFF', width: 2 } },
+  { id: 'elbow', name: 'Elbow', description: 'Clean 90° bend', preview: '─┐→', config: { routing: 'elbow', connectorType: 'elbow', style: 'solid', lineStyle: 'solid', startArrow: 'none', endArrow: 'arrow', color: '#F2C94C', width: 2 } },
+  { id: 'orthogonal', name: 'Orthogonal', description: 'Smart box-to-box route', preview: '┐└→', config: { routing: 'orthogonal', connectorType: 'orthogonal', style: 'solid', lineStyle: 'solid', startArrow: 'none', endArrow: 'arrow', color: '#55A6FF', width: 2 } },
+  { id: 'curved', name: 'Curved', description: 'Bezier connector', preview: '~~~→', config: { routing: 'curved', connectorType: 'curved', style: 'solid', lineStyle: 'solid', startArrow: 'none', endArrow: 'arrow', color: '#FF795B', width: 2, curvature: 0.5 } },
+  { id: 'dashed', name: 'Dashed', description: 'Dashed relation', preview: '- - -', config: { routing: 'straight', connectorType: 'dashed', style: 'dashed', lineStyle: 'dashed', startArrow: 'none', endArrow: 'none', color: '#F2C94C', width: 2, dashLength: 12, dashGap: 8 } },
+  { id: 'dotted', name: 'Dotted', description: 'Dotted relation', preview: '••••→', config: { routing: 'straight', connectorType: 'dotted', style: 'dotted', lineStyle: 'dotted', startArrow: 'none', endArrow: 'arrow', color: '#43D68A', width: 3, dashGap: 8 } },
+  { id: 'dashed-arrow', name: 'Dashed Arrow', description: 'Dashed directional flow', preview: '- - →', config: { routing: 'straight', connectorType: 'dashed-arrow', style: 'dashed', lineStyle: 'dashed', startArrow: 'none', endArrow: 'arrow', color: '#CF8CFF', width: 2, dashLength: 10, dashGap: 7 } },
+  { id: 'loop', name: 'Loop', description: 'Return path around nodes', preview: '└──→', config: { routing: 'loop', connectorType: 'loop', style: 'solid', lineStyle: 'solid', startArrow: 'none', endArrow: 'arrow', color: '#FF665E', width: 2, bendOffset: 24 } },
 ];
 
 const createElementInstanceId = (prefix: string) => (
@@ -286,6 +349,20 @@ const ARCHITECTURE_ICON_COMPONENTS: Record<ArchitectureIconName, React.ElementTy
   stream: Radio,
   queue: ListTree,
   analytics: Gauge,
+  browser: Monitor,
+  mobile: Smartphone,
+  desktop: Monitor,
+  loadBalancer: Workflow,
+  reverseProxy: Workflow,
+  cache: Database,
+  storage: Database,
+  payment: Database,
+  email: MessageSquare,
+  monitoring: Gauge,
+  logging: ListTree,
+  metrics: Gauge,
+  registry: Server,
+  identity: ShieldCheck,
 };
 
 const GENERATE_MODES: { value: GenerateMode; label: string }[] = [
@@ -303,7 +380,7 @@ const GENERATE_MODES: { value: GenerateMode; label: string }[] = [
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all' }) => {
-  const { canvas, saveHistory } = useEditorStore();
+  const { canvas, selectedObject, selectedObjectId, saveHistory, appendReferenceTechnicalReel } = useEditorStore();
 
   // Navigation
   const [view, setView] = useState<'launcher' | 'category'>('launcher');
@@ -321,11 +398,25 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
   const [architectureCategory, setArchitectureCategory] = useState('All');
   const architectureSearchDebounced = useDebouncedValue(architectureSearch, 150);
   const [technicalAccentId, setTechnicalAccentId] = useState<TechnicalAccentId>('green');
+  const [technicalReelSearch, setTechnicalReelSearch] = useState('');
 
   // Animations "See All" sub-view
-  const [animSeeAll, setAnimSeeAll] = useState<AnimationCategory | null>(null);
+  const [animSeeAll, setAnimSeeAll] = useState<EditorAnimationCategory | null>(null);
   const [animSearch, setAnimSearch] = useState('');
   const animSearchDebounced = useDebouncedValue(animSearch, 200);
+  const [animationApplyMessage, setAnimationApplyMessage] = useState('');
+  const [recentAnimationIds, setRecentAnimationIds] = useState<string[]>([]);
+  const [favoriteAnimationIds, setFavoriteAnimationIds] = useState<string[]>([]);
+  const animationHoverPreviewRef = useRef<Array<{
+    object: fabric.Object;
+    state: Record<string, unknown>;
+    text?: string;
+  }>>([]);
+  const motionRecordingRef = useRef<{
+    stop: () => void;
+  } | null>(null);
+  const localAnimationPreviewRef = useRef<number | null>(null);
+  const animationHoverLoopRef = useRef<number | null>(null);
 
   // Photos state
   const [photoMode, setPhotoMode] = useState<'search' | 'generate'>('search');
@@ -374,6 +465,33 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    try {
+      setRecentAnimationIds(JSON.parse(localStorage.getItem('teckstudio.recentAnimationIds') || '[]'));
+      setFavoriteAnimationIds(JSON.parse(localStorage.getItem('teckstudio.favoriteAnimationIds') || '[]'));
+    } catch {
+      setRecentAnimationIds([]);
+      setFavoriteAnimationIds([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('teckstudio.recentAnimationIds', JSON.stringify(recentAnimationIds.slice(0, 12)));
+  }, [recentAnimationIds]);
+
+  useEffect(() => {
+    localStorage.setItem('teckstudio.favoriteAnimationIds', JSON.stringify(favoriteAnimationIds));
+  }, [favoriteAnimationIds]);
+
+  useEffect(() => () => {
+    motionRecordingRef.current?.stop();
+    motionRecordingRef.current = null;
+    if (localAnimationPreviewRef.current !== null) {
+      cancelAnimationFrame(localAnimationPreviewRef.current);
+      localAnimationPreviewRef.current = null;
+    }
+  }, []);
 
   // ─── Initialize from initialTab ──────────────────────────────────────────
   useEffect(() => {
@@ -636,6 +754,74 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
     insertTechnicalObjects(createTechnicalComponent(componentId, technicalAccentId), label);
   };
 
+  const insertTechnicalReelObjects = (objects: fabric.Object[]) => {
+    if (!canvas || objects.length === 0) return;
+    const bounds = objects.reduce((accumulator, object) => {
+      const box = object.getBoundingRect(true, true);
+      return {
+        minLeft: Math.min(accumulator.minLeft, box.left),
+        minTop: Math.min(accumulator.minTop, box.top),
+        maxRight: Math.max(accumulator.maxRight, box.left + box.width),
+        maxBottom: Math.max(accumulator.maxBottom, box.top + box.height),
+      };
+    }, { minLeft: Number.POSITIVE_INFINITY, minTop: Number.POSITIVE_INFINITY, maxRight: Number.NEGATIVE_INFINITY, maxBottom: Number.NEGATIVE_INFINITY });
+    const offsetLeft = (canvas.getWidth() / 2) - ((bounds.minLeft + bounds.maxRight) / 2);
+    const offsetTop = (canvas.getHeight() / 2) - ((bounds.minTop + bounds.maxBottom) / 2);
+    objects.forEach((object) => {
+      object.set({
+        left: Number(object.left || 0) + offsetLeft,
+        top: Number(object.top || 0) + offsetTop,
+      });
+      object.setCoords();
+      canvas.add(object);
+    });
+    const activeObject = objects.length === 1 ? objects[0] : new fabric.ActiveSelection(objects, { canvas });
+    canvas.setActiveObject(activeObject);
+    useEditorStore.getState().setSelectedObject(activeObject);
+    canvas.requestRenderAll();
+    saveHistory();
+  };
+
+  const handleAddTechnicalReelElement = (elementId: TechnicalReelLibraryId) => {
+    insertTechnicalReelObjects(createTechnicalReelElement(elementId));
+  };
+
+  const applyTechnicalReelPaletteColor = (target: fabric.Object, color: string) => {
+    const applyColor = (object: fabric.Object) => {
+      const objectType = String(object.type || '').toLowerCase();
+      const role = String((object as fabric.Object & Record<string, unknown>).posterRole || '').toLowerCase();
+      if (objectType.includes('text')) {
+        object.set('fill', color);
+      } else if (objectType === 'line' || objectType === 'path' || objectType === 'polyline' || role.includes('connector')) {
+        object.set('stroke', color);
+      } else if (objectType === 'triangle' || role.includes('arrowhead')) {
+        object.set({ fill: color, stroke: color });
+      } else {
+        const fill = String(object.get('fill') || '');
+        object.set('stroke', color);
+        if (fill && fill !== 'transparent' && fill !== 'none') object.set('fill', color);
+      }
+      object.setCoords();
+    };
+
+    const children = (target as fabric.Group).getObjects?.();
+    if (children?.length) {
+      children.forEach(applyColor);
+    } else {
+      applyColor(target);
+    }
+    target.setCoords();
+  };
+
+  const handleApplyTechnicalReelPaletteColor = (color: string) => {
+    if (!canvas) return;
+    const activeObject = canvas.getActiveObject();
+    if (!activeObject) return;
+    applyTechnicalReelPaletteColor(activeObject, color);
+    canvas.requestRenderAll();
+    saveHistory();
+  };
+
   const handleApplyTechnicalAccent = () => {
     if (!canvas) return;
     const activeObject = canvas.getActiveObject();
@@ -767,6 +953,136 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
     saveHistory();
   };
 
+  const createSystemDesignShapeNode = (
+    shape: 'rounded' | 'rectangle' | 'circle' | 'ellipse' | 'hexagon' | 'diamond' | 'database' | 'cloud' | 'queue' | 'container' | 'swimlane' | 'boundary',
+    label: string,
+    color = '#55A6FF',
+  ) => {
+    const diagramBoxId = createElementInstanceId('system-design-node');
+    const width = shape === 'container' || shape === 'swimlane' || shape === 'boundary' ? 280 : 180;
+    const height = shape === 'container' || shape === 'swimlane' || shape === 'boundary' ? 150 : 110;
+    const common = {
+      fill: shape === 'boundary' ? 'rgba(85, 166, 255, 0.04)' : '#11151D',
+      stroke: color,
+      strokeWidth: 2,
+      strokeUniform: true,
+      selectable: false,
+      evented: false,
+      objectCaching: false,
+    };
+    let background: fabric.Object;
+    if (shape === 'circle') {
+      background = new fabric.Circle({ left: 45, top: 0, radius: 55, ...common });
+    } else if (shape === 'ellipse') {
+      background = new fabric.Ellipse({ left: 0, top: 10, rx: 90, ry: 45, ...common });
+    } else if (shape === 'hexagon') {
+      background = new fabric.Polygon([
+        { x: 45, y: 0 }, { x: 135, y: 0 }, { x: 180, y: 55 },
+        { x: 135, y: 110 }, { x: 45, y: 110 }, { x: 0, y: 55 },
+      ], common);
+    } else if (shape === 'diamond') {
+      background = new fabric.Polygon([
+        { x: 90, y: 0 }, { x: 180, y: 55 }, { x: 90, y: 110 }, { x: 0, y: 55 },
+      ], common);
+    } else if (shape === 'database') {
+      background = new fabric.Group([
+        new fabric.Ellipse({ left: 0, top: 0, rx: 90, ry: 24, ...common }),
+        new fabric.Rect({ left: 0, top: 24, width: 180, height: 78, fill: '#11151D', stroke: '', strokeWidth: 0, selectable: false, evented: false }),
+        new fabric.Path('M0 102 C0 134 180 134 180 102', { fill: '', stroke: color, strokeWidth: 2, selectable: false, evented: false }),
+        new fabric.Path('M0 63 C0 95 180 95 180 63', { fill: '', stroke: `${color}99`, strokeWidth: 2, selectable: false, evented: false }),
+      ], { left: 0, top: 0, selectable: false, evented: false, objectCaching: false });
+    } else if (shape === 'cloud') {
+      background = new fabric.Path('M42 92 C18 92 0 75 0 53 C0 31 17 17 38 17 C49 -5 78 -9 101 6 C113 14 121 26 124 39 C151 39 168 55 168 77 C168 96 153 110 129 110 H42 Z', common);
+    } else {
+      background = new fabric.Rect({
+        left: 0,
+        top: 0,
+        width,
+        height,
+        rx: shape === 'rounded' || shape === 'queue' || shape === 'container' ? 14 : 0,
+        ry: shape === 'rounded' || shape === 'queue' || shape === 'container' ? 14 : 0,
+        ...common,
+        strokeDashArray: shape === 'boundary' ? [10, 8] : undefined,
+      });
+    }
+    const text = new fabric.Textbox(label, {
+      left: width / 2,
+      top: height / 2,
+      originX: 'center',
+      originY: 'center',
+      width: Math.max(80, width - 24),
+      fontFamily: 'Inter, Arial, sans-serif',
+      fontSize: shape === 'container' || shape === 'boundary' ? 16 : 14,
+      fontWeight: 700,
+      fill: '#F1F3F5',
+      textAlign: 'center',
+      editable: true,
+      selectable: false,
+      evented: false,
+      objectCaching: false,
+    } as fabric.ITextboxOptions & Record<string, unknown>);
+    [background, text].forEach((object, index) => object.set({
+      id: `${diagramBoxId}-${index === 0 ? 'background' : 'text'}`,
+      diagramBoxId,
+      diagramBoxRole: index === 0 ? 'background' : 'text',
+    } as Record<string, unknown>));
+    return new fabric.Group([background, text], {
+      left: 120,
+      top: 180,
+      subTargetCheck: true,
+      objectCaching: false,
+      id: diagramBoxId,
+      name: label,
+      objectType: 'diagramBox',
+      teckstudioObjectType: 'diagramBox',
+      diagramBoxId,
+      diagramBoxRole: 'container',
+      elementCategory: 'Technology',
+      elementSubcategory: 'System Design',
+      elementTags: ['system design', 'architecture', 'diagram', 'box', 'connector', shape],
+      elementEditable: true,
+    } as fabric.IGroupOptions & Record<string, unknown>);
+  };
+
+  const startConnectorPreset = (config: Partial<DiagramConnectorConfig>) => {
+    if (import.meta.env.DEV) {
+      console.debug('[CONNECTOR] sidebar clicked:', config.connectorType || config.routing || 'elbow');
+    }
+    window.dispatchEvent(new CustomEvent('teckstudio:start-connector-mode', { detail: { config } }));
+  };
+
+  const renderConnectors = () => (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-sky-500/20 bg-sky-500/5 p-3">
+        <div className="flex items-center gap-2 text-xs font-bold text-sky-200">
+          <Workflow className="h-4 w-4" />
+          Box-to-Box Connectors
+        </div>
+        <p className="mt-1 text-[9px] leading-relaxed text-zinc-500">
+          Pick a connector, then drag from one visible handle on a box/node/shape to another. Each connector keeps its own routing, arrows, label and animation.
+        </p>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {CONNECTOR_PRESETS.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            aria-label={`Start ${item.name} connector`}
+            onClick={() => startConnectorPreset(item.config)}
+            className="group rounded-xl border border-white/[0.08] bg-[#11151D] p-2 text-left transition-all hover:border-sky-500/60 hover:bg-sky-500/10"
+          >
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <span className="font-mono text-sm font-black text-sky-300">{item.preview}</span>
+              <ArrowRight className="h-3.5 w-3.5 text-sky-400 opacity-70" />
+            </div>
+            <span className="block text-[9px] font-bold text-zinc-200">{item.name}</span>
+            <span className="block text-[8px] leading-tight text-zinc-500">{item.description}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
   const renderArchitectureLibrary = () => {
     const query = architectureSearchDebounced.trim().toLowerCase();
     const matches = (name: string, keywords: string[], category = '') => (
@@ -791,7 +1107,107 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
       architectureCategory === 'All' &&
       matches(item.name, item.keywords, 'animated flow arrows connectors')
     ));
+    const smartConnectors = CONNECTOR_PRESETS.filter((item) => (
+      architectureCategory === 'All' &&
+      matches(item.name, [item.id, item.description], 'smart connectors request response event data flow pubsub')
+    ));
     const components = [
+      {
+        id: 'component-rounded-node',
+        name: 'Rounded Rect Node',
+        keywords: ['rounded', 'rect', 'node', 'process'],
+        icon: RectangleHorizontal,
+        color: '#55A6FF',
+        create: () => createDiagramBoxElement('shape-rounded-rectangle', 'Process'),
+      },
+      {
+        id: 'component-rectangle-node',
+        name: 'Rectangle Node',
+        keywords: ['rectangle', 'node', 'box'],
+        icon: RectangleHorizontal,
+        color: '#43D68A',
+        create: () => createDiagramBoxElement('shape-rectangle', 'Node'),
+      },
+      {
+        id: 'component-circle-node',
+        name: 'Circle Node',
+        keywords: ['circle', 'input', 'output', 'node'],
+        icon: Circle,
+        color: '#43D68A',
+        create: () => createSystemDesignShapeNode('circle', 'Input'),
+      },
+      {
+        id: 'component-ellipse-node',
+        name: 'Ellipse Node',
+        keywords: ['ellipse', 'output', 'terminator'],
+        icon: Circle,
+        color: '#CF8CFF',
+        create: () => createSystemDesignShapeNode('ellipse', 'Output', '#CF8CFF'),
+      },
+      {
+        id: 'component-hexagon-node',
+        name: 'Hexagon Node',
+        keywords: ['hexagon', 'service', 'compute'],
+        icon: BoxIcon,
+        color: '#FF795B',
+        create: () => createSystemDesignShapeNode('hexagon', 'Service', '#FF795B'),
+      },
+      {
+        id: 'component-decision-diamond',
+        name: 'Decision Diamond',
+        keywords: ['decision', 'diamond', 'branch'],
+        icon: BoxIcon,
+        color: '#F2C94C',
+        create: () => createSystemDesignShapeNode('diamond', 'Decision', '#F2C94C'),
+      },
+      {
+        id: 'component-database-cylinder',
+        name: 'Database Cylinder',
+        keywords: ['database', 'cylinder', 'sql', 'nosql'],
+        icon: Database,
+        color: '#F2C94C',
+        create: () => createSystemDesignShapeNode('database', 'Database', '#F2C94C'),
+      },
+      {
+        id: 'component-cloud-node',
+        name: 'Cloud Node',
+        keywords: ['cloud', 'aws', 'gcp', 'azure'],
+        icon: Cloud,
+        color: '#55A6FF',
+        create: () => createSystemDesignShapeNode('cloud', 'Cloud', '#55A6FF'),
+      },
+      {
+        id: 'component-queue-box',
+        name: 'Queue Box',
+        keywords: ['queue', 'message', 'buffer'],
+        icon: ListTree,
+        color: '#FF795B',
+        create: () => createSystemDesignShapeNode('queue', 'Queue', '#FF795B'),
+      },
+      {
+        id: 'component-container-box',
+        name: 'Container / Group Box',
+        keywords: ['container', 'group', 'section'],
+        icon: Layers,
+        color: '#55A6FF',
+        create: () => createSystemDesignShapeNode('container', 'Service Group', '#55A6FF'),
+      },
+      {
+        id: 'component-swimlane',
+        name: 'Swimlane',
+        keywords: ['swimlane', 'lane', 'boundary'],
+        icon: Layers,
+        color: '#43D68A',
+        create: () => createSystemDesignShapeNode('swimlane', 'Swimlane', '#43D68A'),
+      },
+      {
+        id: 'component-section-boundary',
+        name: 'Section Boundary',
+        keywords: ['section', 'boundary', 'group'],
+        icon: Frame,
+        color: '#CF8CFF',
+        create: () => createSystemDesignShapeNode('boundary', 'Boundary', '#CF8CFF'),
+      },
       {
         id: 'component-status-dot',
         name: 'Status Dot',
@@ -834,10 +1250,10 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
         <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3">
           <div className="flex items-center gap-2 text-xs font-bold text-cyan-200">
             <Network className="h-4 w-4" />
-            Diagram Symbols & Components
+            System Design Builder
           </div>
           <p className="mt-1 text-[9px] leading-relaxed text-zinc-500">
-            Vector symbols, editable architecture boxes and reusable arrow marks. Select an item, then recolor, rotate, flip, duplicate or group it normally.
+            Editable distributed-system nodes, smart connector tools, database cylinders, service cards and architecture symbols for professional system diagrams.
           </p>
         </div>
 
@@ -847,7 +1263,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
             type="text"
             value={architectureSearch}
             onChange={(event) => setArchitectureSearch(event.target.value)}
-            placeholder="Search user, API, GPU, queue, arrow..."
+            placeholder="Search client, API, microservice, database, queue..."
             className="w-full rounded-lg border border-white/[0.08] bg-[#12121B] py-2 pl-8 pr-8 text-[11px] text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-cyan-500"
           />
           {architectureSearch && (
@@ -876,7 +1292,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
 
         {components.length > 0 && (
           <div>
-            <h4 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Diagram Components</h4>
+            <h4 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Core Shapes</h4>
             <div className="grid grid-cols-2 gap-2">
               {components.map((item) => {
                 const Icon = item.icon;
@@ -899,7 +1315,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
 
         {symbols.length > 0 && (
           <div>
-            <h4 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Vector Symbols</h4>
+            <h4 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">System Icons</h4>
             <div className="grid grid-cols-3 gap-2">
               {symbols.map((item) => {
                 const Icon = ARCHITECTURE_ICON_COMPONENTS[item.icon];
@@ -922,7 +1338,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
 
         {boxes.length > 0 && (
           <div>
-            <h4 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Architecture Boxes</h4>
+            <h4 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Architecture Nodes</h4>
             <div className="grid grid-cols-2 gap-2">
               {boxes.map((item) => (
                 <button
@@ -961,6 +1377,27 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
                     }}
                   />
                   <span className="text-[9px] font-semibold leading-tight text-zinc-400">{item.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {smartConnectors.length > 0 && (
+          <div>
+            <h4 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-sky-400">Smart Connectors</h4>
+            <div className="grid grid-cols-2 gap-2">
+              {smartConnectors.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-label={`Use ${item.name} connector`}
+                  onClick={() => startConnectorPreset(item.config)}
+                  className="rounded-xl border border-sky-500/20 bg-[#11151D] p-2 text-left transition-all hover:border-sky-400/60"
+                >
+                  <span className="block font-mono text-sm font-black text-sky-300">{item.preview}</span>
+                  <span className="block text-[9px] font-semibold leading-tight text-zinc-400">{item.name}</span>
+                  <span className="block text-[8px] text-zinc-600">{item.description}</span>
                 </button>
               ))}
             </div>
@@ -1008,9 +1445,9 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
           </div>
         )}
 
-        {symbols.length === 0 && boxes.length === 0 && arrows.length === 0 && animatedFlows.length === 0 && components.length === 0 && (
+        {symbols.length === 0 && boxes.length === 0 && arrows.length === 0 && animatedFlows.length === 0 && components.length === 0 && smartConnectors.length === 0 && (
           <div className="py-8 text-center">
-            <p className="text-xs text-zinc-400">No matching architecture elements</p>
+            <p className="text-xs text-zinc-400">No matching system design elements</p>
             <button type="button" onClick={() => { setArchitectureSearch(''); setArchitectureCategory('All'); }} className="mt-2 text-[10px] text-cyan-400">
               Clear filters
             </button>
@@ -1024,8 +1461,22 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
   // RENDER: SHAPES (interactive)
   // ═══════════════════════════════════════════════════════════════════════════
 
+  const DIAGRAM_NODE_SHAPE_IDS = new Set(['rectangle', 'square', 'rounded-rect', 'flow-process']);
+
+  const diagramNodeFactoryId = (shapeId: string) => {
+    if (shapeId === 'square') return 'shape-square';
+    if (shapeId === 'rounded-rect') return 'shape-rounded-rectangle';
+    return 'shape-rectangle';
+  };
+
   const insertShape = (def: ShapeDefinition) => {
     if (!canvas) return;
+    if (DIAGRAM_NODE_SHAPE_IDS.has(def.id)) {
+      const node = createDiagramBoxElement(diagramNodeFactoryId(def.id));
+      addObjectToCanvas(canvas, node);
+      saveHistory();
+      return;
+    }
     const shape = def.create();
     canvas.add(shape);
     canvas.setActiveObject(shape);
@@ -1614,6 +2065,182 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
     );
   };
 
+  const renderTechnicalReel = () => {
+    const query = technicalReelSearch.trim().toLowerCase();
+    const visibleTechnicalReelItems = TECHNICAL_REEL_ELEMENT_ITEMS.filter((item) => {
+      if (!query) return true;
+      return [
+        item.id,
+        item.label,
+        item.description,
+        item.group,
+      ].some((value) => String(value).toLowerCase().includes(query));
+    });
+
+    return (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3">
+        <div className="flex items-center gap-2 text-xs font-bold text-cyan-200">
+          <Radio className="h-4 w-4" />
+          Technical Reel Reference Kit
+        </div>
+        <p className="mt-1 text-[9px] leading-relaxed text-zinc-500">
+          Builds the five editable reference scenes once: Before AI, Backend Core, Engineering Toolbelt, LLM Fundamentals, and Foundations.
+        </p>
+        <button
+          type="button"
+          onClick={() => void appendReferenceTechnicalReel()}
+          className="mt-3 w-full rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-3 py-2 text-[10px] font-black text-cyan-100 hover:bg-cyan-500/20"
+        >
+          Add 5-Scene Reference Reel
+        </button>
+      </div>
+
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+        <input
+          type="text"
+          value={technicalReelSearch}
+          onChange={(event) => setTechnicalReelSearch(event.target.value)}
+          placeholder="Search python, connector, llm, chart, roadmap..."
+          className="w-full rounded-lg border border-white/[0.08] bg-[#12121B] py-2 pl-8 pr-8 text-[11px] text-zinc-100 placeholder:text-zinc-500 outline-none transition-all focus:border-cyan-500"
+        />
+        {technicalReelSearch && (
+          <button
+            type="button"
+            onClick={() => setTechnicalReelSearch('')}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        )}
+      </div>
+
+      <div>
+        <h4 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Technical Reel Elements</h4>
+        {(['Backgrounds', 'Cards', 'Nodes', 'Progress', 'Charts', 'Code', 'Terminal', 'Connectors', 'Indicators', 'AI Elements', 'Technical Icons'] as const).map((group) => (
+          <div key={group} className="mb-3">
+            <div className="mb-1 text-[9px] font-black uppercase tracking-[0.18em] text-cyan-300/80">{group}</div>
+            <div className="grid grid-cols-2 gap-2">
+              {visibleTechnicalReelItems.filter((item) => item.group === group).map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handleAddTechnicalReelElement(item.id)}
+                  className="group rounded-xl border border-white/[0.08] bg-[#0B1118] p-2.5 text-left shadow-[0_8px_24px_rgba(0,0,0,0.18)] transition-all hover:-translate-y-0.5 hover:border-cyan-500/50 hover:bg-cyan-500/10"
+                >
+                  <span className="mb-2 block h-1.5 w-10 rounded-full bg-gradient-to-r from-cyan-300 via-teal-300 to-amber-300 opacity-70 transition-opacity group-hover:opacity-100" />
+                  <span className="block text-[10px] font-bold text-zinc-200">{item.label}</span>
+                  <span className="mt-1 block text-[8px] leading-tight text-zinc-500">{item.description}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+        {visibleTechnicalReelItems.length === 0 && renderEmptyState('No technical reel elements found', 'Try python, fastapi, sql, terminal, backend, llm, chart, progress, connector, tool, ai, roadmap, code, system design, or architecture')}
+      </div>
+
+      <div className="rounded-xl border border-white/[0.08] bg-[#0B1118] p-3">
+        <h4 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Reference Color Palette</h4>
+        <div className="grid grid-cols-4 gap-2">
+          {TECHNICAL_REEL_PALETTE.map((item) => (
+            <button
+              key={item.name}
+              type="button"
+              onClick={() => handleApplyTechnicalReelPaletteColor(item.color)}
+              title={`Apply ${item.name} to selected reel object`}
+              className="group rounded-lg border border-white/[0.08] bg-zinc-950/70 p-1.5 text-left hover:border-cyan-400/60"
+            >
+              <span className="block h-5 rounded-md border border-white/10" style={{ backgroundColor: item.color }} />
+              <span className="mt-1 block truncate text-[8px] font-bold text-zinc-500 group-hover:text-cyan-200">{item.name}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-white/[0.08] bg-[#070D12] p-3 text-[10px] leading-relaxed text-zinc-500">
+        Elements are real Fabric.js shapes/text/paths with <span className="font-mono text-cyan-300">posterRole</span> metadata, so Technical Reel can auto-animate progress bars, chart bars, connectors, code, dots, cards, and headings.
+      </div>
+    </div>
+    );
+  };
+
+  const renderTechnicalIcons = () => {
+    const query = technicalReelSearch.trim().toLowerCase();
+    const visibleIconItems = TECHNICAL_REEL_ELEMENT_ITEMS.filter((item) => {
+      if (item.group !== 'Technical Icons') return false;
+      if (!query) return true;
+      return [item.id, item.label, item.description].some((value) => String(value).toLowerCase().includes(query));
+    });
+    const iconSections = [
+      { label: 'Backend', ids: ['icon-python', 'icon-fastapi', 'icon-api', 'icon-backend', 'icon-server', 'icon-code-icon'] },
+      { label: 'DevOps', ids: ['icon-bash', 'icon-git', 'icon-docker', 'icon-debug', 'icon-deploy', 'icon-terminal-icon'] },
+      { label: 'AI/ML', ids: ['icon-ai', 'icon-llm', 'icon-model', 'icon-inference', 'icon-token', 'icon-prompt', 'icon-context', 'icon-output'] },
+      { label: 'Database', ids: ['icon-sql', 'icon-database-icon'] },
+      { label: 'System', ids: ['icon-system', 'icon-gateway', 'icon-event-bus', 'icon-worker', 'icon-settings'] },
+      { label: 'General', ids: ['icon-tool', 'icon-check', 'icon-warning', 'icon-play', 'icon-arrow-icon', 'icon-chart-icon'] },
+    ];
+
+    return (
+      <div className="space-y-4">
+        <div className="rounded-xl border border-sky-500/20 bg-sky-500/5 p-3">
+          <div className="flex items-center gap-2 text-xs font-bold text-sky-200">
+            <Cpu className="h-4 w-4" />
+            Technical Icons
+          </div>
+          <p className="mt-1 text-[9px] leading-relaxed text-zinc-500">
+            Editable vector-style icon chips for backend, DevOps, AI/ML, database, and system architecture reels.
+          </p>
+        </div>
+
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+          <input
+            type="text"
+            value={technicalReelSearch}
+            onChange={(event) => setTechnicalReelSearch(event.target.value)}
+            placeholder="Search docker, database, llm, gateway..."
+            className="w-full rounded-lg border border-white/[0.08] bg-[#12121B] py-2 pl-8 pr-8 text-[11px] text-zinc-100 placeholder:text-zinc-500 outline-none transition-all focus:border-sky-500"
+          />
+          {technicalReelSearch && (
+            <button
+              type="button"
+              onClick={() => setTechnicalReelSearch('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+
+        {iconSections.map((section) => {
+          const sectionItems = visibleIconItems.filter((item) => section.ids.includes(item.id));
+          if (sectionItems.length === 0) return null;
+          return (
+            <div key={section.label}>
+              <div className="mb-1 text-[9px] font-black uppercase tracking-[0.18em] text-sky-300/80">{section.label}</div>
+              <div className="grid grid-cols-2 gap-2">
+                {sectionItems.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => handleAddTechnicalReelElement(item.id)}
+                    className="group rounded-xl border border-white/[0.08] bg-[#0B1118] p-2.5 text-left shadow-[0_8px_24px_rgba(0,0,0,0.18)] transition-all hover:-translate-y-0.5 hover:border-sky-500/50 hover:bg-sky-500/10"
+                  >
+                    <span className="mb-2 block h-1.5 w-10 rounded-full bg-gradient-to-r from-sky-300 to-teal-300 opacity-70 transition-opacity group-hover:opacity-100" />
+                    <span className="block text-[10px] font-bold text-zinc-200">{item.label}</span>
+                    <span className="mt-1 block text-[8px] leading-tight text-zinc-500">{item.description}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+        {visibleIconItems.length === 0 && renderEmptyState('No technical icons found', 'Try docker, database, llm, gateway, python, deploy, or system')}
+      </div>
+    );
+  };
+
   const renderCode = () => (
     <div className="space-y-4">
       <div>
@@ -1696,55 +2323,464 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
   // RENDER: ANIMATIONS
   // ═══════════════════════════════════════════════════════════════════════════
 
-  const insertAnimation = (def: AnimationDefinition) => {
-    if (!canvas) return;
-    const obj = def.create();
-    const fullText = ['text', 'i-text', 'textbox'].includes(obj.type || '')
-      ? String((obj as fabric.Text).text || '')
-      : undefined;
-    obj.set({
-      animationConfig: {
-        format: 'teckstudio-timestamp-v1',
-        animationType: def.preset,
-        durationMs: def.durationMs,
-        delayMs: 0,
-        easing: 'ease-in-out',
-        loop: def.loop,
-        sourceAnimationId: def.id,
-        fullText,
-      },
-      isAnimated: true,
-      animatedExportSupported: true,
-      timelineBaseVisible: obj.visible !== false,
-    } as Record<string, unknown>);
-    canvas.add(obj);
-    canvas.setActiveObject(obj);
-    canvas.renderAll();
-    saveHistory();
-    // Start the animation
-    const cleanup = def.animate(obj, canvas);
-    registerAnimation(def.id, cleanup);
+  const animationById = (id: string) => EDITOR_ANIMATION_LIBRARY.find((item) => item.id === id);
+
+  const getCurrentAnimationSelection = () => resolveAnimationSelection(canvas, selectedObject, selectedObjectId);
+
+  const isMovingAnimationDefinition = (item: EditorAnimationLibraryItem | undefined) => item?.category === 'motion';
+
+  const resolveAnimationDefinition = (animation: FabricObjectAnimation | null | undefined) => {
+    if (!animation) return undefined;
+    const sourceAnimationId = String(animation.params?.sourceAnimationId || '');
+    return sourceAnimationId
+      ? animationById(sourceAnimationId)
+      : EDITOR_ANIMATION_LIBRARY.find((item) => item.type === animation.type);
   };
 
-  const renderAnimCard = (def: AnimationDefinition) => (
-    <button
-      key={def.id}
-      onClick={() => insertAnimation(def)}
-      className="aspect-square bg-[#12121B]/80 border border-white/[0.08]/60 hover:border-orange-500/50 rounded-xl flex flex-col items-center justify-center gap-1 cursor-pointer transition-all hover:scale-[1.03] group overflow-hidden relative"
-      title={def.name}
-    >
-      <div
-        className="w-full h-full flex items-center justify-center p-2"
-        dangerouslySetInnerHTML={{ __html: def.thumbnail() }}
-      />
-      <div className="absolute top-1 right-1 bg-orange-500/80 rounded-full w-3.5 h-3.5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-        <span className="text-[7px] text-white font-bold">▶</span>
-      </div>
-      <span className="text-[9px] font-medium text-zinc-500 group-hover:text-zinc-300 transition-colors text-center px-1 leading-tight truncate w-full">{def.name}</span>
-    </button>
-  );
+  const getActiveObjectAnimation = (): FabricObjectAnimation | null => {
+    const currentSelection = getCurrentAnimationSelection();
+    const target = getAnimationTargets(currentSelection)[0];
+    const animations = (target?.get('objectAnimations' as keyof fabric.Object) as FabricObjectAnimation[] | undefined) || [];
+    return animations.find((animation) => isMovingAnimationDefinition(resolveAnimationDefinition(animation))) || animations[0] || null;
+  };
 
-  const renderAnimRow = (catDef: { id: AnimationCategory; label: string }, anims: AnimationDefinition[]) => (
+  const activeObjectAnimation = getActiveObjectAnimation();
+  const activeAnimationDefinition = resolveAnimationDefinition(activeObjectAnimation);
+  const activeMovingAnimation = activeObjectAnimation && isMovingAnimationDefinition(activeAnimationDefinition)
+    ? activeObjectAnimation
+    : null;
+
+  const updateActiveMovingAnimation = (updates: Partial<FabricObjectAnimation>, paramsUpdates: Record<string, unknown> = {}) => {
+    if (!canvas || !activeMovingAnimation) return;
+    const currentSelection = getCurrentAnimationSelection();
+    const targets = getAnimationTargets(currentSelection);
+    if (!targets.length) {
+      setAnimationApplyMessage('Select an element on the canvas to customize moving animation.');
+      return;
+    }
+    targets.forEach((object) => {
+      const animations = ((object.get('objectAnimations' as keyof fabric.Object) as FabricObjectAnimation[] | undefined) || []);
+      const nextAnimations = animations.map((animation, index) => {
+        if (index !== 0 && animation.id !== activeMovingAnimation.id) return animation;
+        const currentParams = (animation.params || {}) as Record<string, unknown>;
+        const currentMovement = (currentParams.movement || {}) as Record<string, unknown>;
+        return {
+          ...animation,
+          ...updates,
+          params: {
+            ...currentParams,
+            movement: {
+              ...currentMovement,
+              ...paramsUpdates,
+            },
+          },
+        };
+      });
+      object.set({ objectAnimations: nextAnimations, isAnimated: true, animatedExportSupported: true } as Record<string, unknown>);
+      object.setCoords();
+    });
+    canvas.requestRenderAll();
+    saveHistory();
+    useEditorStore.getState().bumpSelectionAnimation();
+    const previewDef = activeAnimationDefinition
+      ? {
+        ...activeAnimationDefinition,
+        durationMs: updates.durationMs || activeMovingAnimation.durationMs,
+        easing: updates.easing || activeMovingAnimation.easing || activeAnimationDefinition.easing,
+        loop: updates.loop ?? activeMovingAnimation.loop ?? activeAnimationDefinition.loop,
+        params: {
+          ...(activeMovingAnimation.params || {}),
+          movement: {
+            ...(((activeMovingAnimation.params || {}) as Record<string, unknown>).movement as Record<string, unknown> || {}),
+            ...paramsUpdates,
+          },
+        },
+      }
+      : null;
+    if (previewDef) previewAppliedAnimation(previewDef, targets);
+    setAnimationApplyMessage('Moving animation settings updated.');
+  };
+
+  const clearAnimationHoverPreview = () => {
+    if (animationHoverLoopRef.current !== null) {
+      cancelAnimationFrame(animationHoverLoopRef.current);
+      animationHoverLoopRef.current = null;
+    }
+    if (!canvas || animationHoverPreviewRef.current.length === 0) return;
+    animationHoverPreviewRef.current.forEach(({ object, state, text }) => {
+      object.set(state as Record<string, never>);
+      if (text !== undefined && 'text' in object) (object as fabric.Text).set('text', text);
+      object.setCoords();
+    });
+    animationHoverPreviewRef.current = [];
+    canvas.requestRenderAll();
+  };
+
+  const previewAnimationOnSelection = (def: EditorAnimationLibraryItem) => {
+    if (!canvas || def.mode === 'insert') return;
+    const currentSelection = getCurrentAnimationSelection();
+    if (!currentSelection) return;
+    clearAnimationHoverPreview();
+    const targets = getAnimationTargets(currentSelection);
+    animationHoverPreviewRef.current = targets.map((object) => ({
+      object,
+      state: {
+        left: object.left,
+        top: object.top,
+        width: object.width,
+        height: object.height,
+        scaleX: object.scaleX,
+        scaleY: object.scaleY,
+        angle: object.angle,
+        opacity: object.opacity,
+        strokeDashArray: object.strokeDashArray,
+        strokeDashOffset: object.strokeDashOffset,
+      },
+      text: 'text' in object ? String((object as fabric.Text).text || '') : undefined,
+    }));
+    const duration = Math.max(def.durationMs || 1000, 450);
+    const startedAt = performance.now();
+    const applyHoverFrame = (now: number) => {
+      const elapsed = (now - startedAt) % duration;
+      targets.forEach((object) => {
+        const base = animationHoverPreviewRef.current.find((entry) => entry.object === object);
+        if (!base) return;
+        const state = base.state;
+        const width = state.width === undefined ? undefined : Number(state.width);
+        const height = state.height === undefined ? undefined : Number(state.height);
+        const scaleX = Number(state.scaleX ?? 1);
+        const scaleY = Number(state.scaleY ?? 1);
+        object.set({
+          left: Number(state.left ?? 0),
+          top: Number(state.top ?? 0),
+          width,
+          height,
+          scaleX,
+          scaleY,
+          angle: Number(state.angle ?? 0),
+          opacity: Number(state.opacity ?? 1),
+          strokeDashArray: state.strokeDashArray as never,
+          strokeDashOffset: state.strokeDashOffset as never,
+        });
+        const fullText = base.text || '';
+        if (base.text !== undefined && 'text' in object) (object as fabric.Text).set('text', base.text);
+        const evaluation = evaluateObjectAnimationAtTime({
+          animation: {
+            type: def.type,
+            startMs: 0,
+            durationMs: duration,
+            easing: def.easing || 'ease-out',
+            loop: true,
+            direction: def.direction,
+            distance: def.distance,
+            params: def.params,
+          },
+          localTimeMs: elapsed,
+          width: canvas.getWidth(),
+          height: canvas.getHeight(),
+          textLength: fullText.length,
+          objectWidth: (width || 0) * scaleX,
+          objectHeight: (height || 0) * scaleY,
+        });
+        const dimensionPatch: Record<string, unknown> = {};
+        if (evaluation.widthFactor !== undefined && width !== undefined) dimensionPatch.width = Math.max(width * evaluation.widthFactor, 0.001);
+        if (evaluation.heightFactor !== undefined && height !== undefined) dimensionPatch.height = Math.max(height * evaluation.heightFactor, 0.001);
+        object.set({
+          opacity: Number(state.opacity ?? 1) * evaluation.opacity,
+          left: Number(state.left ?? 0) + evaluation.translateX,
+          top: Number(state.top ?? 0) + evaluation.translateY,
+          scaleX: scaleX * evaluation.scaleX,
+          scaleY: scaleY * evaluation.scaleY,
+          angle: Number(state.angle ?? 0) + evaluation.rotation,
+          ...dimensionPatch,
+        });
+        if ('text' in object && evaluation.textValue !== undefined) {
+          (object as fabric.Text).set('text', evaluation.textValue);
+        } else if ('text' in object && evaluation.visibleTextLength !== undefined) {
+          (object as fabric.Text).set('text', fullText.slice(0, evaluation.visibleTextLength));
+        }
+        object.setCoords();
+      });
+      canvas.requestRenderAll();
+      if (animationHoverLoopRef.current === null) return;
+      animationHoverLoopRef.current = requestAnimationFrame(applyHoverFrame);
+    };
+    animationHoverLoopRef.current = requestAnimationFrame(applyHoverFrame);
+  };
+
+  const toggleAnimationFavorite = (id: string) => {
+    setFavoriteAnimationIds((current) => (
+      current.includes(id) ? current.filter((itemId) => itemId !== id) : [id, ...current]
+    ));
+  };
+
+  const previewAppliedAnimation = (def: EditorAnimationLibraryItem, targets: fabric.Object[]) => {
+    if (!canvas || targets.length === 0) return;
+    if (localAnimationPreviewRef.current !== null) {
+      cancelAnimationFrame(localAnimationPreviewRef.current);
+      localAnimationPreviewRef.current = null;
+    }
+    const duration = Math.min(Math.max(def.durationMs || 1000, 400), 2600);
+    const baseStates = targets.map((object) => ({
+      object,
+      left: object.left ?? 0,
+      top: object.top ?? 0,
+      width: object.width,
+      height: object.height,
+      scaleX: object.scaleX ?? 1,
+      scaleY: object.scaleY ?? 1,
+      angle: object.angle ?? 0,
+      opacity: object.opacity ?? 1,
+      text: 'text' in object ? String((object as fabric.Text).text || '') : undefined,
+    }));
+    const startedAt = performance.now();
+    const applyFrame = (now: number) => {
+      const elapsed = Math.min(now - startedAt, duration);
+      baseStates.forEach((base) => {
+        const fullText = base.text || '';
+        base.object.set({
+          left: base.left,
+          top: base.top,
+          width: base.width,
+          height: base.height,
+          scaleX: base.scaleX,
+          scaleY: base.scaleY,
+          angle: base.angle,
+          opacity: base.opacity,
+        });
+        if (base.text !== undefined) (base.object as fabric.Text).set('text', base.text);
+        const evaluation = evaluateObjectAnimationAtTime({
+          animation: {
+            type: def.type,
+            startMs: 0,
+            durationMs: duration,
+            easing: def.easing || 'linear',
+            loop: false,
+            direction: def.direction,
+            distance: def.distance,
+            params: def.params,
+          },
+          localTimeMs: elapsed,
+          width: canvas.getWidth(),
+          height: canvas.getHeight(),
+          textLength: fullText.length,
+          objectWidth: (base.width || 0) * base.scaleX,
+          objectHeight: (base.height || 0) * base.scaleY,
+        });
+        const dimensionPatch: Record<string, unknown> = {};
+        if (evaluation.widthFactor !== undefined && base.width !== undefined) dimensionPatch.width = Math.max(base.width * evaluation.widthFactor, 0.001);
+        if (evaluation.heightFactor !== undefined && base.height !== undefined) dimensionPatch.height = Math.max(base.height * evaluation.heightFactor, 0.001);
+        base.object.set({
+          opacity: base.opacity * evaluation.opacity,
+          left: base.left + evaluation.translateX,
+          top: base.top + evaluation.translateY,
+          scaleX: base.scaleX * evaluation.scaleX,
+          scaleY: base.scaleY * evaluation.scaleY,
+          angle: base.angle + evaluation.rotation,
+          ...dimensionPatch,
+        });
+        if ('text' in base.object && evaluation.textValue !== undefined) {
+          (base.object as fabric.Text).set('text', evaluation.textValue);
+        } else if ('text' in base.object && evaluation.visibleTextLength !== undefined) {
+          (base.object as fabric.Text).set('text', fullText.slice(0, evaluation.visibleTextLength));
+        }
+        base.object.setCoords();
+      });
+      canvas.requestRenderAll();
+      if (elapsed < duration) {
+        localAnimationPreviewRef.current = requestAnimationFrame(applyFrame);
+        return;
+      }
+      baseStates.forEach((base) => {
+        base.object.set({
+          left: base.left,
+          top: base.top,
+          width: base.width,
+          height: base.height,
+          scaleX: base.scaleX,
+          scaleY: base.scaleY,
+          angle: base.angle,
+          opacity: base.opacity,
+        });
+        if (base.text !== undefined) (base.object as fabric.Text).set('text', base.text);
+        base.object.setCoords();
+      });
+      canvas.requestRenderAll();
+      localAnimationPreviewRef.current = null;
+    };
+    localAnimationPreviewRef.current = requestAnimationFrame(applyFrame);
+  };
+
+  const startMotionPathRecording = (def: EditorAnimationLibraryItem) => {
+    if (!canvas) return;
+    const currentSelection = getCurrentAnimationSelection();
+    if (!currentSelection) {
+      setAnimationApplyMessage('Select an element on the canvas to apply this animation.');
+      return;
+    }
+    motionRecordingRef.current?.stop();
+    const target = getAnimationTargets(currentSelection)[0];
+    if (!target) {
+      setAnimationApplyMessage('Select one object to create a motion path.');
+      return;
+    }
+    const baseLeft = target.left || 0;
+    const baseTop = target.top || 0;
+    const points: Array<{ x: number; y: number }> = [{ x: 0, y: 0 }];
+    let guide: fabric.Polyline | null = new fabric.Polyline([{ x: baseLeft, y: baseTop }], {
+      fill: '',
+      stroke: '#22d3ee',
+      strokeWidth: 2,
+      strokeDashArray: [8, 6],
+      selectable: false,
+      evented: false,
+      excludeFromExport: true,
+      opacity: 0.75,
+    } as fabric.IPolylineOptions & Record<string, unknown>);
+    canvas.add(guide);
+    canvas.requestRenderAll();
+    const handleMoving = (event: fabric.IEvent) => {
+      if (event.target !== target) return;
+      const nextPoint = {
+        x: Math.round((target.left || 0) - baseLeft),
+        y: Math.round((target.top || 0) - baseTop),
+      };
+      const previous = points[points.length - 1];
+      if (!previous || Math.abs(previous.x - nextPoint.x) + Math.abs(previous.y - nextPoint.y) >= 6) {
+        points.push(nextPoint);
+        if (guide) {
+          guide.set('points' as keyof fabric.Polyline, points.map((point) => ({ x: baseLeft + point.x, y: baseTop + point.y })) as never);
+          guide.setCoords();
+          canvas.requestRenderAll();
+        }
+      }
+    };
+    const finishRecording = () => {
+      canvas.off('object:moving', handleMoving);
+      canvas.off('mouse:up', finishRecording);
+      motionRecordingRef.current = null;
+      if (guide) {
+        canvas.remove(guide);
+        guide = null;
+      }
+      if (points.length < 2) {
+        setAnimationApplyMessage('Drag the selected object to record a motion path.');
+        canvas.requestRenderAll();
+        return;
+      }
+      const sampled = points.filter((_, index) => index === 0 || index === points.length - 1 || index % Math.max(Math.floor(points.length / 24), 1) === 0);
+      target.set({ left: baseLeft, top: baseTop });
+      target.setCoords();
+      const recordedItem: EditorAnimationLibraryItem = {
+        ...def,
+        params: {
+          ...(def.params || {}),
+          motionPath: {
+            points: sampled,
+            recorded: true,
+            orientToPath: Boolean((def.params?.motionPath as { orientToPath?: boolean } | undefined)?.orientToPath),
+          },
+        },
+      };
+      applyEditorAnimationToObject(target, recordedItem, canvas);
+      canvas.setActiveObject(target);
+      useEditorStore.getState().setSelectedObject(target);
+      useEditorStore.getState().bumpSelectionAnimation();
+      canvas.requestRenderAll();
+      saveHistory();
+      previewAppliedAnimation(recordedItem, [target]);
+      setRecentAnimationIds((current) => [def.id, ...current.filter((id) => id !== def.id)].slice(0, 12));
+      setAnimationApplyMessage(`${def.name} recorded with ${sampled.length} path points.`);
+    };
+    canvas.on('object:moving', handleMoving);
+    canvas.on('mouse:up', finishRecording);
+    motionRecordingRef.current = {
+      stop: () => {
+        canvas.off('object:moving', handleMoving);
+        canvas.off('mouse:up', finishRecording);
+        if (guide) {
+          canvas.remove(guide);
+          guide = null;
+          canvas.requestRenderAll();
+        }
+      },
+    };
+    setAnimationApplyMessage('Drag the selected object now. Release mouse to finish motion path recording.');
+  };
+
+  const insertAnimation = (def: EditorAnimationLibraryItem) => {
+    if (!canvas) return;
+    clearAnimationHoverPreview();
+    if (def.id === 'motion-path' || def.id === 'custom-create-animation' || def.id === 'custom-motion-path') {
+      startMotionPathRecording(def);
+      return;
+    }
+    setRecentAnimationIds((current) => [def.id, ...current.filter((id) => id !== def.id)].slice(0, 12));
+    const result = applyAnimationToSelectedObject({
+      canvas,
+      selectedObject: getCurrentAnimationSelection(),
+      selectedObjectId,
+      animationId: def.id,
+      saveHistory,
+      setSelectedObject: useEditorStore.getState().setSelectedObject,
+      onPreview: previewAppliedAnimation,
+    });
+    if (result.status === 'applied' || result.status === 'inserted') {
+      useEditorStore.getState().bumpSelectionAnimation();
+    }
+    setAnimationApplyMessage(result.message);
+  };
+
+  const renderAnimCard = (def: EditorAnimationLibraryItem) => {
+    const appliedIds = getAppliedAnimationIds(getCurrentAnimationSelection());
+    const isActive = def.mode !== 'insert' && (appliedIds.has(def.id) || appliedIds.has(def.type));
+    return (
+    <div key={def.id} className="relative aspect-square">
+      <button
+        type="button"
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={() => insertAnimation(def)}
+        onMouseEnter={() => previewAnimationOnSelection(def)}
+        onMouseLeave={clearAnimationHoverPreview}
+        className={`h-full w-full bg-[#12121B]/80 border rounded-xl flex flex-col items-center justify-center gap-1 cursor-pointer transition-all hover:scale-[1.03] group overflow-hidden relative ${
+          isActive
+            ? 'border-cyan-400/80 shadow-[0_0_18px_rgba(34,211,238,0.22)]'
+            : 'border-white/[0.08]/60 hover:border-orange-500/50'
+        }`}
+        title={def.name}
+      >
+        <div className="flex h-full w-full items-center justify-center p-2">
+          <span className="rounded-lg border border-orange-400/30 bg-orange-500/10 px-2 py-1 text-[13px] font-black tracking-tight text-orange-200">
+            {def.preview}
+          </span>
+        </div>
+        <div className="absolute top-1 right-1 rounded-full bg-orange-500/80 px-1.5 py-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+          <span className="text-[7px] font-bold uppercase text-white">{def.mode === 'insert' ? '+' : 'APPLY'}</span>
+        </div>
+        {isActive && (
+          <div className="absolute bottom-5 left-1 rounded-full border border-cyan-300/40 bg-cyan-500/20 px-1.5 py-0.5">
+            <span className="text-[7px] font-bold uppercase tracking-wide text-cyan-100">ACTIVE</span>
+          </div>
+        )}
+        <span className="text-[9px] font-medium text-zinc-500 group-hover:text-zinc-300 transition-colors text-center px-1 leading-tight truncate w-full">{def.name}</span>
+      </button>
+      <button
+        type="button"
+        onClick={(event) => { event.stopPropagation(); toggleAnimationFavorite(def.id); }}
+        className={`absolute left-1 top-1 rounded-full border px-1 py-0.5 text-[8px] transition-colors ${
+          favoriteAnimationIds.includes(def.id)
+            ? 'border-pink-400/60 bg-pink-500/20 text-pink-200'
+            : 'border-white/[0.08] bg-black/30 text-zinc-500 hover:text-pink-200'
+        }`}
+        title={favoriteAnimationIds.includes(def.id) ? 'Remove favorite' : 'Add favorite'}
+      >
+        ♥
+      </button>
+    </div>
+    );
+  };
+
+  const renderAnimRow = (catDef: { id: EditorAnimationCategory; label: string }, anims: EditorAnimationLibraryItem[]) => (
     <div key={catDef.id}>
       <div className="flex items-center justify-between mb-2">
         <h4 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">{catDef.label}</h4>
@@ -1767,10 +2803,10 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
 
   const renderAnimationsSeeAll = () => {
     if (!animSeeAll) return null;
-    const catDef = ANIMATION_CATEGORIES.find((c) => c.id === animSeeAll);
+    const catDef = EDITOR_ANIMATION_CATEGORIES.find((c) => c.id === animSeeAll);
     const filtered = animSearchDebounced
-      ? searchAnimations(animSearchDebounced).filter((a) => a.category === animSeeAll)
-      : ANIMATION_REGISTRY.filter((a) => a.category === animSeeAll);
+      ? searchEditorAnimations(animSearchDebounced).filter((a) => a.category === animSeeAll)
+      : EDITOR_ANIMATION_LIBRARY.filter((a) => a.category === animSeeAll);
     return (
       <div className="space-y-3">
         <button onClick={() => setAnimSeeAll(null)}
@@ -1802,11 +2838,102 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
   const renderAnimations = () => {
     if (animSeeAll) return renderAnimationsSeeAll();
 
-    const displayedSearch = animSearchDebounced ? searchAnimations(animSearchDebounced) : null;
-    const recommended = getRecommendations();
+    const displayedSearch = animSearchDebounced ? searchEditorAnimations(animSearchDebounced) : null;
+    const recommended = EDITOR_ANIMATION_LIBRARY.filter((animation) => [
+      'fade-in',
+      'slide-up',
+      'progress-fill',
+      'arrow-draw-in',
+      'typewriter',
+      'dash-flow',
+    ].includes(animation.id));
 
     return (
       <div className="space-y-4">
+        <div className="rounded-xl border border-orange-500/20 bg-orange-500/10 p-3">
+          <h4 className="text-[11px] font-bold uppercase tracking-[0.16em] text-orange-200">Animations</h4>
+          <p className="mt-1 text-[10px] leading-4 text-orange-100/70">
+            Select an object, then apply a reusable timeline animation. Use Animated Elements to insert ready-made animated objects.
+          </p>
+          {animationApplyMessage && (
+            <p className="mt-2 rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1 text-[10px] text-zinc-200">{animationApplyMessage}</p>
+          )}
+        </div>
+        <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h4 className="text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-200">Moving Animations</h4>
+              <p className="mt-1 text-[10px] leading-4 text-cyan-100/70">Pick a moving preset, then tune distance, duration and looping on the selected object.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => { setAnimSeeAll('motion'); setAnimSearch(''); }}
+              className="shrink-0 rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-2 py-1 text-[9px] font-bold uppercase text-cyan-100 hover:bg-cyan-400/20"
+            >
+              View all
+            </button>
+          </div>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            {EDITOR_ANIMATIONS_BY_CATEGORY.motion.slice(0, 9).map((def) => renderAnimCard(def))}
+          </div>
+          {activeMovingAnimation && (
+            <div className="mt-3 rounded-lg border border-cyan-400/20 bg-black/25 p-2">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className="text-[10px] font-bold text-cyan-100">Selected: {activeAnimationDefinition?.name || activeMovingAnimation.type}</span>
+                <button
+                  type="button"
+                  onClick={() => activeAnimationDefinition && previewAppliedAnimation(activeAnimationDefinition, getAnimationTargets(getCurrentAnimationSelection()))}
+                  className="rounded-md border border-cyan-400/30 px-2 py-1 text-[9px] font-bold text-cyan-100 hover:bg-cyan-400/10"
+                >
+                  Preview
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-[9px] text-zinc-300">
+                <label className="flex flex-col gap-1">
+                  <span>Distance X</span>
+                  <input
+                    type="number"
+                    step={10}
+                    value={Number(((activeMovingAnimation.params?.movement || {}) as Record<string, unknown>).endX ?? activeMovingAnimation.distance ?? 260)}
+                    onChange={(event) => updateActiveMovingAnimation({}, { endX: Number(event.target.value) || 0 })}
+                    className="rounded border border-white/[0.08] bg-[#12121B] px-2 py-1 text-zinc-100 outline-none focus:border-cyan-400"
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span>Distance Y</span>
+                  <input
+                    type="number"
+                    step={10}
+                    value={Number(((activeMovingAnimation.params?.movement || {}) as Record<string, unknown>).endY ?? 0)}
+                    onChange={(event) => updateActiveMovingAnimation({}, { endY: Number(event.target.value) || 0 })}
+                    className="rounded border border-white/[0.08] bg-[#12121B] px-2 py-1 text-zinc-100 outline-none focus:border-cyan-400"
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span>Duration ms</span>
+                  <input
+                    type="number"
+                    min={100}
+                    step={100}
+                    value={activeMovingAnimation.durationMs}
+                    onChange={(event) => updateActiveMovingAnimation({ durationMs: Math.max(Number(event.target.value) || 100, 100) })}
+                    className="rounded border border-white/[0.08] bg-[#12121B] px-2 py-1 text-zinc-100 outline-none focus:border-cyan-400"
+                  />
+                </label>
+                <label className="flex items-center gap-2 pt-4">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(activeMovingAnimation.loop)}
+                    onChange={(event) => updateActiveMovingAnimation({ loop: event.target.checked })}
+                    className="accent-cyan-400"
+                  />
+                  <span>Loop motion</span>
+                </label>
+              </div>
+            </div>
+          )}
+        </div>
+
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
           <input type="text" value={animSearch} onChange={(e) => setAnimSearch(e.target.value)}
@@ -1832,9 +2959,35 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
           </div>
         ) : (
           <>
+            <div>
+              <h4 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-2">Recent</h4>
+              {recentAnimationIds.map(animationById).filter(Boolean).length === 0 ? (
+                <p className="rounded-xl border border-white/[0.06] bg-[#12121B]/70 px-3 py-2 text-[10px] text-zinc-500">Recently applied animations will appear here.</p>
+              ) : (
+                <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  {recentAnimationIds.map(animationById).filter(Boolean).slice(0, 8).map((def) => (
+                    <div key={def!.id} className="shrink-0 w-[72px]">{renderAnimCard(def!)}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <h4 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-2">Favorites</h4>
+              {favoriteAnimationIds.map(animationById).filter(Boolean).length === 0 ? (
+                <p className="rounded-xl border border-white/[0.06] bg-[#12121B]/70 px-3 py-2 text-[10px] text-zinc-500">Tap ♥ on an animation card to save it here.</p>
+              ) : (
+                <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  {favoriteAnimationIds.map(animationById).filter(Boolean).slice(0, 8).map((def) => (
+                    <div key={def!.id} className="shrink-0 w-[72px]">{renderAnimCard(def!)}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             {/* Magic Recommendations */}
             <div>
-              <h4 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-2">Magic Recommendations</h4>
+              <h4 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-2">Trending</h4>
               <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 {recommended.slice(0, 6).map((def) => (
                   <div key={def.id} className="shrink-0 w-[72px]">{renderAnimCard(def)}</div>
@@ -1843,8 +2996,8 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
             </div>
 
             {/* Category rows */}
-            {ANIMATION_CATEGORIES.filter((c) => c.id !== 'recommendation').map((catDef) => {
-              const anims = ANIMATIONS_BY_CATEGORY[catDef.id] || [];
+            {EDITOR_ANIMATION_CATEGORIES.map((catDef) => {
+              const anims = EDITOR_ANIMATIONS_BY_CATEGORY[catDef.id] || [];
               if (anims.length === 0) return null;
               return renderAnimRow(catDef, anims);
             })}
@@ -2252,8 +3405,12 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
     if (cat.id === 'graphics') return renderGraphics();
     if (cat.type === 'interactive') {
       switch (cat.id) {
-        case 'architecture': return renderArchitectureLibrary();
+        case 'system-design': return renderArchitectureLibrary();
+        case 'provider-assets': return <ProviderAssetPanel canvas={canvas} saveHistory={saveHistory} />;
         case 'technical-infographic': return renderTechnicalInfographic();
+        case 'technical-reel': return renderTechnicalReel();
+        case 'technical-icons': return renderTechnicalIcons();
+        case 'connectors': return renderConnectors();
         case 'shapes': return renderShapes();
         case 'frames': return renderFrames();
         case 'grids': return renderGrids();
@@ -2272,41 +3429,57 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
   // RENDER: LAUNCHER
   // ═══════════════════════════════════════════════════════════════════════════
 
-  const renderLauncher = () => (
-    <div className="space-y-4">
-      <div className="flex gap-2">
-        <button onClick={() => handleCategoryClick('recents')}
-          className="flex-1 flex items-center gap-2 bg-[#12121B]/80 border border-white/[0.08] hover:border-violet-500/50 rounded-xl p-3 transition-all cursor-pointer group">
-          <Clock className="w-4 h-4 text-zinc-500 group-hover:text-violet-400 transition-colors" />
-          <span className="text-xs font-semibold text-zinc-400 group-hover:text-zinc-200 transition-colors">Recent</span>
-        </button>
-        <button onClick={() => handleCategoryClick('favorites')}
-          className="flex-1 flex items-center gap-2 bg-[#12121B]/80 border border-white/[0.08] hover:border-pink-500/50 rounded-xl p-3 transition-all cursor-pointer group">
-          <Heart className="w-4 h-4 text-zinc-500 group-hover:text-pink-400 transition-colors" />
-          <span className="text-xs font-semibold text-zinc-400 group-hover:text-zinc-200 transition-colors">Favorites</span>
-        </button>
-      </div>
-      <div>
-        <h4 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-2">Browse Categories</h4>
-        <div className="grid grid-cols-3 gap-2">
-          {CATEGORY_CONFIGS.map((cat) => {
-            const Icon = cat.icon;
-            return (
-              <button key={cat.id} onClick={() => handleCategoryClick(cat.id)}
-                className={`relative overflow-hidden bg-gradient-to-br ${cat.gradient} border border-white/[0.08]/60 hover:border-zinc-600 rounded-xl p-3 flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer hover:scale-[1.03] hover:shadow-lg group aspect-square`}
-                title={cat.label}>
-                <Icon className={`w-6 h-6 ${cat.iconColor} group-hover:scale-110 transition-transform`} />
-                <span className="text-[10px] font-semibold text-zinc-300 group-hover:text-white transition-colors text-center leading-tight">{cat.label}</span>
-                {cat.type === 'unsupported' && (
-                  <span className="absolute top-1 right-1 text-[7px] font-bold text-zinc-500 bg-zinc-800/80 rounded px-1">SOON</span>
-                )}
-              </button>
-            );
-          })}
+  const renderLauncher = () => {
+    const categoryById = new Map(CATEGORY_CONFIGS.map((category) => [category.id, category]));
+
+    return (
+      <div className="space-y-5">
+        <div className="grid grid-cols-2 gap-2">
+          <button onClick={() => handleCategoryClick('recents')}
+            className="group flex items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.035] p-3 transition-colors hover:border-violet-400/40 hover:bg-white/[0.055]">
+            <Clock className="w-4 h-4 text-zinc-500 transition-colors group-hover:text-violet-300" />
+            <span className="text-xs font-semibold text-zinc-400 transition-colors group-hover:text-zinc-100">Recent</span>
+          </button>
+          <button onClick={() => handleCategoryClick('favorites')}
+            className="group flex items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.035] p-3 transition-colors hover:border-pink-400/40 hover:bg-white/[0.055]">
+            <Heart className="w-4 h-4 text-zinc-500 transition-colors group-hover:text-pink-300" />
+            <span className="text-xs font-semibold text-zinc-400 transition-colors group-hover:text-zinc-100">Favorites</span>
+          </button>
         </div>
+
+        {ELEMENT_CATEGORY_GROUPS.map((group) => (
+          <section key={group.title} className="space-y-2.5">
+            <h4 className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500">{group.title}</h4>
+            <div className="grid grid-cols-2 gap-2">
+              {group.ids.map((id) => {
+                const cat = categoryById.get(id);
+                if (!cat) return null;
+                const Icon = cat.icon;
+                return (
+                  <button
+                    key={cat.id}
+                    onClick={() => handleCategoryClick(cat.id)}
+                    className="group relative flex min-h-[58px] items-center gap-2 overflow-hidden rounded-xl border border-white/[0.08] bg-[#12121B]/70 px-3 py-2 text-left transition-all hover:border-white/[0.16] hover:bg-[#171722]"
+                    title={cat.label}
+                  >
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/[0.08] bg-black/20">
+                      <Icon className={`w-4 h-4 ${cat.iconColor}`} />
+                    </span>
+                    <span className="min-w-0 flex-1 text-[11px] font-semibold leading-tight text-zinc-300 group-hover:text-white">
+                      {cat.label}
+                    </span>
+                    {cat.type === 'unsupported' && (
+                      <span className="absolute right-1.5 top-1.5 rounded bg-zinc-800/90 px-1 text-[7px] font-bold text-zinc-500">SOON</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        ))}
       </div>
-    </div>
-  );
+    );
+  };
 
   // ═══════════════════════════════════════════════════════════════════════════
   // RENDER: AI PROMPT
@@ -2544,7 +3717,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
     <>
     {renderDataEditor()}
     <div className="flex flex-col h-full bg-[#101018] text-zinc-100 select-none overflow-hidden">
-      <div className="p-3 border-b border-white/[0.08] space-y-2.5">
+      <div className="p-4 border-b border-white/[0.08] space-y-3">
         <div className="flex items-center justify-between">
           {view === 'category' ? (
             <button onClick={handleBack} className="flex items-center gap-1.5 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer">
@@ -2552,7 +3725,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
               <h3 className="text-sm font-bold">{activeCatConfig?.label || 'Elements'}</h3>
             </button>
           ) : (
-            <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
+            <h3 className="text-[15px] font-bold text-zinc-100 flex items-center gap-2">
               <Layers className="w-4 h-4 text-violet-400" />
               <span>Elements</span>
             </h3>
@@ -2562,7 +3735,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
         {activeCategory !== 'images' && renderAIPrompt()}
         {view === 'category' && renderSearchBar()}
       </div>
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 overscroll-contain">
+      <div ref={scrollRef} className="teckstudio-scrollbar flex-1 overflow-y-auto p-4 overscroll-contain">
         {view === 'launcher' ? renderLauncher() : renderCategoryContent()}
       </div>
     </div>

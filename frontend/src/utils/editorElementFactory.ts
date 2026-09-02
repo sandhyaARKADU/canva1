@@ -33,6 +33,10 @@ export const CUSTOM_FABRIC_PROPERTIES = [
   'objectId',
   'layerIndex',
   'baseState',
+  'baseAnimationState',
+  'originalText',
+  'targetWidth',
+  'targetHeight',
   'posterTemplateId',
   'posterTemplateName',
   'name',
@@ -147,14 +151,20 @@ export const CUSTOM_FABRIC_PROPERTIES = [
   'diagramBendHandleConnectorId',
   'connectorSourceNodeId',
   'connectorTargetNodeId',
+  'connectorSourceObjectId',
+  'connectorTargetObjectId',
   'connectorSourceAnchor',
   'connectorTargetAnchor',
   'connectorRouting',
   'connectorLineStyle',
   'connectorBendOffset',
   'connectorCurvature',
+  'connectorArrowheadColor',
   'editorOnly',
   'excludeFromExport',
+  'excludeFromSave',
+  'isEditorHelper',
+  'isConnectorHandle',
   'brandKitId',
   'brandKitName',
   'brandRole',
@@ -931,6 +941,89 @@ const makeTextbox = (text: string, options: fabric.ITextboxOptions) => new fabri
   ...options,
 });
 
+
+const DIAGRAM_BOX_SHAPE_IDS = new Set([
+  'shape-square',
+  'shape-rectangle',
+  'shape-rounded-rectangle',
+  'flow-process',
+]);
+
+const diagramBoxSizeFor = (id: string) => {
+  if (id === 'shape-square') return { width: 150, height: 150, rx: 0, ry: 0 };
+  if (id === 'shape-rounded-rectangle') return { width: 190, height: 110, rx: 16, ry: 16 };
+  return { width: 190, height: 110, rx: 0, ry: 0 };
+};
+
+export function createDiagramBoxElement(id = 'shape-rounded-rectangle', label = 'Text') {
+  const item = SHAPE_ELEMENTS.find((entry) => entry.id === id) || SHAPE_ELEMENTS.find((entry) => entry.id === 'shape-rounded-rectangle') || SHAPE_ELEMENTS[0];
+  const { width, height, rx, ry } = diagramBoxSizeFor(id);
+  const diagramBoxId = makeId('diagram-box');
+  const background = new fabric.Rect({
+    left: 0,
+    top: 0,
+    width,
+    height,
+    rx,
+    ry,
+    fill: '#ffffff',
+    stroke: '#000000',
+    strokeWidth: 2,
+    strokeUniform: true,
+    objectCaching: false,
+  });
+  const textBox = new fabric.Textbox(label, {
+    left: width / 2,
+    top: height / 2,
+    originX: 'center',
+    originY: 'center',
+    width: Math.max(40, width - 24),
+    fontFamily: 'Outfit',
+    fontSize: 20,
+    fontWeight: '600',
+    fill: '#000000',
+    textAlign: 'center',
+    editable: true,
+    objectCaching: false,
+  });
+  background.set({
+    id: `${diagramBoxId}-background`,
+    objectType: 'diagramBoxBackground',
+    teckstudioObjectType: 'diagramBoxBackground',
+    diagramBoxId,
+    diagramBoxRole: 'background',
+  } as Record<string, unknown>);
+  textBox.set({
+    id: `${diagramBoxId}-text`,
+    name: 'Diagram box text',
+    objectType: 'diagramBoxText',
+    teckstudioObjectType: 'diagramBoxText',
+    diagramBoxId,
+    diagramBoxRole: 'text',
+  } as Record<string, unknown>);
+
+  const group = new fabric.Group([background, textBox], {
+    subTargetCheck: true,
+    objectCaching: false,
+  });
+
+  return applyElementMetadata(group, makeMetadata('shape', item, {
+    id: diagramBoxId,
+    name: item.name,
+    objectType: 'diagramBox',
+    teckstudioObjectType: 'diagramBox',
+    diagramBoxId,
+    diagramBoxRole: 'container',
+    elementSubcategory: 'Diagram Boxes',
+    elementTags: Array.from(new Set([...(item.tags || []), 'diagram', 'box', 'connector'])),
+    shapeConfig: shapeConfigForObject(id, item, {
+      fill: '#ffffff',
+      stroke: '#000000',
+      strokeWidth: 2,
+    }),
+  }));
+}
+
 const makeLinearGradient = (colors: string[], width = 160, height = 160, angle = 135) => {
   const angleRad = (angle * Math.PI) / 180;
   const centerX = width / 2;
@@ -998,6 +1091,7 @@ const shapeConfigForObject = (
 
 export function createShapeElement(id: string, styles: ElementFactoryStyles = {}) {
   const item = SHAPE_ELEMENTS.find((entry) => entry.id === id) || SHAPE_ELEMENTS[0];
+  if (DIAGRAM_BOX_SHAPE_IDS.has(id)) return createDiagramBoxElement(id);
   const fill = styles.fill || '#8b5cf6';
   const stroke = styles.stroke || '#18181b22';
   const strokeWidth = styles.strokeWidth ?? 1;

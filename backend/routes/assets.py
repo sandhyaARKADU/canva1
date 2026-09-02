@@ -67,6 +67,7 @@ CANONICAL_IMAGE_CATEGORIES = [
     {"id": "infographics", "label": "Infographics"},
     {"id": "charts", "label": "Charts"},
     {"id": "maps", "label": "Maps"},
+    {"id": "technical-diagrams", "label": "Technical Diagrams"},
 ]
 
 
@@ -93,12 +94,87 @@ def normalize_image_category(value: Optional[str]) -> Optional[str]:
         "graphics": "illustrations",
         "map": "maps",
         "chart": "charts",
+        "technical": "technical-diagrams",
+        "technical-diagram": "technical-diagrams",
+        "technical-diagrams": "technical-diagrams",
+        "system-architecture": "technical-diagrams",
+        "distributed-systems": "technical-diagrams",
+        "microservices": "technical-diagrams",
+        "database-sharding": "technical-diagrams",
     }
     normalized = aliases.get(normalized, normalized)
     valid = {category["id"] for category in CANONICAL_IMAGE_CATEGORIES}
     if normalized not in valid:
         raise HTTPException(status_code=400, detail=f"Unsupported asset category: {value}")
     return normalized
+
+
+TECHNICAL_DIAGRAM_SEARCH_MAP = {
+    "distributed system": "distributed system architecture diagram distributed computing diagram distributed application architecture distributed database sharding backend nodes network",
+    "distributed systems": "distributed system architecture diagram distributed computing diagram distributed application architecture distributed database sharding backend nodes network",
+    "distributed database": "distributed database architecture diagram sharding replication partition nodes consensus router",
+    "client server": "client server architecture diagram client server communication browser api backend database network",
+    "client server architecture": "client server architecture diagram client server communication browser api backend database network",
+    "microservice": "microservices architecture diagram api gateway service mesh database per service container backend",
+    "microservices": "microservices architecture diagram api gateway service mesh database per service container backend",
+    "microservices architecture": "microservices architecture diagram api gateway service mesh database per service container backend",
+    "database sharding": "database sharding architecture diagram shard router partition distributed database replica",
+    "sharding": "database sharding architecture diagram shard router partition distributed database replica",
+    "backend": "backend system architecture diagram api gateway application server cache queue database worker",
+    "backend architecture": "backend system architecture diagram api gateway application server cache queue database worker",
+    "database": "database architecture diagram schema replication sharding cache query storage",
+    "database architecture": "database architecture diagram schema replication sharding cache query storage",
+    "cloud": "cloud architecture diagram compute storage network database load balancer service",
+    "cloud architecture": "cloud architecture diagram compute storage network database load balancer service",
+    "api": "api gateway architecture diagram client gateway authentication backend service database",
+    "api gateway": "api gateway architecture diagram client gateway authentication backend service database",
+    "api architecture": "api gateway architecture diagram client gateway authentication backend service database",
+    "network": "computer network architecture diagram nodes router switch server client topology",
+    "network architecture": "computer network architecture diagram nodes router switch server client topology",
+    "load balancer": "load balancer architecture diagram traffic distribution multiple servers backend health checks",
+    "load balancing": "load balancer architecture diagram traffic distribution multiple servers backend health checks",
+    "ai architecture": "ai architecture diagram model inference vector database prompt pipeline agents",
+    "machine learning": "machine learning architecture diagram data pipeline training inference model registry",
+    "machine learning architecture": "machine learning architecture diagram data pipeline training inference model registry",
+    "devops": "devops architecture diagram ci cd pipeline build deploy monitor infrastructure",
+    "devops architecture": "devops architecture diagram ci cd pipeline build deploy monitor infrastructure",
+    "process flow": "process flow diagram workflow steps decision input output technical",
+    "data flow": "data flow diagram pipeline ingestion processing storage output technical",
+    "software architecture": "software architecture diagram layers components services database",
+}
+
+
+def mapped_technical_diagram_query(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    normalized = " ".join(value.strip().lower().replace("-", " ").replace("_", " ").split())
+    if not normalized:
+        return None
+    for key, mapped in TECHNICAL_DIAGRAM_SEARCH_MAP.items():
+        if key in normalized:
+            return mapped
+    technical_terms = {
+        "architecture",
+        "diagram",
+        "distributed",
+        "microservices",
+        "sharding",
+        "server",
+        "backend",
+        "database",
+        "api",
+        "gateway",
+        "cloud",
+        "network",
+        "load",
+        "balancer",
+        "devops",
+        "machine",
+        "learning",
+    }
+    if any(term in normalized.split() for term in technical_terms):
+        return f"{normalized} architecture diagram technical system design"
+    return None
 
 
 def generate_id():
@@ -420,13 +496,20 @@ def search_assets(
     db: Session = Depends(get_db),
 ):
     normalized_category = normalize_image_category(category)
+    requested_search = q or search
+    technical_query = mapped_technical_diagram_query(requested_search)
+    if normalized_category == "technical-diagrams":
+        requested_search = technical_query or requested_search
+    elif technical_query:
+        normalized_category = "technical-diagrams"
+        requested_search = technical_query
     safe_page = max(page, 1)
     safe_per_page = min(max(per_page, 1), 60)
     provider = LocalDatabaseAssetProvider(db)
     result = provider.search(AssetSearchInput(
         category="images",
         theme=normalized_category,
-        search=q or search,
+        search=requested_search,
         limit=safe_per_page,
         offset=(safe_page - 1) * safe_per_page,
     ))

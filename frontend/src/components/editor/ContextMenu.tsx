@@ -12,6 +12,7 @@ import { useEditorStore } from '../../store/useEditorStore';
 import { fabric } from 'fabric';
 import { alignObjectToPage } from '../../utils/textSelectionStyles';
 import type { PageAlignment } from '../../utils/textSelectionStyles';
+import { moveLayerObject } from '../../utils/layerOrdering';
 
 interface MenuItem {
   id: string;
@@ -149,33 +150,25 @@ export const ContextMenu: React.FC = () => {
 
   const handleBringForward = () => {
     if (!canvas || !selectedObject) return;
-    canvas.bringForward(selectedObject);
-    canvas.renderAll();
-    saveHistory();
+    if (moveLayerObject(canvas, selectedObject, 'forward')) saveHistory();
     setVisible(false);
   };
 
   const handleSendBackward = () => {
     if (!canvas || !selectedObject) return;
-    canvas.sendBackwards(selectedObject);
-    canvas.renderAll();
-    saveHistory();
+    if (moveLayerObject(canvas, selectedObject, 'backward')) saveHistory();
     setVisible(false);
   };
 
   const handleBringToFront = () => {
     if (!canvas || !selectedObject) return;
-    canvas.bringToFront(selectedObject);
-    canvas.renderAll();
-    saveHistory();
+    if (moveLayerObject(canvas, selectedObject, 'front')) saveHistory();
     setVisible(false);
   };
 
   const handleSendToBack = () => {
     if (!canvas || !selectedObject) return;
-    canvas.sendToBack(selectedObject);
-    canvas.renderAll();
-    saveHistory();
+    if (moveLayerObject(canvas, selectedObject, 'back')) saveHistory();
     setVisible(false);
   };
 

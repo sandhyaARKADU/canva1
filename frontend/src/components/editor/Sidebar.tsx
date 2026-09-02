@@ -28,8 +28,8 @@ import { isTemplateCompatible, getTemplateOrientation } from '../../utils/templa
 import { TEMPLATE_TYPE_OPTIONS } from '../templates/templateConstants';
 import { EDITORIAL_TECH_TEMPLATE_NAME, applyEditorialTechPoster } from '../../utils/editorialPoster';
 import { ArchitectureDiagramPanel } from './ArchitectureDiagramPanel';
-import { AI_ARCHITECTURE_TEMPLATE_NAME } from '../../utils/architectureDiagramTypes';
-import { applyAIChatArchitectureTemplate, fitArchitectureCanvasToWorkspace } from '../../utils/architectureDiagram';
+import { AI_ARCHITECTURE_TEMPLATE_NAME, DISTRIBUTED_SYSTEM_TEMPLATE_NAME } from '../../utils/architectureDiagramTypes';
+import { applyAIChatArchitectureTemplate, applyDistributedSystemArchitectureTemplate, fitArchitectureCanvasToWorkspace } from '../../utils/architectureDiagram';
 import {
   TECHNICAL_INFOGRAPHIC_TEMPLATE_NAME,
   PROMPT_CONTEXT_HARNESS_TEMPLATE_NAME,
@@ -41,6 +41,11 @@ import { removeConnectorsForNode } from '../../utils/diagramConnectors';
 import { masterTimelineManager } from '../../utils/masterTimelineManager';
 import { normalizeTimelineProject } from '../../types/timeline';
 import { UploadsPanel } from './uploads/UploadsPanel';
+import {
+  getCanvasLayerObjects,
+  moveLayerObject,
+  moveLayerObjectToDisplayIndex,
+} from '../../utils/layerOrdering';
 
 type Tab = 'templates' | 'elements' | 'diagram' | 'text' | 'draw' | 'uploads' | 'layers' | 'pages' | 'history';
 
@@ -86,12 +91,7 @@ export const Sidebar: React.FC = () => {
       return;
     }
     canvas.getObjects().forEach((obj) => getStableLayerId(obj));
-    setLayers([
-      ...canvas.getObjects().filter((object) => (
-        object.get('generatedEffectLayer' as keyof fabric.Object) !== true
-        && object.get('excludeFromLayers' as keyof fabric.Object) !== true
-      )),
-    ].reverse());
+    setLayers([...getCanvasLayerObjects(canvas)].reverse());
   }, [canvas, getStableLayerId]);
 
   // Update layers list on canvas changes
@@ -192,49 +192,42 @@ export const Sidebar: React.FC = () => {
   // Layer Ordering Operations
   const moveLayerUp = useCallback((obj: fabric.Object) => {
     if (!canvas) return;
-    canvas.bringForward(obj);
-    canvas.setActiveObject(obj);
-    canvas.renderAll();
-    refreshLayers();
-    saveHistory();
+    if (moveLayerObject(canvas, obj, 'forward')) {
+      refreshLayers();
+      saveHistory();
+    }
   }, [canvas, refreshLayers, saveHistory]);
 
   const moveLayerDown = useCallback((obj: fabric.Object) => {
     if (!canvas) return;
-    canvas.sendBackwards(obj);
-    canvas.setActiveObject(obj);
-    canvas.renderAll();
-    refreshLayers();
-    saveHistory();
+    if (moveLayerObject(canvas, obj, 'backward')) {
+      refreshLayers();
+      saveHistory();
+    }
   }, [canvas, refreshLayers, saveHistory]);
 
   const moveLayerToFront = useCallback((obj: fabric.Object) => {
     if (!canvas) return;
-    canvas.bringToFront(obj);
-    canvas.setActiveObject(obj);
-    canvas.renderAll();
-    refreshLayers();
-    saveHistory();
+    if (moveLayerObject(canvas, obj, 'front')) {
+      refreshLayers();
+      saveHistory();
+    }
   }, [canvas, refreshLayers, saveHistory]);
 
   const moveLayerToBack = useCallback((obj: fabric.Object) => {
     if (!canvas) return;
-    canvas.sendToBack(obj);
-    canvas.setActiveObject(obj);
-    canvas.renderAll();
-    refreshLayers();
-    saveHistory();
+    if (moveLayerObject(canvas, obj, 'back')) {
+      refreshLayers();
+      saveHistory();
+    }
   }, [canvas, refreshLayers, saveHistory]);
 
   const moveLayerToDisplayIndex = useCallback((obj: fabric.Object, displayIndex: number) => {
     if (!canvas) return;
-    const objects = canvas.getObjects();
-    const targetCanvasIndex = Math.max(0, Math.min(objects.length - 1, objects.length - 1 - displayIndex));
-    canvas.moveTo(obj, targetCanvasIndex);
-    canvas.setActiveObject(obj);
-    canvas.renderAll();
-    refreshLayers();
-    saveHistory();
+    if (moveLayerObjectToDisplayIndex(canvas, obj, displayIndex)) {
+      refreshLayers();
+      saveHistory();
+    }
   }, [canvas, refreshLayers, saveHistory]);
 
   const toggleLayerLock = useCallback((obj: fabric.Object) => {
@@ -478,6 +471,16 @@ export const Sidebar: React.FC = () => {
     refreshLayers();
   };
 
+  const loadDistributedSystemTemplate = async () => {
+    if (!canvas) return;
+    await applyDistributedSystemArchitectureTemplate(canvas);
+    useEditorStore.getState().setCanvasDimensions(1440, 1000);
+    const zoom = fitArchitectureCanvasToWorkspace(canvas);
+    useEditorStore.getState().setZoom(zoom);
+    saveHistory();
+    refreshLayers();
+  };
+
   const loadTechnicalInfographicTemplate = () => {
     if (!canvas) return;
     applyTechnicalAIWorkflowTemplate(canvas);
@@ -709,9 +712,9 @@ export const Sidebar: React.FC = () => {
   void loadTemplate;
 
   return (
-    <aside className="w-80 h-full border-r border-white/[0.08] bg-[#101018] flex select-none shrink-0 z-10">
+    <aside className="teckstudio-panel-surface w-[312px] h-full border-r flex select-none shrink-0 z-10">
       {/* Icon Tab Strip */}
-      <div className="w-16 h-full border-r border-white/[0.08] bg-[#101018] flex flex-col items-center py-4 gap-4 shrink-0">
+      <div className="w-16 h-full border-r border-white/[0.08] bg-[#0b0b12] flex flex-col items-center py-3 gap-2 shrink-0">
         {[
           { id: 'templates', icon: LayoutTemplate, label: 'Templates' },
           { id: 'elements', icon: Sparkles, label: 'Elements' },
@@ -729,25 +732,25 @@ export const Sidebar: React.FC = () => {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as Tab)}
-              className={`w-12 h-12 rounded-xl flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+              className={`w-11 h-11 rounded-xl flex flex-col items-center justify-center gap-0.5 transition-all cursor-pointer ${
                 isActive 
-                  ? 'bg-violet-600/20 text-violet-400 border border-violet-500/30' 
-                  : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50'
+                  ? 'bg-violet-500/15 text-violet-300 border border-violet-400/30 shadow-sm' 
+                  : 'border border-transparent text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.05]'
               }`}
               title={tab.label}
             >
-              <Icon className="w-5 h-5" />
-              <span className="text-[9px] font-medium">{tab.label}</span>
+              <Icon className="w-[18px] h-[18px]" />
+              <span className="text-[8px] font-medium leading-none">{tab.label}</span>
             </button>
           );
         })}
       </div>
 
       {/* Tab Content Panel */}
-      <div className="flex-1 h-full p-5 flex flex-col overflow-y-auto">
-        <h3 className="text-sm font-bold text-zinc-100 mb-4 capitalize">
+      <div className={`teckstudio-scrollbar flex-1 min-w-0 h-full flex flex-col overflow-y-auto bg-[#101018] ${activeTab === 'elements' ? 'p-0' : 'p-4'}`}>
+        {activeTab !== 'elements' && <h3 className="text-sm font-bold text-zinc-100 mb-4 capitalize">
           {activeTab}
-        </h3>
+        </h3>}
 
         {/* Templates Tab */}
         {activeTab === 'templates' && (
@@ -863,6 +866,36 @@ export const Sidebar: React.FC = () => {
                 <div className="text-[10px] font-bold text-zinc-100">{AI_ARCHITECTURE_TEMPLATE_NAME}</div>
                 <div className="mt-1 text-[8px] text-cyan-300">Technology · System Design · Editable</div>
                 <div className="mt-1 text-[8px] text-zinc-600">1080 × 1350</div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={loadDistributedSystemTemplate}
+              className="group overflow-hidden rounded-xl border border-sky-500/30 bg-[#070A0F] text-left transition hover:border-sky-400"
+            >
+              <div
+                className="relative aspect-[4/5] overflow-hidden border-b border-sky-500/20"
+                style={{
+                  backgroundColor: '#070A0F',
+                  backgroundImage: 'linear-gradient(#15202A66 1px, transparent 1px), linear-gradient(90deg, #15202A66 1px, transparent 1px)',
+                  backgroundSize: '16px 16px',
+                }}
+              >
+                <div className="absolute inset-x-2 top-3 text-center text-[7px] font-black tracking-[0.12em] text-[#F1F3F5]">DISTRIBUTED SYSTEM</div>
+                <div className="absolute left-3 top-[25%] h-8 w-14 rounded border border-[#55A6FF] bg-[#11151D]" />
+                <div className="absolute left-[35%] top-[25%] h-8 w-14 rounded border border-[#CF8CFF] bg-[#11151D]" />
+                <div className="absolute right-3 top-[25%] h-8 w-14 rounded border border-[#43D68A] bg-[#11151D]" />
+                <div className="absolute left-[35%] top-[50%] h-8 w-14 rounded border border-[#F2C94C] bg-[#11151D]" />
+                <div className="absolute right-3 top-[50%] h-8 w-14 rounded border border-[#FF795B] bg-[#11151D]" />
+                <div className="absolute left-3 right-3 top-[40%] h-0.5 bg-gradient-to-r from-[#55A6FF] via-[#CF8CFF] to-[#43D68A]" />
+                <div className="absolute left-[42%] top-[40%] h-[22%] border-l border-dashed border-[#F2C94C]" />
+                <div className="absolute inset-x-3 bottom-5 rounded border border-[#F2C94C66] px-2 py-1 text-center text-[5px] font-bold tracking-[0.12em] text-[#F2C94C]">DATA PLATFORM</div>
+              </div>
+              <div className="p-2.5">
+                <div className="text-[10px] font-bold text-zinc-100">{DISTRIBUTED_SYSTEM_TEMPLATE_NAME}</div>
+                <div className="mt-1 text-[8px] text-sky-300">System Design · Editable Connectors</div>
+                <div className="mt-1 text-[8px] text-zinc-600">1440 × 1000</div>
               </div>
             </button>
 

@@ -38,6 +38,12 @@ import { ElementPropertiesControls } from './ElementPropertiesControls';
 import { MediaFittingControls } from './MediaFittingControls';
 import { COMMON_FONT_SIZES, MAX_FONT_SIZE, MIN_FONT_SIZE, clampFontSize, hasPartialTextSelection, isTextObjectLocked, readSelectionStyleValue } from '../../utils/textSelectionStyles';
 import { synchronizeRoundedHighlightText } from '../../utils/roundedHighlightText';
+import {
+  applyDiagramArrowStyle,
+  getDiagramArrowAppearance,
+  updateDiagramConnectorConfig,
+} from '../../utils/diagramConnectors';
+import type { DiagramConnectorConfig, DiagramConnectorRouting, DiagramConnectorStyle, DiagramArrowStyle } from '../../utils/architectureDiagramTypes';
 
 const PRESET_COLORS = [
   '#ffffff', '#000000', '#f4f4f5', '#71717a',
@@ -123,6 +129,12 @@ export const PropertiesPanel: React.FC = () => {
     : fontSize;
   const hasMixedFontSize = selectedFontSizeValue === 'Mixed';
   const effectiveFontSize = typeof selectedFontSizeValue === 'number' ? selectedFontSizeValue : fontSize;
+  const isConnector = selectedObject?.get('teckstudioObjectType' as keyof fabric.Object) === 'diagramConnectorPath';
+  const arrowAppearance = getDiagramArrowAppearance(selectedObject);
+  const isArrowSelection = Boolean(arrowAppearance);
+  const connectorConfig = (isConnector
+    ? selectedObject?.get('diagramConnectorConfig' as keyof fabric.Object)
+    : null) as DiagramConnectorConfig | null;
   const isSelectedTextLocked = Boolean(isText && isTextObjectLocked(selectedObject));
   const [fontSizeDraft, setFontSizeDraft] = React.useState(String(effectiveFontSize));
   const fontStepAppliedAtRef = React.useRef(0);
@@ -130,6 +142,35 @@ export const PropertiesPanel: React.FC = () => {
   React.useEffect(() => {
     setFontSizeDraft(hasMixedFontSize ? '' : String(effectiveFontSize));
   }, [effectiveFontSize, hasMixedFontSize]);
+
+  const updateConnector = React.useCallback((patch: Partial<DiagramConnectorConfig>) => {
+    if (!canvas || !selectedObject || !isConnector) return;
+    const updated = updateDiagramConnectorConfig(canvas, selectedObject, patch);
+    if (updated) {
+      canvas.setActiveObject(updated);
+      canvas.requestRenderAll();
+      saveHistory();
+    }
+  }, [canvas, isConnector, saveHistory, selectedObject]);
+
+  const updateArrowStyle = React.useCallback((
+    patch: Partial<DiagramConnectorConfig>,
+    syncWholeArrowColor = false,
+  ) => {
+    if (!canvas || !selectedObject || !isArrowSelection) return;
+    const applied = applyDiagramArrowStyle(canvas, selectedObject, patch, { syncWholeArrowColor });
+    if (applied) {
+      canvas.requestRenderAll();
+      saveHistory();
+    }
+  }, [canvas, isArrowSelection, saveHistory, selectedObject]);
+
+  const ConnectorControl = ({ label, children }: { label: string; children: React.ReactNode }) => (
+    <label className="flex flex-col gap-1">
+      <span className="text-[10px] text-zinc-500">{label}</span>
+      {children}
+    </label>
+  );
 
   const commitFontSizeDraft = React.useCallback((value = fontSizeDraft) => {
     const parsed = Number.parseInt(value, 10);
@@ -321,7 +362,7 @@ export const PropertiesPanel: React.FC = () => {
   // If no object selected, show Page properties
   if (!selectedObject) {
     return (
-      <aside className="w-72 border-l border-white/[0.08] bg-[#101018] p-4 flex flex-col gap-4 select-none shrink-0 overflow-y-auto">
+      <aside className="w-full bg-transparent p-4 flex flex-col gap-4 select-none shrink-0">
         <div>
           <h3 className="text-sm font-bold text-zinc-100 mb-1">Page Settings</h3>
           <p className="text-[10px] text-zinc-500">Configure global canvas options</p>
@@ -379,7 +420,7 @@ export const PropertiesPanel: React.FC = () => {
   }
 
   return (
-    <aside className="w-72 border-l border-white/[0.08] bg-[#101018] p-4 flex flex-col gap-3 select-none shrink-0 overflow-y-auto z-10">
+    <aside className="w-full bg-transparent p-4 flex flex-col gap-3 select-none shrink-0 z-10">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -407,6 +448,192 @@ export const PropertiesPanel: React.FC = () => {
       </div>
 
       <div className="h-[1px] bg-zinc-800" />
+
+      <AnimationPanel />
+
+      <div className="h-[1px] bg-zinc-800" />
+
+      {isArrowSelection && arrowAppearance && !isConnector && (
+        <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-3 space-y-3">
+          <div>
+            <h4 className="text-xs font-bold text-violet-200">Arrow Properties</h4>
+            <p className="text-[9px] text-zinc-500">Color edits affect the full visible arrow.</p>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <ConnectorControl label="Arrow Color">
+              <input type="color" value={arrowAppearance.arrowColor} onChange={(event) => updateArrowStyle({ color: event.target.value }, true)} className="h-8 w-full rounded-lg border border-zinc-800 bg-zinc-950" />
+            </ConnectorControl>
+            <ConnectorControl label="Stroke Color">
+              <input type="color" value={arrowAppearance.strokeColor} onChange={(event) => updateArrowStyle({ color: event.target.value })} className="h-8 w-full rounded-lg border border-zinc-800 bg-zinc-950" />
+            </ConnectorControl>
+            <ConnectorControl label="Arrowhead Color">
+              <input type="color" value={arrowAppearance.arrowheadColor} onChange={(event) => updateArrowStyle({ arrowheadColor: event.target.value })} className="h-8 w-full rounded-lg border border-zinc-800 bg-zinc-950" />
+            </ConnectorControl>
+            <ConnectorControl label="Stroke Width">
+              <input type="number" min={1} max={50} value={arrowAppearance.strokeWidth} onChange={(event) => updateArrowStyle({ width: Number(event.target.value) || 2 })} className="rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[10px] text-zinc-200 outline-none" />
+            </ConnectorControl>
+          </div>
+          <ConnectorControl label="Opacity">
+            <input type="range" min={0.1} max={1} step={0.05} value={arrowAppearance.opacity} onChange={(event) => updateArrowStyle({ opacity: Number(event.target.value) })} />
+          </ConnectorControl>
+          <div className="grid grid-cols-7 gap-1.5">
+            {PRESET_COLORS.map((color) => (
+              <button key={color} type="button" onClick={() => updateArrowStyle({ color }, true)} style={{ backgroundColor: color }} className="h-6 w-6 rounded-md border border-zinc-850 transition-all hover:scale-105" title={color} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {isConnector && connectorConfig && (
+        <div className="rounded-xl border border-sky-500/20 bg-sky-500/5 p-3 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <h4 className="text-xs font-bold text-sky-200">Connector Settings</h4>
+              <p className="text-[9px] text-zinc-500">Per-relationship routing, arrows, label and animation.</p>
+            </div>
+            <Minus className="h-4 w-4 text-sky-400" />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <ConnectorControl label="Connector Type">
+              <select
+                value={connectorConfig.routing || 'elbow'}
+                onChange={(event) => updateConnector({ routing: event.target.value as DiagramConnectorRouting, connectorType: event.target.value as DiagramConnectorRouting })}
+                className="rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[10px] text-zinc-200 outline-none"
+              >
+                <option value="straight">Straight</option>
+                <option value="elbow">Elbow</option>
+                <option value="orthogonal">Orthogonal</option>
+                <option value="curved">Curved</option>
+                <option value="loop">Loop</option>
+              </select>
+            </ConnectorControl>
+            <ConnectorControl label="Line Style">
+              <select
+                value={connectorConfig.style || 'solid'}
+                onChange={(event) => updateConnector({ style: event.target.value as DiagramConnectorStyle, lineStyle: event.target.value as DiagramConnectorStyle })}
+                className="rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[10px] text-zinc-200 outline-none"
+              >
+                <option value="solid">Solid</option>
+                <option value="dashed">Dashed</option>
+                <option value="dotted">Dotted</option>
+              </select>
+            </ConnectorControl>
+            <ConnectorControl label="Start Arrow">
+              <select
+                value={connectorConfig.startArrow || 'none'}
+                onChange={(event) => updateConnector({ startArrow: event.target.value as DiagramArrowStyle })}
+                className="rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[10px] text-zinc-200 outline-none"
+              >
+                <option value="none">None</option>
+                <option value="arrow">Arrow</option>
+                <option value="open-arrow">Open</option>
+                <option value="circle">Circle</option>
+                <option value="diamond">Diamond</option>
+              </select>
+            </ConnectorControl>
+            <ConnectorControl label="End Arrow">
+              <select
+                value={connectorConfig.endArrow || 'arrow'}
+                onChange={(event) => updateConnector({ endArrow: event.target.value as DiagramArrowStyle })}
+                className="rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[10px] text-zinc-200 outline-none"
+              >
+                <option value="none">None</option>
+                <option value="arrow">Arrow</option>
+                <option value="open-arrow">Open</option>
+                <option value="circle">Circle</option>
+                <option value="diamond">Diamond</option>
+              </select>
+            </ConnectorControl>
+          </div>
+
+          <ConnectorControl label="Label">
+            <input
+              value={connectorConfig.label || ''}
+              onChange={(event) => updateConnector({ label: event.target.value })}
+              placeholder="REST API, YES, NO..."
+              className="rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[10px] text-zinc-200 outline-none placeholder:text-zinc-600"
+            />
+          </ConnectorControl>
+
+          <div className="grid grid-cols-2 gap-2">
+            <ConnectorControl label="Arrow Color">
+              <input
+                type="color"
+                value={connectorConfig.color || '#43D68A'}
+                onChange={(event) => updateArrowStyle({ color: event.target.value }, true)}
+                className="h-8 w-full rounded-lg border border-zinc-800 bg-zinc-950"
+              />
+            </ConnectorControl>
+            <ConnectorControl label="Stroke Color">
+              <input
+                type="color"
+                value={connectorConfig.color || '#43D68A'}
+                onChange={(event) => updateArrowStyle({ color: event.target.value })}
+                className="h-8 w-full rounded-lg border border-zinc-800 bg-zinc-950"
+              />
+            </ConnectorControl>
+            <ConnectorControl label="Arrowhead Color">
+              <input
+                type="color"
+                value={connectorConfig.arrowheadColor || connectorConfig.color || '#43D68A'}
+                onChange={(event) => updateArrowStyle({ arrowheadColor: event.target.value })}
+                className="h-8 w-full rounded-lg border border-zinc-800 bg-zinc-950"
+              />
+            </ConnectorControl>
+            <ConnectorControl label="Stroke Width">
+              <input
+                type="number"
+                min={1}
+                max={16}
+                value={connectorConfig.width || 2}
+                onChange={(event) => updateArrowStyle({ width: Number(event.target.value) || 2 })}
+                className="rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[10px] text-zinc-200 outline-none"
+              />
+            </ConnectorControl>
+            <ConnectorControl label="Opacity">
+              <input
+                type="range"
+                min={0.1}
+                max={1}
+                step={0.05}
+                value={connectorConfig.opacity ?? 0.9}
+                onChange={(event) => updateArrowStyle({ opacity: Number(event.target.value) })}
+              />
+            </ConnectorControl>
+            <ConnectorControl label="Dash Gap">
+              <input
+                type="number"
+                min={1}
+                max={40}
+                value={connectorConfig.dashGap || 8}
+                onChange={(event) => updateConnector({ dashGap: Number(event.target.value) || 8 })}
+                className="rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[10px] text-zinc-200 outline-none"
+              />
+            </ConnectorControl>
+            <ConnectorControl label="Arrow Size">
+              <input
+                type="number"
+                min={6}
+                max={40}
+                value={connectorConfig.arrowSize || 13}
+                onChange={(event) => updateConnector({ arrowSize: Number(event.target.value) || 13 })}
+                className="rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[10px] text-zinc-200 outline-none"
+              />
+            </ConnectorControl>
+            <ConnectorControl label="Corner Radius">
+              <input
+                type="number"
+                min={0}
+                max={120}
+                value={connectorConfig.bendOffset || 0}
+                onChange={(event) => updateConnector({ bendOffset: Number(event.target.value) || 0 })}
+                className="rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[10px] text-zinc-200 outline-none"
+              />
+            </ConnectorControl>
+          </div>
+        </div>
+      )}
 
       {/* Group / Ungroup controls */}
       {selectedObject.type === 'activeSelection' && (
@@ -525,7 +752,7 @@ export const PropertiesPanel: React.FC = () => {
       <div className="h-[1px] bg-zinc-800" />
 
       {/* Fill Color Section */}
-      {!isLine && (
+      {!isLine && !isArrowSelection && (
         <div className="flex flex-col gap-2">
           <SectionHeader title={isText ? 'Text Color' : 'Fill Color'} sectionKey="fill" icon={<Palette className="w-4 h-4 text-violet-400" />} />
           {openSections.fill && (
@@ -849,7 +1076,7 @@ export const PropertiesPanel: React.FC = () => {
       )}
 
       {/* Stroke Settings Area */}
-      {!isLine && (
+      {!isLine && !isArrowSelection && (
         <>
           <div className="h-[1px] bg-zinc-800" />
 
@@ -1032,9 +1259,6 @@ export const PropertiesPanel: React.FC = () => {
         <h3 className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2 px-1">Alignment & Flip</h3>
         <AlignmentTools />
       </div>
-
-      <div className="h-[1px] bg-zinc-800" />
-      <AnimationPanel />
     </aside>
   );
 };

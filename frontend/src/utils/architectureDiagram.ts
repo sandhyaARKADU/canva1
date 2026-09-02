@@ -2,6 +2,7 @@ import { fabric } from 'fabric';
 import {
   AI_ARCHITECTURE_PALETTE,
   AI_ARCHITECTURE_TEMPLATE_NAME,
+  DISTRIBUTED_SYSTEM_TEMPLATE_NAME,
   getConnectorAnimationPreset,
 } from './architectureDiagramTypes';
 import type {
@@ -169,6 +170,53 @@ export function createArchitectureIcon(
       selectable: false,
       evented: false,
     }));
+  } else if (icon === 'browser' || icon === 'desktop') {
+    objects.push(new fabric.Rect({
+      left: size * 0.12,
+      top: size * 0.18,
+      width: size * 0.76,
+      height: size * 0.52,
+      rx: size * 0.05,
+      ry: size * 0.05,
+      ...commonIconStroke(color, strokeWidth),
+    }));
+    objects.push(line([size * 0.35, size * 0.84, size * 0.65, size * 0.84], color, strokeWidth));
+    objects.push(line([center, size * 0.7, center, size * 0.84], color, strokeWidth));
+  } else if (icon === 'mobile') {
+    objects.push(new fabric.Rect({
+      left: size * 0.28,
+      top: size * 0.08,
+      width: size * 0.44,
+      height: size * 0.84,
+      rx: size * 0.08,
+      ry: size * 0.08,
+      ...commonIconStroke(color, strokeWidth),
+    }));
+    objects.push(new fabric.Circle({
+      left: center,
+      top: size * 0.82,
+      radius: size * 0.025,
+      originX: 'center',
+      originY: 'center',
+      fill: color,
+      selectable: false,
+      evented: false,
+    }));
+  } else if (icon === 'loadBalancer' || icon === 'reverseProxy') {
+    objects.push(line([center, size * 0.14, center, size * 0.38], color, strokeWidth));
+    objects.push(line([center, size * 0.38, size * 0.24, size * 0.66], color, strokeWidth));
+    objects.push(line([center, size * 0.38, size * 0.76, size * 0.66], color, strokeWidth));
+    [0.5, 0.24, 0.76].forEach((x, index) => {
+      objects.push(new fabric.Rect({
+        left: size * x - size * 0.1,
+        top: size * (index === 0 ? 0.08 : 0.62),
+        width: size * 0.2,
+        height: size * 0.18,
+        rx: size * 0.03,
+        ry: size * 0.03,
+        ...commonIconStroke(color, strokeWidth),
+      }));
+    });
   } else if (icon === 'database') {
     objects.push(new fabric.Path(
       `M ${size * 0.12} ${size * 0.28} C ${size * 0.12} ${size * 0.08}, ${size * 0.88} ${size * 0.08}, ${size * 0.88} ${size * 0.28}
@@ -215,7 +263,7 @@ export function createArchitectureIcon(
     objects.push(diamond);
     objects.push(line([size * 0.12, center, size * 0.88, center], color, strokeWidth));
     objects.push(line([center, size * 0.12, center, size * 0.88], color, strokeWidth));
-  } else if (icon === 'event' || icon === 'queue') {
+  } else if (icon === 'event' || icon === 'queue' || icon === 'logging') {
     [0.25, 0.5, 0.75].forEach((y) => {
       objects.push(new fabric.Circle({
         left: size * 0.2,
@@ -245,6 +293,20 @@ export function createArchitectureIcon(
       objects.push(line([size * 0.06, size * position, size * 0.2, size * position], color, strokeWidth));
       objects.push(line([size * 0.8, size * position, size * 0.94, size * position], color, strokeWidth));
     });
+  } else if (icon === 'cache' || icon === 'storage') {
+    objects.push(new fabric.Path(
+      `M ${size * 0.12} ${size * 0.32} C ${size * 0.12} ${size * 0.14}, ${size * 0.88} ${size * 0.14}, ${size * 0.88} ${size * 0.32}
+       V ${size * 0.72} C ${size * 0.88} ${size * 0.9}, ${size * 0.12} ${size * 0.9}, ${size * 0.12} ${size * 0.72} Z
+       M ${size * 0.12} ${size * 0.32} C ${size * 0.12} ${size * 0.5}, ${size * 0.88} ${size * 0.5}, ${size * 0.88} ${size * 0.32}`,
+      commonIconStroke(color, strokeWidth),
+    ));
+    if (icon === 'cache') {
+      objects.push(line([size * 0.34, size * 0.62, size * 0.66, size * 0.62], color, strokeWidth));
+      objects.push(line([size * 0.5, size * 0.5, size * 0.5, size * 0.74], color, strokeWidth));
+    } else {
+      objects.push(line([size * 0.3, size * 0.62, size * 0.7, size * 0.62], color, strokeWidth));
+      objects.push(line([size * 0.3, size * 0.74, size * 0.7, size * 0.74], color, strokeWidth));
+    }
   } else if (icon === 'cloud') {
     objects.push(new fabric.Path(
       `M ${size * 0.2} ${size * 0.72}
@@ -253,7 +315,31 @@ export function createArchitectureIcon(
        C ${size * 1.02} ${size * 0.45}, ${size * 1.02} ${size * 0.73}, ${size * 0.82} ${size * 0.74} Z`,
       commonIconStroke(color, strokeWidth),
     ));
-  } else if (icon === 'auth') {
+  } else if (icon === 'payment') {
+    objects.push(new fabric.Rect({
+      left: size * 0.12,
+      top: size * 0.28,
+      width: size * 0.76,
+      height: size * 0.48,
+      rx: size * 0.06,
+      ry: size * 0.06,
+      ...commonIconStroke(color, strokeWidth),
+    }));
+    objects.push(line([size * 0.12, size * 0.42, size * 0.88, size * 0.42], color, strokeWidth));
+    objects.push(line([size * 0.24, size * 0.62, size * 0.46, size * 0.62], color, strokeWidth));
+  } else if (icon === 'email') {
+    objects.push(new fabric.Rect({
+      left: size * 0.12,
+      top: size * 0.24,
+      width: size * 0.76,
+      height: size * 0.52,
+      rx: size * 0.04,
+      ry: size * 0.04,
+      ...commonIconStroke(color, strokeWidth),
+    }));
+    objects.push(line([size * 0.14, size * 0.28, center, size * 0.56], color, strokeWidth));
+    objects.push(line([size * 0.86, size * 0.28, center, size * 0.56], color, strokeWidth));
+  } else if (icon === 'auth' || icon === 'identity') {
     objects.push(new fabric.Path(
       `M ${center} ${size * 0.08} L ${size * 0.82} ${size * 0.22} V ${size * 0.48}
        C ${size * 0.82} ${size * 0.72}, ${size * 0.66} ${size * 0.88}, ${center} ${size * 0.95}
@@ -263,7 +349,20 @@ export function createArchitectureIcon(
     ));
     objects.push(line([size * 0.34, size * 0.5, size * 0.46, size * 0.63], color, strokeWidth));
     objects.push(line([size * 0.46, size * 0.63, size * 0.7, size * 0.36], color, strokeWidth));
-  } else if (icon === 'analytics') {
+  } else if (icon === 'registry') {
+    objects.push(new fabric.Rect({
+      left: size * 0.15,
+      top: size * 0.18,
+      width: size * 0.7,
+      height: size * 0.64,
+      rx: size * 0.06,
+      ry: size * 0.06,
+      ...commonIconStroke(color, strokeWidth),
+    }));
+    [0.34, 0.5, 0.66].forEach((y) => {
+      objects.push(line([size * 0.28, size * y, size * 0.72, size * y], color, strokeWidth));
+    });
+  } else if (icon === 'analytics' || icon === 'monitoring' || icon === 'metrics') {
     objects.push(line([size * 0.12, size * 0.86, size * 0.88, size * 0.86], color, strokeWidth));
     [
       [0.2, 0.55],
@@ -1284,6 +1383,168 @@ export async function applyAIChatArchitectureTemplate(canvas: fabric.Canvas) {
   canvas.renderAll();
   return {
     name: AI_ARCHITECTURE_TEMPLATE_NAME,
+    nodes,
+    connectors,
+  };
+}
+
+export async function applyDistributedSystemArchitectureTemplate(canvas: fabric.Canvas) {
+  await ensureArchitectureFontsLoaded();
+  const width = 1440;
+  const height = 1000;
+  const templateRunId = createId('distributed-system');
+  const nodeId = (key: string) => `${templateRunId}-${key}`;
+  canvas.setDimensions({ width, height });
+  canvas.setBackgroundColor(AI_ARCHITECTURE_PALETTE.background, () => undefined);
+
+  const background = new fabric.Rect({
+    left: 0,
+    top: 0,
+    width,
+    height,
+    fill: AI_ARCHITECTURE_PALETTE.background,
+    selectable: true,
+    evented: false,
+    hasControls: false,
+    lockMovementX: true,
+    lockMovementY: true,
+    lockScalingX: true,
+    lockScalingY: true,
+    lockRotation: true,
+    ...architectureMetadata('architectureBackground', 'Distributed system background'),
+  } as fabric.IRectOptions & Record<string, unknown>);
+  const grid = createTechnicalGrid(width, height, {
+    majorEvery: 5,
+    horizontalSpacing: 24,
+    verticalSpacing: 24,
+    opacity: 0.34,
+    thickness: 1,
+    color: AI_ARCHITECTURE_PALETTE.grid,
+  });
+  const title = new fabric.IText('DISTRIBUTED SYSTEM ARCHITECTURE', {
+    left: width / 2,
+    top: 46,
+    originX: 'center',
+    originY: 'top',
+    fontFamily: 'Manrope, Inter, Arial, sans-serif',
+    fontSize: 42,
+    fontWeight: 800,
+    fill: AI_ARCHITECTURE_PALETTE.primaryText,
+    charSpacing: 65,
+    textAlign: 'center',
+    fontReferences: ARCHITECTURE_FONT_REFERENCES.heading,
+    ...architectureMetadata('architecture-title', 'Distributed system architecture'),
+  } as fabric.ITextOptions & Record<string, unknown>);
+  const subtitle = new fabric.IText('CLIENTS → EDGE → SERVICES → DATA → OBSERVABILITY', {
+    left: width / 2,
+    top: 102,
+    originX: 'center',
+    originY: 'top',
+    fontFamily: 'IBM Plex Mono, monospace',
+    fontSize: 16,
+    fontWeight: 700,
+    fill: AI_ARCHITECTURE_PALETTE.secondaryText,
+    charSpacing: 120,
+    textAlign: 'center',
+    fontReferences: ARCHITECTURE_FONT_REFERENCES.mono,
+    ...architectureMetadata('architecture-subtitle', 'Distributed system subtitle'),
+  } as fabric.ITextOptions & Record<string, unknown>);
+
+  const section = (label: string, left: number, top: number, sectionWidth: number, sectionHeight: number, color: string) => new fabric.Group([
+    new fabric.Rect({
+      left: 0,
+      top: 0,
+      width: sectionWidth,
+      height: sectionHeight,
+      rx: 18,
+      ry: 18,
+      fill: 'rgba(17, 21, 29, 0.34)',
+      stroke: `${color}66`,
+      strokeWidth: 1.5,
+      strokeDashArray: [10, 9],
+      selectable: false,
+      evented: false,
+    }),
+    new fabric.IText(label, {
+      left: 18,
+      top: 14,
+      fontFamily: 'IBM Plex Mono, monospace',
+      fontSize: 13,
+      fontWeight: 700,
+      fill: color,
+      charSpacing: 80,
+      selectable: false,
+      evented: false,
+      fontReferences: ARCHITECTURE_FONT_REFERENCES.mono,
+    } as fabric.ITextOptions & Record<string, unknown>),
+  ], {
+    left,
+    top,
+    objectCaching: false,
+    selectable: true,
+    evented: true,
+    ...architectureMetadata('architectureSection', label),
+  } as fabric.IGroupOptions & Record<string, unknown>);
+
+  const nodeConfigs: ArchitectureCardConfig[] = [
+    { nodeId: nodeId('browser'), title: 'BROWSER', subtitle: 'web client', icon: 'browser', left: 70, top: 240, width: 235, accentColor: AI_ARCHITECTURE_PALETTE.blue },
+    { nodeId: nodeId('mobile'), title: 'MOBILE APP', subtitle: 'iOS / Android', icon: 'mobile', left: 70, top: 405, width: 235, accentColor: AI_ARCHITECTURE_PALETTE.green },
+    { nodeId: nodeId('cdn'), title: 'CDN / EDGE', subtitle: 'static cache / WAF', icon: 'globe', left: 380, top: 240, width: 245, accentColor: AI_ARCHITECTURE_PALETTE.blue },
+    { nodeId: nodeId('load-balancer'), title: 'LOAD BALANCER', subtitle: 'traffic routing', icon: 'loadBalancer', left: 380, top: 405, width: 245, accentColor: AI_ARCHITECTURE_PALETTE.purple },
+    { nodeId: nodeId('api'), title: 'API GATEWAY', subtitle: 'auth / throttling', icon: 'gateway', left: 705, top: 320, width: 275, accentColor: AI_ARCHITECTURE_PALETTE.purple },
+    { nodeId: nodeId('service-a'), title: 'USER SERVICE', subtitle: 'profile / accounts', icon: 'server', left: 1060, top: 210, width: 270, accentColor: AI_ARCHITECTURE_PALETTE.green },
+    { nodeId: nodeId('service-b'), title: 'ORDER SERVICE', subtitle: 'business workflow', icon: 'server', left: 1060, top: 375, width: 270, accentColor: AI_ARCHITECTURE_PALETTE.green },
+    { nodeId: nodeId('worker'), title: 'ASYNC WORKERS', subtitle: 'jobs / retries', icon: 'workers', left: 1060, top: 540, width: 270, accentColor: AI_ARCHITECTURE_PALETTE.green },
+    { nodeId: nodeId('redis'), title: 'REDIS CACHE', subtitle: 'hot reads / sessions', icon: 'cache', left: 705, top: 575, width: 275, accentColor: AI_ARCHITECTURE_PALETTE.yellow },
+    { nodeId: nodeId('event-bus'), title: 'KAFKA / EVENT BUS', subtitle: 'topics / pub-sub', icon: 'event', left: 705, top: 740, width: 275, accentColor: AI_ARCHITECTURE_PALETTE.orange },
+    { nodeId: nodeId('primary-db'), title: 'PRIMARY DB', subtitle: 'writes / transactions', icon: 'database', left: 1060, top: 740, width: 270, accentColor: AI_ARCHITECTURE_PALETTE.yellow },
+    { nodeId: nodeId('replica-db'), title: 'READ REPLICA', subtitle: 'read scale / failover', icon: 'database', left: 380, top: 740, width: 245, accentColor: AI_ARCHITECTURE_PALETTE.yellow },
+    { nodeId: nodeId('storage'), title: 'OBJECT STORAGE', subtitle: 'files / media', icon: 'storage', left: 70, top: 740, width: 235, accentColor: AI_ARCHITECTURE_PALETTE.blue },
+  ];
+  const nodes = nodeConfigs.map(createArchitectureCard);
+  const sections = [
+    section('CLIENTS', 38, 185, 300, 395, AI_ARCHITECTURE_PALETTE.blue),
+    section('EDGE', 348, 185, 310, 395, AI_ARCHITECTURE_PALETTE.purple),
+    section('APPLICATION SERVICES', 680, 185, 680, 525, AI_ARCHITECTURE_PALETTE.green),
+    section('DATA PLATFORM', 38, 700, 1322, 245, AI_ARCHITECTURE_PALETTE.yellow),
+  ];
+  const animationFor = (
+    presetId: DiagramConnectorAnimationPresetId,
+    overrides: DiagramConnectorAnimationConfig = {},
+  ): DiagramConnectorAnimationConfig => ({
+    ...(getConnectorAnimationPreset(presetId)?.connector.animation || {}),
+    ...overrides,
+  });
+
+  canvas.add(background, grid, ...sections, ...nodes);
+  const connectors = [
+    { connectorId: `${templateRunId}-browser-cdn`, sourceNodeId: nodeId('browser'), targetNodeId: nodeId('cdn'), sourceAnchor: 'right' as const, targetAnchor: 'left' as const, routing: 'straight' as const, style: 'solid' as const, color: AI_ARCHITECTURE_PALETTE.blue, endArrow: 'arrow' as const, label: 'HTTPS', animation: animationFor('request-flow', { sequenceOrder: 0 }) },
+    { connectorId: `${templateRunId}-mobile-lb`, sourceNodeId: nodeId('mobile'), targetNodeId: nodeId('load-balancer'), sourceAnchor: 'right' as const, targetAnchor: 'left' as const, routing: 'straight' as const, style: 'solid' as const, color: AI_ARCHITECTURE_PALETTE.green, endArrow: 'arrow' as const, label: 'API', animation: animationFor('request-flow', { sequenceOrder: 1 }) },
+    { connectorId: `${templateRunId}-cdn-api`, sourceNodeId: nodeId('cdn'), targetNodeId: nodeId('api'), sourceAnchor: 'right' as const, targetAnchor: 'left' as const, routing: 'elbow' as const, style: 'solid' as const, color: AI_ARCHITECTURE_PALETTE.blue, endArrow: 'arrow' as const, label: 'REQUEST', animation: animationFor('request-flow', { sequenceOrder: 2 }) },
+    { connectorId: `${templateRunId}-lb-api`, sourceNodeId: nodeId('load-balancer'), targetNodeId: nodeId('api'), sourceAnchor: 'right' as const, targetAnchor: 'left' as const, routing: 'straight' as const, style: 'solid' as const, color: AI_ARCHITECTURE_PALETTE.purple, endArrow: 'arrow' as const, animation: animationFor('request-flow', { sequenceOrder: 2 }) },
+    { connectorId: `${templateRunId}-api-service-a`, sourceNodeId: nodeId('api'), targetNodeId: nodeId('service-a'), sourceAnchor: 'right' as const, targetAnchor: 'left' as const, routing: 'orthogonal' as const, style: 'solid' as const, color: AI_ARCHITECTURE_PALETTE.green, endArrow: 'arrow' as const, label: 'REST', animation: animationFor('stream-flow', { sequenceOrder: 3 }) },
+    { connectorId: `${templateRunId}-api-service-b`, sourceNodeId: nodeId('api'), targetNodeId: nodeId('service-b'), sourceAnchor: 'right' as const, targetAnchor: 'left' as const, routing: 'straight' as const, style: 'solid' as const, color: AI_ARCHITECTURE_PALETTE.green, endArrow: 'arrow' as const, label: 'RPC', animation: animationFor('stream-flow', { sequenceOrder: 4 }) },
+    { connectorId: `${templateRunId}-api-redis`, sourceNodeId: nodeId('api'), targetNodeId: nodeId('redis'), sourceAnchor: 'bottom' as const, targetAnchor: 'top' as const, routing: 'straight' as const, style: 'dotted' as const, color: AI_ARCHITECTURE_PALETTE.yellow, startArrow: 'circle' as const, endArrow: 'arrow' as const, label: 'CACHE', animation: animationFor('async-flow', { flowColor: AI_ARCHITECTURE_PALETTE.yellow, glowColor: AI_ARCHITECTURE_PALETTE.yellow, sequenceOrder: 5 }) },
+    { connectorId: `${templateRunId}-service-b-worker`, sourceNodeId: nodeId('service-b'), targetNodeId: nodeId('worker'), sourceAnchor: 'bottom' as const, targetAnchor: 'top' as const, routing: 'straight' as const, style: 'dashed' as const, color: AI_ARCHITECTURE_PALETTE.orange, endArrow: 'arrow' as const, label: 'JOB', animation: animationFor('event-flow', { sequenceOrder: 6 }) },
+    { connectorId: `${templateRunId}-service-worker-bus`, sourceNodeId: nodeId('worker'), targetNodeId: nodeId('event-bus'), sourceAnchor: 'left' as const, targetAnchor: 'right' as const, routing: 'elbow' as const, style: 'dashed' as const, color: AI_ARCHITECTURE_PALETTE.orange, endArrow: 'arrow' as const, label: 'EVENT', animation: animationFor('event-flow', { sequenceOrder: 7 }) },
+    { connectorId: `${templateRunId}-service-a-primary`, sourceNodeId: nodeId('service-a'), targetNodeId: nodeId('primary-db'), sourceAnchor: 'bottom' as const, targetAnchor: 'top' as const, routing: 'orthogonal' as const, style: 'solid' as const, color: AI_ARCHITECTURE_PALETTE.yellow, endArrow: 'arrow' as const, label: 'WRITE', animation: animationFor('async-flow', { flowColor: AI_ARCHITECTURE_PALETTE.yellow, glowColor: AI_ARCHITECTURE_PALETTE.yellow, sequenceOrder: 8 }) },
+    { connectorId: `${templateRunId}-primary-replica`, sourceNodeId: nodeId('primary-db'), targetNodeId: nodeId('replica-db'), sourceAnchor: 'left' as const, targetAnchor: 'right' as const, routing: 'straight' as const, style: 'dotted' as const, color: AI_ARCHITECTURE_PALETTE.yellow, endArrow: 'arrow' as const, label: 'REPLICATION', animation: animationFor('async-flow', { flowColor: AI_ARCHITECTURE_PALETTE.yellow, glowColor: AI_ARCHITECTURE_PALETTE.yellow, sequenceOrder: 9 }) },
+    { connectorId: `${templateRunId}-storage-primary`, sourceNodeId: nodeId('storage'), targetNodeId: nodeId('primary-db'), sourceAnchor: 'right' as const, targetAnchor: 'left' as const, routing: 'straight' as const, style: 'dashed' as const, color: AI_ARCHITECTURE_PALETTE.blue, startArrow: 'arrow' as const, endArrow: 'arrow' as const, label: 'FILES', animation: animationFor('inference-flow', { sequenceOrder: 10 }) },
+  ].flatMap((config) => createDiagramConnector(canvas, config));
+
+  canvas.add(title, subtitle);
+  canvas.sendToBack(background);
+  canvas.moveTo(grid, 1);
+  sections.forEach((object, index) => canvas.moveTo(object, 2 + index));
+  connectors.forEach((object, index) => canvas.moveTo(object, 2 + sections.length + index));
+  nodes.forEach((object) => object.bringToFront());
+  title.bringToFront();
+  subtitle.bringToFront();
+  canvas.discardActiveObject();
+  updateAllDiagramConnectors(canvas);
+  canvas.renderAll();
+  return {
+    name: DISTRIBUTED_SYSTEM_TEMPLATE_NAME,
     nodes,
     connectors,
   };

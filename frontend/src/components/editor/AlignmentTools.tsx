@@ -15,6 +15,7 @@ import {
 import type { PageAlignment } from '../../utils/textSelectionStyles';
 import { alignObjectToPage } from '../../utils/textSelectionStyles';
 import { replaceArchitectureCard } from '../../utils/architectureDiagram';
+import { tidyPosterLayout } from '../../utils/posterLayoutTools';
 
 interface AlignAction {
   title: string;
@@ -51,6 +52,7 @@ const hoverOut = (e: React.MouseEvent<HTMLButtonElement>) => {
 export const AlignmentTools: React.FC = () => {
   const { canvas, selectedObject, saveHistory } = useEditorStore();
   const [pageMargin, setPageMargin] = React.useState(0);
+  const [tidyMessage, setTidyMessage] = React.useState('');
 
   if (!canvas || !selectedObject) return null;
 
@@ -162,8 +164,32 @@ export const AlignmentTools: React.FC = () => {
     saveHistory();
   };
 
+  const handleTidyPosterLayout = () => {
+    const selectedObjects = selectedObject.type === 'activeSelection'
+      ? (selectedObject as fabric.ActiveSelection).getObjects()
+      : [selectedObject];
+    const result = tidyPosterLayout(canvas, selectedObjects.length >= 6 ? selectedObjects : undefined);
+    setTidyMessage(result.message);
+    if (result.ok) saveHistory();
+  };
+
   return (
     <div className="space-y-3">
+      <div>
+        <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Poster Layout</div>
+        <button
+          type="button"
+          onClick={handleTidyPosterLayout}
+          className="w-full rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-[10px] font-bold text-emerald-200 hover:border-emerald-400 hover:text-white"
+          title="Align / Tidy Layout"
+        >
+          Align / Tidy Layout
+        </button>
+        {tidyMessage && <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">{tidyMessage}</p>}
+      </div>
+
+      <div className="h-px bg-zinc-800" />
+
       <div>
         <div className="mb-2 flex items-center justify-between gap-2">
           <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Align to Page</span>

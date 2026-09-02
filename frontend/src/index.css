@@ -9,8 +9,8 @@
   --color-editor-bg: #08080D;
   --color-panel-bg: #101018;
   --color-panel-header: #12121B;
-  --color-panel-border: rgba(255, 255, 255, 0.10);
-  --color-panel-hover: #171722;
+  --color-panel-border: rgba(255, 255, 255, 0.08);
+  --color-panel-hover: #181824;
   --color-accent-purple: #8B5CF6;
   --color-accent-purple-hover: #7C3AED;
   --color-accent-pink: #A855F7;
@@ -56,12 +56,12 @@ body,
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(139, 92, 246, 0.45);
+  background: rgba(148, 163, 184, 0.22);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(168, 85, 247, 0.75);
+  background: rgba(139, 92, 246, 0.55);
 }
 
 /* ── Glass Panel Utility ── */
@@ -74,12 +74,39 @@ body,
 
 /* ── Fabric Canvas Adjustment ── */
 .canvas-container {
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-  border-radius: 8px;
-  background-color: #ffffff;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+  border-radius: 10px;
+  background-color: transparent;
   transition: box-shadow 0.3s ease;
 }
 
 .canvas-container:hover {
-  box-shadow: 0 25px 50px -12px rgba(139, 92, 246, 0.15);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+}
+
+.teckstudio-main-preview .canvas-container {
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.teckstudio-main-preview .canvas-container:hover {
+  box-shadow: none;
+}
+
+.teckstudio-editor-shell {
+  background:
+    radial-gradient(circle at 18% 10%, rgba(139, 92, 246, 0.08), transparent 28%),
+    radial-gradient(circle at 80% 0%, rgba(34, 211, 238, 0.05), transparent 24%),
+    #08080D;
+}
+
+.teckstudio-panel-surface {
+  background: linear-gradient(180deg, rgba(18, 18, 27, 0.98), rgba(13, 13, 19, 0.98));
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.teckstudio-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.25) transparent;
 }

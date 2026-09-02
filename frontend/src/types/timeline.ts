@@ -34,7 +34,7 @@ export type TimelineTransitionType =
 export interface AnimationPreset {
   type: SceneAnimationType;
   durationMs: number;
-  easing: 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out';
+  easing: 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out' | 'ease-out-back';
   delayMs?: number;
 }
 
@@ -47,21 +47,66 @@ export type FabricObjectAnimationType =
   | 'slide-right'
   | 'slide-up'
   | 'slide-down'
+  | 'slide-out'
+  | 'slide-out-left'
+  | 'slide-out-right'
+  | 'slide-out-up'
+  | 'slide-out-down'
   | 'zoom-in'
   | 'zoom-out'
+  | 'scale-out'
   | 'pan-left'
   | 'pan-right'
   | 'pop'
+  | 'pop-in'
   | 'pulse'
+  | 'glow-pulse'
   | 'rotate'
   | 'typewriter'
+  | 'word-reveal'
+  | 'line-reveal'
+  | 'character-reveal'
   | 'bounce'
   | 'float'
   | 'wobble'
   | 'shake'
+  | 'morph'
+  | 'scale'
+  | 'slide'
   | 'draw'
+  | 'line-draw'
+  | 'outline-draw'
+  | 'arrow-draw-in'
+  | 'connector-draw-in'
+  | 'dash-flow'
+  | 'progress-fill'
+  | 'bar-grow'
+  | 'chart-stagger'
+  | 'traveling-dot'
+  | 'dot-sequence'
+  | 'indicator-travel'
+  | 'stagger-reveal'
+  | 'sequential-reveal'
+  | 'marker-reveal'
+  | 'value-reveal'
+  | 'stagger'
+  | 'terminal-type'
+  | 'code-line-reveal'
+  | 'sequential-card-reveal'
+  | 'card-reveal'
+  | 'card-stagger'
+  | 'footer-reveal'
+  | 'status-dot-pulse'
+  | 'technical-pulse'
+  | 'concentric-ring-pulse'
+  | 'ring-draw'
+  | 'ring-pulse'
+  | 'orbit-dot'
   | 'blink'
-  | 'scale-in';
+  | 'cursor-blink'
+  | 'ai-node-scale-in'
+  | 'scale-in'
+  | (string & {});
 
 export interface FabricObjectAnimation {
   id?: string;
@@ -72,10 +117,12 @@ export interface FabricObjectAnimation {
   delayMs?: number;
   easing?: AnimationPreset['easing'];
   loop?: boolean;
+  direction?: string;
   distance?: number;
   rotationAmount?: number;
   from?: Record<string, number>;
   to?: Record<string, number>;
+  params?: Record<string, unknown>;
 }
 
 export interface FabricObjectAnimationConfig {
@@ -88,11 +135,13 @@ export interface FabricObjectAnimationConfig {
   startMs?: number;
   easing?: AnimationPreset['easing'];
   loop?: boolean;
+  direction?: string;
   speed?: number;
   distance?: number;
   rotationAmount?: number;
   sourceAnimationId?: string;
   fullText?: string;
+  params?: Record<string, unknown>;
 }
 
 export interface SceneAnimationConfig {
@@ -113,10 +162,17 @@ export interface TimelineClip {
   id: string;
   sceneId: string;
   pageId: string;
+  projectId?: string;
   name: string;
   thumbnailUrl?: string;
   startMs: number;
   durationMs: number;
+  animationPreset?: string;
+  canvasSnapshot?: string;
+  transition?: {
+    type: TimelineTransitionType;
+    durationMs: number;
+  };
   trimStartMs?: number;
   trimEndMs?: number;
   animation?: SceneAnimationConfig;
@@ -190,6 +246,53 @@ export interface TimelineProject {
   audioDucking?: AudioDuckingConfig;
 }
 
+export const TECHNICAL_REEL_SCENE_ORDER = [
+  {
+    order: 1,
+    key: 'llm-fundamentals',
+    title: 'LLM FUNDAMENTALS',
+    clipName: '01 — LLM FUNDAMENTALS',
+    durationMs: 5000,
+  },
+  {
+    order: 2,
+    key: 'foundations-ai-engineering',
+    title: 'FOUNDATIONS → AI ENGINEERING',
+    clipName: '02 — FOUNDATIONS → AI ENGINEERING',
+    durationMs: 3000,
+  },
+  {
+    order: 3,
+    key: 'before-you-touch-ai',
+    title: 'BEFORE YOU TOUCH AI',
+    clipName: '03 — BEFORE YOU TOUCH AI',
+    durationMs: 2000,
+  },
+  {
+    order: 4,
+    key: 'backend-core',
+    title: 'BACKEND CORE',
+    clipName: '04 — BACKEND CORE',
+    durationMs: 4000,
+  },
+  {
+    order: 5,
+    key: 'engineering-toolbelt',
+    title: 'ENGINEERING TOOLBELT',
+    clipName: '05 — ENGINEERING TOOLBELT',
+    durationMs: 4000,
+  },
+] as const;
+
+export type TechnicalReelSceneKey = typeof TECHNICAL_REEL_SCENE_ORDER[number]['key'];
+
+export interface ResolvedTimelineScene {
+  activeScene: TimelineClip | null;
+  sceneIndex: number;
+  sceneLocalTimeMs: number;
+  projectTimeMs: number;
+}
+
 export const DEFAULT_SCENE_ANIMATION: SceneAnimationConfig = {
   enter: { type: 'none', durationMs: 600, easing: 'ease-out', delayMs: 0 },
   hold: { type: 'none', durationMs: 0, easing: 'linear', delayMs: 0 },
@@ -241,6 +344,56 @@ export const getPosterTrack = (timeline: TimelineProject) => (
   || { id: 'poster-track', type: 'poster' as const, clips: [] }
 );
 
+export const technicalReelDurationForOrder = (index: number) => (
+  TECHNICAL_REEL_SCENE_ORDER[index]?.durationMs
+  ?? TECHNICAL_REEL_SCENE_ORDER[TECHNICAL_REEL_SCENE_ORDER.length - 1].durationMs
+);
+
+export const technicalReelSceneKeyFromName = (name: string): TechnicalReelSceneKey | null => {
+  const normalized = name.toLowerCase().replace(/\s+/g, ' ');
+  const scene = TECHNICAL_REEL_SCENE_ORDER.find((candidate) => (
+    normalized.includes(candidate.title.toLowerCase())
+    || normalized.includes(candidate.clipName.toLowerCase())
+  ));
+  return scene?.key || null;
+};
+
+export const resolveSceneAtTime = (
+  timeline: TimelineProject,
+  timeMs: number,
+): ResolvedTimelineScene => {
+  const clips = getPosterTrack(timeline).clips.filter((clip) => clip.visible);
+  if (clips.length === 0) {
+    return {
+      activeScene: null,
+      sceneIndex: -1,
+      sceneLocalTimeMs: 0,
+      projectTimeMs: 0,
+    };
+  }
+
+  const durationMs = Math.max(timeline.durationMs, clips[clips.length - 1].startMs + clips[clips.length - 1].durationMs);
+  const projectTimeMs = Math.min(Math.max(Number(timeMs) || 0, 0), durationMs);
+  const effectiveTimeMs = projectTimeMs >= durationMs
+    ? Math.max(durationMs - 0.001, 0)
+    : projectTimeMs;
+  const sceneIndex = clips.findIndex((clip) => (
+    effectiveTimeMs >= clip.startMs
+    && effectiveTimeMs < clip.startMs + clip.durationMs
+  ));
+  const resolvedIndex = sceneIndex >= 0 ? sceneIndex : clips.length - 1;
+  const activeScene = clips[resolvedIndex] || null;
+
+  return {
+    activeScene,
+    sceneIndex: activeScene ? resolvedIndex : -1,
+    sceneLocalTimeMs: activeScene
+      ? Math.min(Math.max(effectiveTimeMs - activeScene.startMs, 0), activeScene.durationMs)
+      : 0,
+    projectTimeMs,
+  };
+};
+
 export const normalizeTimelineFps = (fps?: number | null): TimelineFps => (
   SUPPORTED_VIDEO_FPS.includes(fps as TimelineFps)
     ? fps as TimelineFps
@@ -256,16 +409,8 @@ export const normalizeTimelineProject = (timeline?: Partial<TimelineProject> | n
     ? timeline.audioClips.map(normalizeAudioClip)
     : (fallback.audioClips || []);
   let cursorMs = 0;
-  const clips = posterTrack.clips.map((clip, index) => {
+  const clips = posterTrack.clips.map((clip) => {
     const durationMs = clampDuration(clip.durationMs);
-    const previous = posterTrack.clips[index - 1];
-    const overlap = previous
-      ? Math.min(
-        transitions.find((transition) => transition.fromClipId === previous.id && transition.toClipId === clip.id)?.durationMs || 0,
-        Math.floor(Math.min(previous.durationMs, durationMs) * 0.5),
-      )
-      : 0;
-    cursorMs = Math.max(cursorMs - overlap, 0);
     const normalizedClip: TimelineClip = {
       ...clip,
       startMs: cursorMs,

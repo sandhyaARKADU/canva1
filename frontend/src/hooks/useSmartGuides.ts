@@ -20,6 +20,30 @@ export const useSmartGuides = (canvas: fabric.Canvas | null) => {
       horizontalLines = [];
     };
 
+    const isGuideCandidate = (object: fabric.Object, activeObject: fabric.Object) => {
+      const type = String(object.get('teckstudioObjectType' as keyof fabric.Object) || '');
+      return (
+        object !== activeObject
+        && object.visible !== false
+        && object.selectable !== false
+        && object.get('editorOnly' as keyof fabric.Object) !== true
+        && object.get('excludeFromExport' as keyof fabric.Object) !== true
+        && !type.startsWith('diagramConnector')
+        && type !== 'diagramAnchor'
+        && type !== 'diagramBendHandle'
+        && type !== 'diagramEndpointHandle'
+        && type !== 'editorGuide'
+      );
+    };
+
+    const moveBoundsBy = (object: fabric.Object, dx: number, dy: number) => {
+      object.set({
+        left: (object.left || 0) + dx,
+        top: (object.top || 0) + dy,
+      });
+      object.setCoords();
+    };
+
     const drawVerticalLine = (coords: [number, number, number, number]) => {
       const line = new fabric.Line(coords, {
         stroke: aligningLineColor,
@@ -62,52 +86,85 @@ export const useSmartGuides = (canvas: fabric.Canvas | null) => {
 
       const canvasWidth = canvas.getWidth();
       const canvasHeight = canvas.getHeight();
-      
-      const objCenter = activeObject.getCenterPoint();
 
       // Check alignment with Canvas Center
       const canvasCenterX = canvasWidth / 2;
       const canvasCenterY = canvasHeight / 2;
 
       let snapped = false;
+      let activeBounds = activeObject.getBoundingRect(true, true);
+      let activeCenter = {
+        x: activeBounds.left + activeBounds.width / 2,
+        y: activeBounds.top + activeBounds.height / 2,
+      };
 
       // Snap to vertical center
-      if (Math.abs(objCenter.x - canvasCenterX) < aligningLineOffset) {
-        activeObject.set({
-          left: canvasCenterX - (activeObject.width! * activeObject.scaleX!) / 2,
-        });
+      if (Math.abs(activeCenter.x - canvasCenterX) < aligningLineOffset) {
+        moveBoundsBy(activeObject, canvasCenterX - activeCenter.x, 0);
         drawVerticalLine([canvasCenterX, 0, canvasCenterX, canvasHeight]);
         snapped = true;
+        activeBounds = activeObject.getBoundingRect(true, true);
+        activeCenter = { x: activeBounds.left + activeBounds.width / 2, y: activeBounds.top + activeBounds.height / 2 };
       }
       
       // Snap to horizontal center
-      if (Math.abs(objCenter.y - canvasCenterY) < aligningLineOffset) {
-        activeObject.set({
-          top: canvasCenterY - (activeObject.height! * activeObject.scaleY!) / 2,
-        });
+      if (Math.abs(activeCenter.y - canvasCenterY) < aligningLineOffset) {
+        moveBoundsBy(activeObject, 0, canvasCenterY - activeCenter.y);
         drawHorizontalLine([0, canvasCenterY, canvasWidth, canvasCenterY]);
         snapped = true;
+        activeBounds = activeObject.getBoundingRect(true, true);
+        activeCenter = { x: activeBounds.left + activeBounds.width / 2, y: activeBounds.top + activeBounds.height / 2 };
       }
 
       // Check alignment with other objects
-      const objects = canvas.getObjects().filter((obj) => obj !== activeObject && obj.selectable);
+      const objects = canvas.getObjects().filter((obj) => isGuideCandidate(obj, activeObject));
       
       for (let i = 0; i < objects.length; i++) {
         const target = objects[i];
-        const targetCenter = target.getCenterPoint();
+        const targetBounds = target.getBoundingRect(true, true);
+        const xTargets = [
+          targetBounds.left,
+          targetBounds.left + targetBounds.width / 2,
+          targetBounds.left + targetBounds.width,
+        ];
+        const yTargets = [
+          targetBounds.top,
+          targetBounds.top + targetBounds.height / 2,
+          targetBounds.top + targetBounds.height,
+        ];
+        const xCurrent = [
+          activeBounds.left,
+          activeCenter.x,
+          activeBounds.left + activeBounds.width,
+        ];
+        const yCurrent = [
+          activeBounds.top,
+          activeCenter.y,
+          activeBounds.top + activeBounds.height,
+        ];
 
-        // Vertical Alignment checks (centers)
-        if (Math.abs(objCenter.x - targetCenter.x) < aligningLineOffset) {
-          activeObject.set({ left: targetCenter.x - (activeObject.width! * activeObject.scaleX!) / 2 });
-          drawVerticalLine([targetCenter.x, 0, targetCenter.x, canvasHeight]);
-          snapped = true;
+        for (const current of xCurrent) {
+          const match = xTargets.find((targetX) => Math.abs(current - targetX) < aligningLineOffset);
+          if (typeof match === 'number') {
+            moveBoundsBy(activeObject, match - current, 0);
+            drawVerticalLine([match, 0, match, canvasHeight]);
+            snapped = true;
+            activeBounds = activeObject.getBoundingRect(true, true);
+            activeCenter = { x: activeBounds.left + activeBounds.width / 2, y: activeBounds.top + activeBounds.height / 2 };
+            break;
+          }
         }
 
-        // Horizontal Alignment checks (centers)
-        if (Math.abs(objCenter.y - targetCenter.y) < aligningLineOffset) {
-          activeObject.set({ top: targetCenter.y - (activeObject.height! * activeObject.scaleY!) / 2 });
-          drawHorizontalLine([0, targetCenter.y, canvasWidth, targetCenter.y]);
-          snapped = true;
+        for (const current of yCurrent) {
+          const match = yTargets.find((targetY) => Math.abs(current - targetY) < aligningLineOffset);
+          if (typeof match === 'number') {
+            moveBoundsBy(activeObject, 0, match - current);
+            drawHorizontalLine([0, match, canvasWidth, match]);
+            snapped = true;
+            activeBounds = activeObject.getBoundingRect(true, true);
+            activeCenter = { x: activeBounds.left + activeBounds.width / 2, y: activeBounds.top + activeBounds.height / 2 };
+            break;
+          }
         }
       }
 

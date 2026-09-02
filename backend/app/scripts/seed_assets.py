@@ -22,6 +22,7 @@ CANONICAL_CATEGORIES = [
     "animals",
     "people",
     "minimal",
+    "technical-diagrams",
 ]
 
 

@@ -3,6 +3,7 @@ import { fabric } from 'fabric';
 import { useEditorStore } from '../../store/useEditorStore';
 import { applyImageEffectConfig, readImageEffectConfig } from '../../utils/imageEffects';
 import type { ImageEffectConfig } from '../../types/editorFeatures';
+import { moveLayerObject } from '../../utils/layerOrdering';
 
 const isSticker = (object: fabric.Object | null): object is fabric.Object => object?.get('objectType' as keyof fabric.Object) === 'sticker';
 
@@ -132,8 +133,8 @@ export const StickerEditingControls: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-3 gap-2">
-        <button type="button" onClick={() => { selectedObject.bringForward(); render(true); }} className="min-h-9 rounded-lg border border-zinc-800 text-[9px] font-bold text-zinc-300">Forward</button>
-        <button type="button" onClick={() => { selectedObject.sendBackwards(); render(true); }} className="min-h-9 rounded-lg border border-zinc-800 text-[9px] font-bold text-zinc-300">Backward</button>
+        <button type="button" onClick={() => { if (moveLayerObject(canvas, selectedObject, 'forward')) render(true); }} className="min-h-9 rounded-lg border border-zinc-800 text-[9px] font-bold text-zinc-300">Forward</button>
+        <button type="button" onClick={() => { if (moveLayerObject(canvas, selectedObject, 'backward')) render(true); }} className="min-h-9 rounded-lg border border-zinc-800 text-[9px] font-bold text-zinc-300">Backward</button>
         <button type="button" onClick={alignCenter} className="min-h-9 rounded-lg border border-zinc-800 text-[9px] font-bold text-zinc-300">Center</button>
         <button type="button" onClick={duplicateSelected} className="min-h-9 rounded-lg border border-zinc-800 text-[9px] font-bold text-zinc-300">Duplicate</button>
         <button type="button" onClick={deleteSelected} className="col-span-2 min-h-9 rounded-lg border border-rose-500/30 text-[9px] font-bold text-rose-300">Delete Sticker</button>

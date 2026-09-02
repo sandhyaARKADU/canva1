@@ -8,7 +8,7 @@ from sqlalchemy import text
 
 from database import SessionLocal, init_db
 from migrate import run_migrations
-from routes import auth, projects, templates, categories, brand_kits, shared, favorites, assets, ai, ai_poster, stickers, fonts, images, poster_analysis, uploads, qrcode, charts, notifications, content_calendar, audit_logs, feature_flags, elements, video_render
+from routes import auth, projects, templates, categories, brand_kits, shared, favorites, assets, ai, ai_poster, stickers, fonts, images, poster_analysis, uploads, qrcode, charts, notifications, content_calendar, audit_logs, feature_flags, elements, video_render, provider_assets
 from config import resolve_runtime_path, settings, validate_security_settings
 
 app = FastAPI(
@@ -62,6 +62,7 @@ app.include_router(audit_logs.router)
 app.include_router(feature_flags.router)
 app.include_router(elements.router)
 app.include_router(video_render.router)
+app.include_router(provider_assets.router)
 
 
 

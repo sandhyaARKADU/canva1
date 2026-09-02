@@ -1,6 +1,7 @@
 import React from 'react';
 import { ZoomIn, ZoomOut, Maximize } from 'lucide-react';
 import { useEditorStore } from '../../store/useEditorStore';
+import { calculateMainPreviewFit } from '../../utils/canvasPreviewFit';
 
 export const ZoomController: React.FC = () => {
   const { zoom, setZoom, canvas, canvasWidth, canvasHeight } = useEditorStore();
@@ -16,9 +17,7 @@ export const ZoomController: React.FC = () => {
   const handleFit = () => {
     if (!canvas) return;
 
-    // Find the workspace container
-    const canvasContainer = canvas.getElement()?.parentElement;
-    const workspaceContainer = canvasContainer?.parentElement;
+    const workspaceContainer = canvas.getElement()?.closest('[data-canvas-area]') as HTMLElement | null;
     if (!workspaceContainer) return;
 
     const containerWidth = workspaceContainer.clientWidth;
@@ -27,21 +26,11 @@ export const ZoomController: React.FC = () => {
     const cw = canvas.getWidth() || canvasWidth || 800;
     const ch = canvas.getHeight() || canvasHeight || 800;
 
-    // Calculate ideal zoom with padding
-    const padding = 80;
-    const scaleX = (containerWidth - padding) / cw;
-    const scaleY = (containerHeight - padding) / ch;
-    const idealZoom = Math.min(scaleX, scaleY, 1.0);
-
-    // Calculate centering offset
-    const scaledWidth = cw * idealZoom;
-    const scaledHeight = ch * idealZoom;
-    const offsetX = (containerWidth - scaledWidth) / 2;
-    const offsetY = (containerHeight - scaledHeight) / 2;
+    const previewFit = calculateMainPreviewFit(containerWidth, containerHeight, cw, ch);
 
     // Apply viewport transform
-    canvas.setViewportTransform([idealZoom, 0, 0, idealZoom, offsetX, offsetY]);
-    setZoom(idealZoom);
+    canvas.setViewportTransform([previewFit.scale, 0, 0, previewFit.scale, previewFit.left, previewFit.top]);
+    setZoom(previewFit.scale);
     canvas.renderAll();
   };
 

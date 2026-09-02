@@ -5,6 +5,50 @@ import Editor from './Editor';
 import { AuthPages } from './components/auth/AuthPages';
 import { apiFetch, getAuthToken } from './services/apiClient';
 
+class TeckstudioErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error('[TECKSTUDIO] React render failed:', error, info);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    const showDetails = import.meta.env.DEV;
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#08080D] p-6 text-zinc-100">
+        <div className="w-full max-w-xl rounded-2xl border border-rose-500/30 bg-[#12121B] p-6 shadow-2xl shadow-black/40">
+          <div className="text-[10px] font-bold uppercase tracking-[0.24em] text-rose-300">TECKSTUDIO</div>
+          <h1 className="mt-3 text-xl font-black text-white">TECKSTUDIO failed to render</h1>
+          <p className="mt-2 text-sm leading-6 text-zinc-400">
+            A runtime error stopped the interface from rendering. Retry after the fix or reload the page.
+          </p>
+          {showDetails && (
+            <pre className="mt-4 max-h-56 overflow-auto rounded-xl border border-zinc-800 bg-black/40 p-3 text-xs text-rose-100">
+              {this.state.error.message}
+              {this.state.error.stack ? `\n\n${this.state.error.stack}` : ''}
+            </pre>
+          )}
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="mt-5 rounded-xl bg-violet-600 px-4 py-2 text-sm font-bold text-white hover:bg-violet-500"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
+
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const token = typeof window !== 'undefined' && window.localStorage ? getAuthToken() : null;
   if (!token) {
@@ -74,15 +118,17 @@ const SharedViewPage: React.FC = () => {
 
 const App: React.FC = () => {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<AuthPages />} />
-        <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-        <Route path="/editor/:id" element={<ProtectedRoute><Editor /></ProtectedRoute>} />
-        <Route path="/view/:token" element={<SharedViewPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </BrowserRouter>
+    <TeckstudioErrorBoundary>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<AuthPages />} />
+          <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+          <Route path="/editor/:id" element={<ProtectedRoute><Editor /></ProtectedRoute>} />
+          <Route path="/view/:token" element={<SharedViewPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </TeckstudioErrorBoundary>
   );
 };
 

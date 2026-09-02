@@ -30,6 +30,57 @@ const GRADIENTS = [
 ];
 
 const SOLID_COLORS = ['#ffffff', '#18181b', '#ef4444', '#f97316', '#f59e0b', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899'];
+const TECHNICAL_REEL_TEXT_PRESET_IDS = [
+  'technical-reel-hero-heading',
+  'technical-reel-two-line-heading',
+  'technical-reel-large-two-line-heading',
+  'technical-reel-accent-highlight-heading',
+  'technical-reel-scene-number',
+  'technical-reel-section-number',
+  'technical-reel-section-number-short',
+  'technical-reel-breadcrumb',
+  'technical-reel-mono-subtitle',
+  'technical-reel-section-label',
+  'technical-reel-card-label',
+  'technical-reel-small-uppercase-label',
+  'technical-reel-small-label',
+  'technical-reel-body',
+  'technical-reel-code-text',
+  'technical-reel-terminal-text',
+  'technical-reel-accent-heading',
+  'technical-reel-footer-text',
+  'technical-reel-footer-statement',
+  'technical-reel-tiny-metadata-text',
+  'technical-reel-tag-chip-text',
+  'technical-reel-caption',
+  'technical-reel-footer-caption',
+];
+
+const TECHNICAL_REEL_TEXT_ROLES: Record<string, string> = {
+  'technical-reel-hero-heading': 'hero-title',
+  'technical-reel-two-line-heading': 'hero-title',
+  'technical-reel-large-two-line-heading': 'hero-title',
+  'technical-reel-accent-highlight-heading': 'heading',
+  'technical-reel-scene-number': 'technical-section-number',
+  'technical-reel-section-number': 'technical-section-number',
+  'technical-reel-section-number-short': 'technical-section-number',
+  'technical-reel-breadcrumb': 'small-label',
+  'technical-reel-mono-subtitle': 'subtitle',
+  'technical-reel-section-label': 'small-label',
+  'technical-reel-card-label': 'card',
+  'technical-reel-small-uppercase-label': 'small-label',
+  'technical-reel-small-label': 'small-label',
+  'technical-reel-body': 'body',
+  'technical-reel-code-text': 'code-line',
+  'technical-reel-terminal-text': 'terminal-line',
+  'technical-reel-accent-heading': 'hero-title',
+  'technical-reel-footer-text': 'footer',
+  'technical-reel-footer-statement': 'footer',
+  'technical-reel-tiny-metadata-text': 'caption',
+  'technical-reel-tag-chip-text': 'token-chip',
+  'technical-reel-caption': 'caption',
+  'technical-reel-footer-caption': 'footer',
+};
 
 const isTextObject = (object: fabric.Object | null): object is fabric.Textbox => Boolean(object && ['text', 'i-text', 'textbox'].includes(object.type || ''));
 
@@ -140,6 +191,7 @@ export const TextToolsPanel: React.FC = () => {
       id: crypto.randomUUID(),
       objectType: 'text',
       textRole: 'heading',
+      posterRole: TECHNICAL_REEL_TEXT_ROLES[preset.id],
       stylePresetId: preset.id,
     } as fabric.ITextboxOptions & Record<string, unknown>);
 
@@ -224,6 +276,26 @@ export const TextToolsPanel: React.FC = () => {
       </div>
 
       <div>
+        <div className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wide text-cyan-300">
+          <Type className="h-3.5 w-3.5" /> Technical Reel Styles
+        </div>
+        <div className="mb-4 grid grid-cols-2 gap-2">
+          {TEXT_PRESETS.filter((preset) => TECHNICAL_REEL_TEXT_PRESET_IDS.includes(preset.id)).map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              onMouseDown={preserveSelection}
+              onClick={() => void addTextPreset(preset)}
+              className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3 text-left transition hover:border-cyan-400/60"
+            >
+              <span className="block truncate text-sm font-black text-zinc-100">{preset.preview}</span>
+              <span className="mt-1 block truncate text-[9px] text-zinc-500">{preset.name}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
         <div className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wide text-emerald-300">
           <Type className="h-3.5 w-3.5" /> Technical Styles
         </div>
@@ -258,6 +330,7 @@ export const TextToolsPanel: React.FC = () => {
         </div>
         <div className="grid grid-cols-2 gap-2">
           {TEXT_PRESETS.filter((preset) => preset.category !== 'heading' && ![
+            ...TECHNICAL_REEL_TEXT_PRESET_IDS,
             'technical-hero-title',
             'prompt-harness-wide-tracking',
             'technical-section-heading',

@@ -3,10 +3,12 @@ import {
   AI_ARCHITECTURE_PALETTE,
   normalizeConnectorAnimation,
 } from './architectureDiagramTypes';
+import { normalizeDiagramLayerStack } from './layerOrdering';
 import type {
   ConnectorAnchor,
   DiagramArrowStyle,
   DiagramConnectorConfig,
+  DiagramConnectorRouting,
 } from './architectureDiagramTypes';
 
 type DiagramPath = fabric.Path & {
@@ -17,6 +19,27 @@ type RoutePoint = {
   x: number;
   y: number;
 };
+
+const cloneRoutePoint = (point?: RoutePoint | null): RoutePoint | undefined => (
+  point
+    ? { x: Number(point.x) || 0, y: Number(point.y) || 0 }
+    : undefined
+);
+
+const CONNECTOR_ROUTINGS = new Set<DiagramConnectorRouting>([
+  'straight',
+  'horizontal',
+  'vertical',
+  'elbow',
+  'orthogonal',
+  'curved',
+  'bezier',
+  'loop',
+]);
+
+const isConnectorRouting = (value?: string): value is DiagramConnectorRouting => (
+  Boolean(value) && CONNECTOR_ROUTINGS.has(value as DiagramConnectorRouting)
+);
 
 const createId = (prefix: string) => (
   window.crypto?.randomUUID
@@ -30,30 +53,146 @@ const connectorObjectMetadata = (
   config: DiagramConnectorConfig,
 ) => ({
   id: createId(`${connectorId}-${role}`),
+  objectId: connectorId,
   name: `${config.label || 'Diagram connector'} — ${role}`,
   objectType: role,
   teckstudioObjectType: role,
   diagramConnectorId: connectorId,
   diagramConnectorRole: role,
   diagramConnectorConfig: config,
-  connectorSourceNodeId: config.sourceNodeId,
-  connectorTargetNodeId: config.targetNodeId,
+  connectorSourceNodeId: config.sourceObjectId || config.sourceNodeId,
+  connectorTargetNodeId: config.targetObjectId || config.targetNodeId,
+  sourceObjectId: config.sourceObjectId || config.sourceNodeId,
+  targetObjectId: config.targetObjectId || config.targetNodeId,
+  sourceAnchor: config.sourceAnchor,
+  targetAnchor: config.targetAnchor,
+  manualConnector: config.manualConnector,
+  manualStartPoint: config.manualStartPoint,
+  manualEndPoint: config.manualEndPoint,
+  connectorType: config.connectorType || config.routing,
+  lineStyle: config.lineStyle || config.style,
+  connectorSourceObjectId: config.sourceObjectId || config.sourceNodeId,
+  connectorTargetObjectId: config.targetObjectId || config.targetNodeId,
   connectorSourceAnchor: config.sourceAnchor,
   connectorTargetAnchor: config.targetAnchor,
   connectorRouting: config.routing,
   connectorLineStyle: config.style,
   connectorBendOffset: config.bendOffset,
   connectorCurvature: config.curvature,
+  connectorArrowheadColor: config.arrowheadColor || config.color,
   elementCategory: 'Technology',
   elementSubcategory: 'Diagram connectors',
   elementTags: ['architecture', 'diagram', 'connector', role],
   elementEditable: true,
 });
 
+const CONNECTOR_DECORATION_TYPES = new Set([
+  'diagramConnectorPath',
+  'diagramConnectorStart',
+  'diagramConnectorEnd',
+  'diagramConnectorLabel',
+  'diagramConnectorLabelText',
+  'diagramConnectorLabelBackground',
+  'diagramConnectorPreview',
+  'diagramAnchor',
+  'diagramBendHandle',
+  'diagramEndpointHandle',
+  'diagramArrow',
+  'diagramArrowPath',
+  'diagramBoxText',
+  'diagramBoxBackground',
+  'editorGuide',
+]);
+
+const CONNECTABLE_FABRIC_TYPES = new Set([
+  'rect',
+  'circle',
+  'ellipse',
+  'triangle',
+  'polygon',
+  'image',
+]);
+
+const TEXT_FABRIC_TYPES = new Set([
+  'text',
+  'textbox',
+  'i-text',
+]);
+
+const isLegacyConnectorDecorationName = (object: fabric.Object) => (
+  String(object.get('name' as keyof fabric.Object) || '').startsWith('Diagram connector — diagramConnector')
+);
+
+export const getConnectableObjectId = (object?: fabric.Object | null) => {
+  if (!object) return '';
+  return String(
+    object.get('architectureNodeId' as keyof fabric.Object)
+    || object.get('id' as keyof fabric.Object)
+    || object.get('objectId' as keyof fabric.Object)
+    || '',
+  );
+};
+
+export const ensureConnectableObjectId = (object: fabric.Object) => {
+  const existing = getConnectableObjectId(object);
+  if (existing) return existing;
+  const id = createId('connectable');
+  object.set({ id } as Record<string, unknown>);
+  return id;
+};
+
+export const isConnectableDiagramObject = (object?: fabric.Object | null) => {
+  if (!object) return false;
+  if (object.get('editorOnly' as keyof fabric.Object) === true) return false;
+  if (object.get('excludeFromExport' as keyof fabric.Object) === true) return false;
+  if (object.selectable === false || object.evented === false) return false;
+
+  const fabricType = String(object.type || '');
+  const objectType = String(object.get('objectType' as keyof fabric.Object) || '');
+  const teckstudioType = String(object.get('teckstudioObjectType' as keyof fabric.Object) || '');
+  const role = String(object.get('diagramConnectorRole' as keyof fabric.Object) || '');
+  const typeValues = [fabricType, objectType, teckstudioType, role];
+
+  if (isLegacyConnectorDecorationName(object)) return false;
+  if (typeValues.some((value) => CONNECTOR_DECORATION_TYPES.has(value))) return false;
+  if (fabricType === 'activeSelection' || TEXT_FABRIC_TYPES.has(fabricType)) return false;
+  if (fabricType === 'group') return teckstudioType === 'architectureNode' || teckstudioType === 'diagramBox';
+  if (fabricType === 'line' || fabricType === 'path') return teckstudioType === 'architectureNode';
+
+  return CONNECTABLE_FABRIC_TYPES.has(fabricType);
+};
+
+export const getConnectableObjects = (canvas: fabric.Canvas) => (
+  canvas.getObjects().filter(isConnectableDiagramObject)
+);
+
 const findNode = (canvas: fabric.Canvas, nodeId: string) => canvas.getObjects().find((object) => (
-  object.get('teckstudioObjectType' as keyof fabric.Object) === 'architectureNode' &&
-  object.get('architectureNodeId' as keyof fabric.Object) === nodeId
+  getConnectableObjectId(object) === nodeId
 ));
+
+const resolveConnectorEndpoint = (
+  canvas: fabric.Canvas,
+  config: DiagramConnectorConfig,
+  side: 'source' | 'target',
+) => {
+  const nodeId = side === 'source'
+    ? config.sourceObjectId || config.sourceNodeId
+    : config.targetObjectId || config.targetNodeId;
+  const anchor = side === 'source' ? config.sourceAnchor : config.targetAnchor;
+  const node = nodeId ? findNode(canvas, nodeId) : null;
+  if (node) return getArchitectureAnchorPoint(node, anchor);
+  const manualPoint = side === 'source' ? config.manualStartPoint : config.manualEndPoint;
+  return cloneRoutePoint(manualPoint) || null;
+};
+
+const resolveConnectorEndpoints = (
+  canvas: fabric.Canvas,
+  config: DiagramConnectorConfig,
+) => {
+  const source = resolveConnectorEndpoint(canvas, config, 'source');
+  const target = resolveConnectorEndpoint(canvas, config, 'target');
+  return source && target ? { source, target } : null;
+};
 
 export function getArchitectureAnchorPoint(
   object: fabric.Object,
@@ -79,14 +218,28 @@ export function getArchitectureAnchorPoint(
   return points[anchor];
 }
 
-const normalizeConfig = (input: DiagramConnectorConfig): DiagramConnectorConfig => ({
+const normalizeConfig = (input: DiagramConnectorConfig): DiagramConnectorConfig => {
+  const sourceObjectId = input.sourceObjectId || input.sourceNodeId;
+  const targetObjectId = input.targetObjectId || input.targetNodeId;
+  const color = input.color || AI_ARCHITECTURE_PALETTE.inactiveConnector;
+  return {
   ...input,
+  sourceNodeId: sourceObjectId || '',
+  targetNodeId: targetObjectId || '',
+  sourceObjectId,
+  targetObjectId,
+  manualConnector: Boolean(input.manualConnector || input.manualStartPoint || input.manualEndPoint),
+  manualStartPoint: cloneRoutePoint(input.manualStartPoint),
+  manualEndPoint: cloneRoutePoint(input.manualEndPoint),
   connectorId: input.connectorId || createId('diagram-connector'),
   sourceAnchor: input.sourceAnchor || 'right',
   targetAnchor: input.targetAnchor || 'left',
-  routing: input.routing || 'elbow',
-  style: input.style || 'solid',
-  color: input.color || AI_ARCHITECTURE_PALETTE.inactiveConnector,
+  routing: input.routing || (isConnectorRouting(input.connectorType) ? input.connectorType : undefined) || 'elbow',
+  connectorType: input.connectorType || input.routing || 'elbow',
+  style: input.style || input.lineStyle || 'solid',
+  lineStyle: input.lineStyle || input.style || 'solid',
+  color,
+  arrowheadColor: input.arrowheadColor || color,
   width: Math.max(1, input.width ?? 2),
   opacity: Math.min(1, Math.max(0.05, input.opacity ?? 0.85)),
   dashLength: Math.max(1, input.dashLength ?? 10),
@@ -97,7 +250,7 @@ const normalizeConfig = (input: DiagramConnectorConfig): DiagramConnectorConfig 
   bendOffset: input.bendOffset || 0,
   curvature: Math.max(0.1, Math.min(1, input.curvature ?? 0.45)),
   label: input.label || '',
-  labelColor: input.labelColor || input.color || AI_ARCHITECTURE_PALETTE.green,
+  labelColor: input.labelColor || color || AI_ARCHITECTURE_PALETTE.green,
   labelBackground: input.labelBackground || 'rgba(7, 10, 15, 0.88)',
   labelPosition: Math.max(0.05, Math.min(0.95, input.labelPosition ?? 0.5)),
   labelOffset: input.labelOffset ?? -16,
@@ -105,8 +258,9 @@ const normalizeConfig = (input: DiagramConnectorConfig): DiagramConnectorConfig 
   labelVisible: input.labelVisible !== false,
   glow: Boolean(input.glow),
   glowBlur: Math.max(0, input.glowBlur ?? 8),
-  animation: normalizeConnectorAnimation(input.animation, input.color || AI_ARCHITECTURE_PALETTE.green),
-});
+  animation: normalizeConnectorAnimation(input.animation, color || AI_ARCHITECTURE_PALETTE.green),
+  };
+};
 
 const dashArrayForConfig = (config: DiagramConnectorConfig) => {
   if (config.style === 'dashed') return [config.dashLength || 10, config.dashGap || 8];
@@ -137,6 +291,40 @@ const buildRoute = (
       points: [source, bend, target],
       tangentStart: Math.atan2(bend.y - source.y, bend.x - source.x),
       tangentEnd: Math.atan2(target.y - bend.y, target.x - bend.x),
+    };
+  }
+
+  if (config.routing === 'loop') {
+    const horizontalDirection = target.x >= source.x ? 1 : -1;
+    const verticalDirection = target.y >= source.y ? 1 : -1;
+    const clearance = Math.max(64, Math.abs(config.bendOffset || 0) + 64);
+    const exit = { x: source.x + horizontalDirection * clearance, y: source.y };
+    const corner = { x: exit.x, y: target.y + verticalDirection * clearance };
+    const entry = { x: target.x - horizontalDirection * clearance, y: corner.y };
+    return {
+      path: `M ${source.x} ${source.y} L ${exit.x} ${exit.y} L ${corner.x} ${corner.y} L ${entry.x} ${entry.y} L ${target.x} ${target.y}`,
+      points: [source, exit, corner, entry, target],
+      tangentStart: Math.atan2(exit.y - source.y, exit.x - source.x),
+      tangentEnd: Math.atan2(target.y - entry.y, target.x - entry.x),
+    };
+  }
+
+  if (config.routing === 'orthogonal') {
+    const dx = target.x - source.x;
+    const dy = target.y - source.y;
+    const horizontalFirst = Math.abs(dx) >= Math.abs(dy);
+    const clearance = 28 + Math.abs(config.bendOffset || 0);
+    const first = horizontalFirst
+      ? { x: source.x + Math.sign(dx || 1) * Math.max(clearance, Math.abs(dx) / 2), y: source.y }
+      : { x: source.x, y: source.y + Math.sign(dy || 1) * Math.max(clearance, Math.abs(dy) / 2) };
+    const second = horizontalFirst
+      ? { x: first.x, y: target.y }
+      : { x: target.x, y: first.y };
+    return {
+      path: `M ${source.x} ${source.y} L ${first.x} ${first.y} L ${second.x} ${second.y} L ${target.x} ${target.y}`,
+      points: [source, first, second, target],
+      tangentStart: Math.atan2(first.y - source.y, first.x - source.x),
+      tangentEnd: Math.atan2(target.y - second.y, target.x - second.x),
     };
   }
 
@@ -174,6 +362,32 @@ const buildRoute = (
     tangentStart: Math.atan2(middle.y - source.y, middle.x - source.x),
     tangentEnd: Math.atan2(target.y - second.y, target.x - second.x),
   };
+};
+
+const shiftRoutePoint = (point: RoutePoint, angle: number, distance: number): RoutePoint => ({
+  x: point.x + Math.cos(angle) * distance,
+  y: point.y + Math.sin(angle) * distance,
+});
+
+const buildConnectorRoute = (
+  source: RoutePoint,
+  target: RoutePoint,
+  config: DiagramConnectorConfig,
+) => {
+  const initialRoute = buildRoute(source, target, config);
+  const startTrim = config.startArrow && config.startArrow !== 'none'
+    ? Math.max(4, (config.arrowSize || 13) * 0.58)
+    : Math.max(0, (config.width || 2) * 0.5);
+  const endTrim = config.endArrow && config.endArrow !== 'none'
+    ? Math.max(4, (config.arrowSize || 13) * 0.68)
+    : Math.max(0, (config.width || 2) * 0.5);
+  const trimmedSource = shiftRoutePoint(source, initialRoute.tangentStart, startTrim);
+  const trimmedTarget = shiftRoutePoint(target, initialRoute.tangentEnd + Math.PI, endTrim);
+
+  if (Math.hypot(trimmedTarget.x - trimmedSource.x, trimmedTarget.y - trimmedSource.y) < 8) {
+    return initialRoute;
+  }
+  return buildRoute(trimmedSource, trimmedTarget, config);
 };
 
 const cubicPoint = (
@@ -268,12 +482,10 @@ export function getDiagramConnectorGeometry(
   const rawConfig = path.get('diagramConnectorConfig' as keyof fabric.Object) as DiagramConnectorConfig | undefined;
   if (!rawConfig) return null;
   const config = normalizeConfig(rawConfig);
-  const sourceNode = findNode(canvas, config.sourceNodeId);
-  const targetNode = findNode(canvas, config.targetNodeId);
-  if (!sourceNode || !targetNode) return null;
-  const source = getArchitectureAnchorPoint(sourceNode, config.sourceAnchor);
-  const target = getArchitectureAnchorPoint(targetNode, config.targetAnchor);
-  const route = buildRoute(source, target, config);
+  const endpoints = resolveConnectorEndpoints(canvas, config);
+  if (!endpoints) return null;
+  const { source, target } = endpoints;
+  const route = buildConnectorRoute(source, target, config);
   if (route.bezier) {
     const samples = Array.from({ length: 65 }, (_, index) => (
       cubicPoint(
@@ -325,7 +537,7 @@ const createConnectorPath = (
   target: RoutePoint,
   config: DiagramConnectorConfig,
 ) => {
-  const route = buildRoute(source, target, config);
+  const route = buildConnectorRoute(source, target, config);
   const path = new fabric.Path(route.path, {
     fill: '',
     stroke: config.color,
@@ -364,13 +576,14 @@ const createCapObject = (
   config: DiagramConnectorConfig,
 ) => {
   const size = config.arrowSize || 13;
+  const arrowheadColor = config.arrowheadColor || config.color || AI_ARCHITECTURE_PALETTE.green;
   let object: fabric.Object;
   if (style === 'circle') {
     object = new fabric.Circle({
       radius: size * 0.34,
       originX: 'center',
       originY: 'center',
-      fill: config.color,
+      fill: arrowheadColor,
     });
   } else if (style === 'diamond') {
     object = new fabric.Rect({
@@ -379,7 +592,7 @@ const createCapObject = (
       angle: 45,
       originX: 'center',
       originY: 'center',
-      fill: config.color,
+      fill: arrowheadColor,
     });
   } else if (style === 'open-arrow') {
     object = new fabric.Path(
@@ -388,7 +601,7 @@ const createCapObject = (
         originX: 'center',
         originY: 'center',
         fill: '',
-        stroke: config.color,
+        stroke: arrowheadColor,
         strokeWidth: Math.max(1.5, (config.width || 2) * 1.2),
         strokeLineCap: 'round',
         strokeLineJoin: 'round',
@@ -401,7 +614,7 @@ const createCapObject = (
       height: size,
       originX: 'center',
       originY: 'center',
-      fill: config.color,
+      fill: arrowheadColor,
     });
   }
   object.set({
@@ -412,6 +625,180 @@ const createCapObject = (
     diagramArrowStyle: style,
   } as Record<string, unknown>);
   return object;
+};
+
+const isNonEmptyPaint = (value: unknown) => (
+  typeof value === 'string' && value !== '' && value !== 'transparent'
+);
+
+const connectorChildren = (object: fabric.Object) => (
+  object.type === 'group' ? (object as fabric.Group).getObjects() : [object]
+);
+
+const getConnectorConfig = (object: fabric.Object): DiagramConnectorConfig | null => {
+  const config = (
+    object.get('diagramConnectorConfig' as keyof fabric.Object)
+    || object.get('diagramArrowConfig' as keyof fabric.Object)
+  ) as DiagramConnectorConfig | undefined;
+  return config || null;
+};
+
+export const isDiagramArrowObject = (object?: fabric.Object | null) => {
+  if (!object) return false;
+  const type = String(object.get('teckstudioObjectType' as keyof fabric.Object) || '');
+  const role = String(object.get('diagramConnectorRole' as keyof fabric.Object) || '');
+  return (
+    type === 'diagramConnectorPath'
+    || type === 'diagramArrow'
+    || type === 'diagramArrowPath'
+    || role === 'diagramConnectorPath'
+    || role === 'diagramConnectorStart'
+    || role === 'diagramConnectorEnd'
+  );
+};
+
+export const getDiagramArrowTargets = (object?: fabric.Object | null): fabric.Object[] => {
+  if (!object) return [];
+  if (object.type === 'activeSelection') {
+    return (object as fabric.ActiveSelection).getObjects().filter(isDiagramArrowObject);
+  }
+  return isDiagramArrowObject(object) ? [object] : [];
+};
+
+const syncAnimationColors = (
+  previous: DiagramConnectorConfig,
+  nextColor: string,
+) => {
+  const animation = previous.animation;
+  if (!animation) return animation;
+  const previousColor = previous.color || AI_ARCHITECTURE_PALETTE.green;
+  const shouldSync = (value?: string) => (
+    !value
+    || value.toLowerCase() === previousColor.toLowerCase()
+    || value.toLowerCase() === AI_ARCHITECTURE_PALETTE.green.toLowerCase()
+  );
+  return {
+    ...animation,
+    flowColor: shouldSync(animation.flowColor) ? nextColor : animation.flowColor,
+    baseColor: shouldSync(animation.baseColor) ? nextColor : animation.baseColor,
+    glowColor: shouldSync(animation.glowColor) ? nextColor : animation.glowColor,
+  };
+};
+
+const patchForArrowColor = (
+  previous: DiagramConnectorConfig,
+  color: string,
+): Partial<DiagramConnectorConfig> => ({
+  color,
+  arrowheadColor: color,
+  labelColor: color,
+  animation: syncAnimationColors(previous, color),
+});
+
+const applyStandaloneArrowConfig = (
+  object: fabric.Object,
+  patch: Partial<DiagramConnectorConfig>,
+  syncWholeArrowColor = false,
+) => {
+  const rawConfig = getConnectorConfig(object);
+  const previous = normalizeConfig({
+    ...(rawConfig || {}),
+    sourceNodeId: rawConfig?.sourceNodeId || '',
+    targetNodeId: rawConfig?.targetNodeId || '',
+  });
+  const normalizedPatch = syncWholeArrowColor && patch.color
+    ? patchForArrowColor(previous, patch.color)
+    : patch;
+  const config = normalizeConfig({ ...previous, ...normalizedPatch });
+  const arrowheadColor = config.arrowheadColor || config.color || AI_ARCHITECTURE_PALETTE.green;
+  connectorChildren(object).forEach((child) => {
+    const role = String(child.get('diagramConnectorRole' as keyof fabric.Object) || '');
+    const type = String(child.get('teckstudioObjectType' as keyof fabric.Object) || '');
+    if (role === 'diagramConnectorLabelBackground') return;
+    if (role === 'diagramConnectorPath' || type === 'diagramArrowPath') {
+      child.set({
+        stroke: config.color,
+        strokeWidth: config.width,
+        strokeDashArray: dashArrayForConfig(config),
+        opacity: config.opacity,
+        diagramConnectorConfig: config,
+      } as Record<string, unknown>);
+      return;
+    }
+    if (role === 'diagramConnectorStart' || role === 'diagramConnectorEnd') {
+      if (isNonEmptyPaint(child.get('fill'))) child.set('fill', arrowheadColor as never);
+      if (isNonEmptyPaint(child.get('stroke')) || child.get('diagramArrowStyle' as keyof fabric.Object) === 'open-arrow') {
+        child.set({
+          stroke: arrowheadColor,
+          strokeWidth: Math.max(1.5, (config.width || 2) * 1.2),
+        } as Record<string, unknown>);
+      }
+      child.set({
+        opacity: config.opacity,
+        diagramConnectorConfig: config,
+      } as Record<string, unknown>);
+      return;
+    }
+    if (role === 'diagramConnectorLabelText') {
+      child.set('fill', config.labelColor as never);
+    }
+    child.set({ diagramConnectorConfig: config } as Record<string, unknown>);
+  });
+  object.set({
+    opacity: 1,
+    diagramArrowConfig: config,
+    architectureIconColor: config.color,
+    dirty: true,
+  } as Record<string, unknown>);
+  object.setCoords();
+  return true;
+};
+
+export const applyDiagramArrowStyle = (
+  canvas: fabric.Canvas,
+  object: fabric.Object,
+  patch: Partial<DiagramConnectorConfig>,
+  options: { syncWholeArrowColor?: boolean } = {},
+) => {
+  let applied = false;
+  getDiagramArrowTargets(object).forEach((target) => {
+    if (target.get('teckstudioObjectType' as keyof fabric.Object) === 'diagramConnectorPath') {
+      const rawConfig = getConnectorConfig(target);
+      if (!rawConfig) return;
+      const previous = normalizeConfig({
+        ...rawConfig,
+        sourceNodeId: rawConfig.sourceNodeId || '',
+        targetNodeId: rawConfig.targetNodeId || '',
+      });
+      const normalizedPatch = options.syncWholeArrowColor && patch.color
+        ? patchForArrowColor(previous, patch.color)
+        : patch;
+      const updated = updateDiagramConnectorConfig(canvas, target, normalizedPatch);
+      applied = Boolean(updated) || applied;
+      return;
+    }
+    applied = applyStandaloneArrowConfig(target, patch, Boolean(options.syncWholeArrowColor)) || applied;
+  });
+  if (applied) canvas.requestRenderAll();
+  return applied;
+};
+
+export const getDiagramArrowAppearance = (object?: fabric.Object | null) => {
+  const target = getDiagramArrowTargets(object)[0];
+  if (!target) return null;
+  const rawConfig = getConnectorConfig(target);
+  const config = normalizeConfig({
+    ...(rawConfig || {}),
+    sourceNodeId: rawConfig?.sourceNodeId || '',
+    targetNodeId: rawConfig?.targetNodeId || '',
+  });
+  return {
+    arrowColor: config.color || AI_ARCHITECTURE_PALETTE.green,
+    strokeColor: config.color || AI_ARCHITECTURE_PALETTE.green,
+    arrowheadColor: config.arrowheadColor || config.color || AI_ARCHITECTURE_PALETTE.green,
+    strokeWidth: config.width || 2,
+    opacity: config.opacity ?? target.opacity ?? 1,
+  };
 };
 
 const createConnectorLabel = (
@@ -479,7 +866,7 @@ const positionConnectorDecorations = (
   target: RoutePoint,
   config: DiagramConnectorConfig,
 ) => {
-  const route = buildRoute(source, target, config);
+  const route = buildConnectorRoute(source, target, config);
   const objects = canvas.getObjects().filter((object) => (
     object.get('diagramConnectorId' as keyof fabric.Object) === connectorId
   ));
@@ -540,7 +927,7 @@ export function createStandaloneDiagramArrow(
   });
   const source = { x: 12, y: 62 };
   const target = { x: 228, y: 62 };
-  const route = buildRoute(source, target, config);
+  const route = buildConnectorRoute(source, target, config);
   const connectorId = String(config.connectorId);
   const path = new fabric.Path(route.path, {
     fill: '',
@@ -618,11 +1005,9 @@ export function createDiagramConnector(
   input: DiagramConnectorConfig,
 ) {
   const config = normalizeConfig(input);
-  const sourceNode = findNode(canvas, config.sourceNodeId);
-  const targetNode = findNode(canvas, config.targetNodeId);
-  if (!sourceNode || !targetNode) return [];
-  const source = getArchitectureAnchorPoint(sourceNode, config.sourceAnchor);
-  const target = getArchitectureAnchorPoint(targetNode, config.targetAnchor);
+  const endpoints = resolveConnectorEndpoints(canvas, config);
+  if (!endpoints) return [];
+  const { source, target } = endpoints;
   const connectorId = String(config.connectorId);
   const objects: fabric.Object[] = [createConnectorPath(source, target, config)];
   if (config.startArrow && config.startArrow !== 'none') {
@@ -637,8 +1022,53 @@ export function createDiagramConnector(
   objects.forEach((object) => object.set({
     diagramConnectorConfig: config,
   } as Record<string, unknown>));
+  normalizeDiagramLayerStack(canvas);
   canvas.requestRenderAll();
   return objects;
+}
+
+export function createManualDiagramConnector(
+  canvas: fabric.Canvas,
+  input: Partial<DiagramConnectorConfig> & {
+    manualStartPoint: RoutePoint;
+    manualEndPoint: RoutePoint;
+  },
+) {
+  return createDiagramConnector(canvas, {
+    sourceNodeId: input.sourceObjectId || input.sourceNodeId || '',
+    targetNodeId: input.targetObjectId || input.targetNodeId || '',
+    sourceObjectId: input.sourceObjectId || input.sourceNodeId,
+    targetObjectId: input.targetObjectId || input.targetNodeId,
+    manualConnector: true,
+    manualStartPoint: cloneRoutePoint(input.manualStartPoint),
+    manualEndPoint: cloneRoutePoint(input.manualEndPoint),
+    connectorType: input.connectorType,
+    lineStyle: input.lineStyle,
+    sourceAnchor: input.sourceAnchor,
+    targetAnchor: input.targetAnchor,
+    routing: input.routing,
+    style: input.style,
+    color: input.color,
+    width: input.width,
+    opacity: input.opacity,
+    dashLength: input.dashLength,
+    dashGap: input.dashGap,
+    startArrow: input.startArrow,
+    endArrow: input.endArrow,
+    arrowSize: input.arrowSize,
+    bendOffset: input.bendOffset,
+    curvature: input.curvature,
+    label: input.label,
+    labelColor: input.labelColor,
+    labelBackground: input.labelBackground,
+    labelPosition: input.labelPosition,
+    labelOffset: input.labelOffset,
+    labelFontSize: input.labelFontSize,
+    labelVisible: input.labelVisible,
+    glow: input.glow,
+    glowBlur: input.glowBlur,
+    animation: input.animation,
+  });
 }
 
 export function getDiagramConnectorPaths(canvas: fabric.Canvas) {
@@ -655,12 +1085,10 @@ export function updateDiagramConnector(
   const rawConfig = path.get('diagramConnectorConfig' as keyof fabric.Object) as DiagramConnectorConfig | undefined;
   if (!rawConfig) return false;
   const config = normalizeConfig(rawConfig);
-  const sourceNode = findNode(canvas, config.sourceNodeId);
-  const targetNode = findNode(canvas, config.targetNodeId);
-  if (!sourceNode || !targetNode) return false;
-  const source = getArchitectureAnchorPoint(sourceNode, config.sourceAnchor);
-  const target = getArchitectureAnchorPoint(targetNode, config.targetAnchor);
-  const route = buildRoute(source, target, config);
+  const endpoints = resolveConnectorEndpoints(canvas, config);
+  if (!endpoints) return false;
+  const { source, target } = endpoints;
+  const route = buildConnectorRoute(source, target, config);
   const diagramPath = path as DiagramPath;
   if (diagramPath._setPath) {
     diagramPath._setPath(route.path);
@@ -674,6 +1102,24 @@ export function updateDiagramConnector(
     strokeWidth: config.width,
     strokeDashArray: dashArrayForConfig(config),
     opacity: config.opacity,
+    objectId: config.connectorId,
+    sourceObjectId: config.sourceObjectId || config.sourceNodeId,
+    targetObjectId: config.targetObjectId || config.targetNodeId,
+    sourceAnchor: config.sourceAnchor,
+    targetAnchor: config.targetAnchor,
+    manualConnector: config.manualConnector,
+    manualStartPoint: config.manualStartPoint,
+    manualEndPoint: config.manualEndPoint,
+    connectorType: config.connectorType || config.routing,
+    lineStyle: config.lineStyle || config.style,
+    connectorSourceNodeId: config.sourceObjectId || config.sourceNodeId,
+    connectorTargetNodeId: config.targetObjectId || config.targetNodeId,
+    connectorSourceObjectId: config.sourceObjectId || config.sourceNodeId,
+    connectorTargetObjectId: config.targetObjectId || config.targetNodeId,
+    connectorSourceAnchor: config.sourceAnchor,
+    connectorTargetAnchor: config.targetAnchor,
+    connectorRouting: config.routing,
+    connectorLineStyle: config.style,
     diagramConnectorConfig: config,
     connectorBendOffset: config.bendOffset,
     connectorCurvature: config.curvature,
@@ -698,12 +1144,12 @@ export function updateAttachedConnectors(
   canvas: fabric.Canvas,
   node: fabric.Object,
 ) {
-  const nodeId = node.get('architectureNodeId' as keyof fabric.Object);
+  const nodeId = getConnectableObjectId(node);
   if (!nodeId) return 0;
   let updated = 0;
   getDiagramConnectorPaths(canvas).forEach((path) => {
     const config = path.get('diagramConnectorConfig' as keyof fabric.Object) as DiagramConnectorConfig | undefined;
-    if (config && (config.sourceNodeId === nodeId || config.targetNodeId === nodeId)) {
+    if (config && (config.sourceNodeId === nodeId || config.targetNodeId === nodeId || config.sourceObjectId === nodeId || config.targetObjectId === nodeId)) {
       if (updateDiagramConnector(canvas, path)) updated += 1;
     }
   });
@@ -718,6 +1164,17 @@ export function updateAllDiagramConnectors(canvas: fabric.Canvas) {
   });
   if (updated > 0) canvas.requestRenderAll();
   return updated;
+}
+
+export function removeDiagramConnector(canvas: fabric.Canvas, connectorId: unknown) {
+  const id = String(connectorId || '');
+  if (!id) return 0;
+  const related = canvas.getObjects().filter((object) => (
+    object.get('diagramConnectorId' as keyof fabric.Object) === id
+  ));
+  related.forEach((object) => canvas.remove(object));
+  if (related.length > 0) canvas.requestRenderAll();
+  return related.length;
 }
 
 export function updateDiagramConnectorConfig(
@@ -755,6 +1212,7 @@ export function updateDiagramConnectorConfig(
   additions.push(createConnectorLabel(connectorId, config));
   additions.forEach((object, index) => canvas.insertAt(object, pathIndex + index + 1, false));
   updateDiagramConnector(canvas, path);
+  normalizeDiagramLayerStack(canvas);
   canvas.setActiveObject(path);
   canvas.requestRenderAll();
   return path;
@@ -767,7 +1225,7 @@ export function removeConnectorsForNode(
   const connectorIds = new Set<string>();
   getDiagramConnectorPaths(canvas).forEach((path) => {
     const config = path.get('diagramConnectorConfig' as keyof fabric.Object) as DiagramConnectorConfig | undefined;
-    if (config && (config.sourceNodeId === nodeId || config.targetNodeId === nodeId)) {
+    if (config && (config.sourceNodeId === nodeId || config.targetNodeId === nodeId || config.sourceObjectId === nodeId || config.targetObjectId === nodeId)) {
       connectorIds.add(String(config.connectorId));
     }
   });
@@ -795,12 +1253,11 @@ export function showDiagramBendHandle(
   if (path.get('teckstudioObjectType' as keyof fabric.Object) !== 'diagramConnectorPath') return null;
   const config = path.get('diagramConnectorConfig' as keyof fabric.Object) as DiagramConnectorConfig | undefined;
   if (!config || config.routing === 'straight') return null;
-  const sourceNode = findNode(canvas, config.sourceNodeId);
-  const targetNode = findNode(canvas, config.targetNodeId);
-  if (!sourceNode || !targetNode) return null;
-  const source = getArchitectureAnchorPoint(sourceNode, config.sourceAnchor);
-  const target = getArchitectureAnchorPoint(targetNode, config.targetAnchor);
-  const route = buildRoute(source, target, normalizeConfig(config));
+  const normalized = normalizeConfig(config);
+  const endpoints = resolveConnectorEndpoints(canvas, normalized);
+  if (!endpoints) return null;
+  const { source, target } = endpoints;
+  const route = buildConnectorRoute(source, target, normalized);
   const point = route.bezier
     ? cubicPoint(route.bezier.source, route.bezier.control1, route.bezier.control2, route.bezier.target, 0.5)
     : route.points.length === 4
@@ -827,7 +1284,10 @@ export function showDiagramBendHandle(
     hasBorders: false,
     hoverCursor: 'move',
     excludeFromExport: true,
+    excludeFromSave: true,
     editorOnly: true,
+    isEditorHelper: true,
+    isConnectorHandle: true,
     objectType: 'diagramBendHandle',
     teckstudioObjectType: 'diagramBendHandle',
     diagramBendHandleConnectorId: String(config.connectorId),
@@ -852,11 +1312,9 @@ export function updateConnectorBendFromHandle(
   const previous = path.get('diagramConnectorConfig' as keyof fabric.Object) as DiagramConnectorConfig | undefined;
   if (!previous) return null;
   const config = normalizeConfig(previous);
-  const sourceNode = findNode(canvas, config.sourceNodeId);
-  const targetNode = findNode(canvas, config.targetNodeId);
-  if (!sourceNode || !targetNode) return null;
-  const source = getArchitectureAnchorPoint(sourceNode, config.sourceAnchor);
-  const target = getArchitectureAnchorPoint(targetNode, config.targetAnchor);
+  const endpoints = resolveConnectorEndpoints(canvas, config);
+  if (!endpoints) return null;
+  const { source, target } = endpoints;
   const handleX = Number(handle.left || 0);
   const handleY = Number(handle.top || 0);
   let bendOffset: number;
@@ -887,15 +1345,11 @@ export function updateConnectorBendFromHandle(
   return path;
 }
 
-const CONNECTOR_ANCHORS: ConnectorAnchor[] = [
+export const PRIMARY_CONNECTOR_ANCHORS: ConnectorAnchor[] = [
   'top',
-  'top-right',
   'right',
-  'bottom-right',
   'bottom',
-  'bottom-left',
   'left',
-  'top-left',
 ];
 
 export type DiagramAnchorSelection = {
@@ -909,7 +1363,7 @@ export function getDiagramAnchorSelection(
   if (object?.get('teckstudioObjectType' as keyof fabric.Object) !== 'diagramAnchor') return null;
   const nodeId = object.get('diagramAnchorNodeId' as keyof fabric.Object);
   const anchor = object.get('diagramAnchorPosition' as keyof fabric.Object);
-  if (!nodeId || !CONNECTOR_ANCHORS.includes(anchor as ConnectorAnchor)) return null;
+  if (!nodeId || !PRIMARY_CONNECTOR_ANCHORS.includes(anchor as ConnectorAnchor)) return null;
   return { nodeId: String(nodeId), anchor: anchor as ConnectorAnchor };
 }
 
@@ -932,11 +1386,10 @@ export function showDiagramAnchors(
   const radius = 7 / zoom;
   const strokeWidth = 2 / zoom;
   const anchors: fabric.Circle[] = [];
-  nodes.forEach((node) => {
-    const nodeId = node.get('architectureNodeId' as keyof fabric.Object);
-    if (!nodeId) return;
+  nodes.filter(isConnectableDiagramObject).forEach((node) => {
+    const nodeId = ensureConnectableObjectId(node);
     const nodeConfig = node.get('architectureNodeConfig' as keyof fabric.Object) as { accentColor?: string } | undefined;
-    CONNECTOR_ANCHORS.forEach((anchorPosition) => {
+    PRIMARY_CONNECTOR_ANCHORS.forEach((anchorPosition) => {
       const point = getArchitectureAnchorPoint(node, anchorPosition);
       const isSelected = selected?.nodeId === String(nodeId) && selected.anchor === anchorPosition;
       const anchor = new fabric.Circle({
@@ -955,7 +1408,10 @@ export function showDiagramAnchors(
         evented: true,
         hoverCursor: 'crosshair',
         excludeFromExport: true,
+        excludeFromSave: true,
         editorOnly: true,
+        isEditorHelper: true,
+        isConnectorHandle: true,
         objectType: 'diagramAnchor',
         teckstudioObjectType: 'diagramAnchor',
         diagramAnchorNodeId: String(nodeId),

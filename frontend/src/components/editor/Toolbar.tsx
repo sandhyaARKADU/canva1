@@ -9,7 +9,6 @@ import {
   Sparkles,
   ChevronDown,
   Home,
-  Ruler,
   Share2,
   Keyboard,
   QrCode,
@@ -17,8 +16,6 @@ import {
   Calendar,
   Bell,
   Film,
-  ShieldAlert,
-  Grid,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
@@ -27,16 +24,17 @@ import { useEditorStore } from '../../store/useEditorStore';
 import { ShareModal } from './ShareModal';
 import { KeyboardShortcutsModal } from './KeyboardShortcutsModal';
 import { AutoSaveIndicator } from './AutoSaveIndicator';
-import { TextFontSizeControl } from './TextFontSizeControl';
 import { QRCodeModal } from './QRCodeModal';
 import { ChartGeneratorModal } from './ChartGeneratorModal';
 import { ContentPlannerModal } from './ContentPlannerModal';
 import { NotificationCenter } from './NotificationCenter';
 import { VideoExportDialog } from './export/VideoExportDialog';
 import type { VideoExportFormat } from '../../types/videoExport';
+import { removeStrayConnectorMarkers } from '../../utils/posterLayoutTools';
+import { calculateMainPreviewFit } from '../../utils/canvasPreviewFit';
 
-const toolbarGroupClass = 'flex h-10 shrink-0 items-center gap-1 rounded-xl border border-white/[0.08] bg-zinc-950/80 p-0.5 shadow-sm';
-const iconButtonClass = 'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white disabled:cursor-not-allowed disabled:text-zinc-700 disabled:hover:bg-transparent';
+const toolbarGroupClass = 'flex h-10 shrink-0 items-center gap-1 rounded-xl border border-white/[0.08] bg-black/25 p-0.5 shadow-sm';
+const iconButtonClass = 'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:text-zinc-700 disabled:hover:bg-transparent';
 
 export const Toolbar: React.FC = () => {
   const navigate = useNavigate();
@@ -54,14 +52,10 @@ export const Toolbar: React.FC = () => {
     setProjectName,
     editorMode,
     setEditorMode,
-    rulersEnabled,
-    setRulersEnabled,
     zoom,
     setZoom,
-    showSafeArea,
-    toggleSafeArea,
-    showGrid,
-    toggleGrid,
+    canvasWidth,
+    canvasHeight,
   } = useEditorStore();
 
   const [showExportMenu, setShowExportMenu] = useState(false);
@@ -89,6 +83,7 @@ export const Toolbar: React.FC = () => {
     if (!canvas) return;
 
     const activeObject = canvas.getActiveObject();
+    removeStrayConnectorMarkers(canvas);
     const viewportTransform = canvas.viewportTransform
       ? [...canvas.viewportTransform]
       : [1, 0, 0, 1, 0, 0];
@@ -152,11 +147,11 @@ export const Toolbar: React.FC = () => {
   };
 
   return (
-    <header className="grid h-16 shrink-0 grid-cols-[minmax(220px,0.9fr)_minmax(0,1.2fr)_auto] items-center gap-3 border-b border-white/[0.08] bg-[#101018] px-3 select-none xl:grid-cols-[minmax(300px,0.9fr)_minmax(0,1.3fr)_auto] xl:px-5">
+    <header className="grid h-16 shrink-0 grid-cols-[minmax(220px,0.9fr)_minmax(0,1.2fr)_auto] items-center gap-3 border-b border-white/[0.08] bg-[#0f0f17] px-3 select-none shadow-[0_1px_0_rgba(255,255,255,0.02)] xl:grid-cols-[minmax(300px,0.9fr)_minmax(0,1.3fr)_auto] xl:px-5">
       <section className="flex min-w-0 items-center gap-2" aria-label="Project and save status">
         <button
           onClick={() => navigate('/')}
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-white"
           title="Back to Home"
           aria-label="Back to Home"
         >
@@ -183,8 +178,6 @@ export const Toolbar: React.FC = () => {
 
       <section className="min-w-0 overflow-hidden" aria-label="Editor controls">
         <div className="flex min-w-0 items-center gap-3 overflow-x-auto whitespace-nowrap py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <TextFontSizeControl />
-
           <div className={toolbarGroupClass} aria-label="History controls">
             <button
               onClick={undo}
@@ -229,7 +222,7 @@ export const Toolbar: React.FC = () => {
             )}
             <button
               onClick={clearCanvas}
-              className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+          className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-white"
               title="Clear Entire Canvas"
               aria-label="Clear entire canvas"
             >
@@ -266,33 +259,6 @@ export const Toolbar: React.FC = () => {
             </button>
           </div>
 
-          <div className={toolbarGroupClass} aria-label="Canvas Display & Guides">
-            <button
-              onClick={() => setRulersEnabled(!rulersEnabled)}
-              className={`${iconButtonClass} ${rulersEnabled ? 'border border-violet-500/30 bg-violet-600/15 text-violet-400' : ''}`}
-              title={rulersEnabled ? 'Hide Rulers' : 'Show Rulers'}
-              aria-label={rulersEnabled ? 'Hide Rulers' : 'Show Rulers'}
-            >
-              <Ruler className="h-4 w-4" />
-            </button>
-            <button
-              onClick={toggleSafeArea}
-              className={`${iconButtonClass} ${showSafeArea ? 'border border-cyan-500/40 bg-cyan-500/20 text-cyan-300' : ''}`}
-              title={showSafeArea ? 'Hide Safe Area (1:1 Square)' : 'Show Safe Area (1:1 Square)'}
-              aria-label="Toggle Safe Area"
-            >
-              <ShieldAlert className="h-4 w-4" />
-            </button>
-            <button
-              onClick={toggleGrid}
-              className={`${iconButtonClass} ${showGrid ? 'border border-violet-500/40 bg-violet-500/20 text-violet-300' : ''}`}
-              title={showGrid ? 'Hide Alignment Grid' : 'Show Alignment Grid'}
-              aria-label="Toggle Alignment Grid"
-            >
-              <Grid className="h-4 w-4" />
-            </button>
-          </div>
-
           {/* Zoom Controls */}
           <div className={toolbarGroupClass} aria-label="Zoom Controls">
             <button
@@ -314,28 +280,26 @@ export const Toolbar: React.FC = () => {
               onChange={(e) => {
                 if (!canvas) return;
                 const val = e.target.value;
+                const workspaceEl = canvas.getElement().closest('[data-canvas-area]') as HTMLElement | null;
+                const cw = canvas.getWidth() || canvasWidth || 800;
+                const ch = canvas.getHeight() || canvasHeight || 800;
                 if (val === 'fit') {
-                  const el = canvas.getElement().parentElement;
-                  if (el) {
-                    const padding = 80;
-                    const scaleX = (el.clientWidth - padding) / 1080;
-                    const scaleY = (el.clientHeight - padding) / 1080;
-                    const fitZoom = Math.min(scaleX, scaleY, 1.0);
-                    canvas.setViewportTransform([fitZoom, 0, 0, fitZoom, (el.clientWidth - 1080 * fitZoom) / 2, (el.clientHeight - 1080 * fitZoom) / 2]);
-                    setZoom(fitZoom);
+                  if (workspaceEl) {
+                    const previewFit = calculateMainPreviewFit(workspaceEl.clientWidth, workspaceEl.clientHeight, cw, ch);
+                    canvas.setViewportTransform([previewFit.scale, 0, 0, previewFit.scale, previewFit.left, previewFit.top]);
+                    setZoom(previewFit.scale);
                     canvas.requestRenderAll();
                   }
                   return;
                 }
                 const targetZoom = Number(val) / 100;
-                const el = canvas.getElement().parentElement;
-                const offsetX = el ? (el.clientWidth - 1080 * targetZoom) / 2 : 0;
-                const offsetY = el ? (el.clientHeight - 1080 * targetZoom) / 2 : 0;
+                const offsetX = workspaceEl ? (workspaceEl.clientWidth - cw * targetZoom) / 2 : 0;
+                const offsetY = workspaceEl ? (workspaceEl.clientHeight - ch * targetZoom) / 2 : 0;
                 canvas.setViewportTransform([targetZoom, 0, 0, targetZoom, offsetX, offsetY]);
                 setZoom(targetZoom);
                 canvas.requestRenderAll();
               }}
-              className="h-8 bg-zinc-900 text-[10px] font-bold text-zinc-200 border border-zinc-800 rounded px-1.5 outline-none cursor-pointer"
+              className="h-8 bg-[#101018] text-[10px] font-bold text-zinc-200 border border-white/[0.08] rounded-lg px-1.5 outline-none cursor-pointer"
               title="Preset Zoom Level"
             >
               <option value="fit">Fit</option>
@@ -367,7 +331,7 @@ export const Toolbar: React.FC = () => {
       <section className="flex shrink-0 items-center gap-2" aria-label="Main editor actions">
         <button
           onClick={() => setShowNotifications(!showNotifications)}
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors relative"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-400 hover:bg-white/[0.06] hover:text-white transition-colors relative"
           title="Notification Center"
           aria-label="Notification Center"
         >

@@ -23,11 +23,14 @@ PROCESS_LOCK = threading.Lock()
 DATA_AUDIO_RE = re.compile(r"^data:(?P<mime>audio/[^;,]+)?;base64,(?P<data>.+)$", re.DOTALL)
 AUDIO_MIME_EXTENSIONS = {
     "audio/aac": ".aac",
+    "audio/mp3": ".mp3",
     "audio/mp4": ".m4a",
     "audio/mpeg": ".mp3",
+    "audio/m4a": ".m4a",
     "audio/ogg": ".ogg",
     "audio/wav": ".wav",
     "audio/webm": ".webm",
+    "audio/x-m4a": ".m4a",
     "audio/x-wav": ".wav",
 }
 
@@ -73,7 +76,13 @@ FORMAT_CODECS = {
 }
 VIDEO_COMPOSITION_WIDTH = 1080
 VIDEO_COMPOSITION_HEIGHT = 1350
+REEL_VIDEO_COMPOSITION_WIDTH = 1080
+REEL_VIDEO_COMPOSITION_HEIGHT = 1920
 VIDEO_COMPOSITION_FPS = 30
+SUPPORTED_VIDEO_COMPOSITIONS = {
+    (VIDEO_COMPOSITION_WIDTH, VIDEO_COMPOSITION_HEIGHT),
+    (REEL_VIDEO_COMPOSITION_WIDTH, REEL_VIDEO_COMPOSITION_HEIGHT),
+}
 SUPPORTED_VIDEO_FPS = {24, 30, 60}
 QUALITY_SETTINGS = {
     "draft": {"crf": "32", "preset": "veryfast"},
@@ -122,8 +131,8 @@ def validate_render_request(
 ) -> tuple[list[dict[str, Any]], int]:
     if output_format not in FORMAT_CODECS:
         raise VideoRenderValidationError("Format must be mp4 or webm.")
-    if (width, height) != (VIDEO_COMPOSITION_WIDTH, VIDEO_COMPOSITION_HEIGHT):
-        raise VideoRenderValidationError("Video export must use the fixed 1080 × 1350 composition.")
+    if (width, height) not in SUPPORTED_VIDEO_COMPOSITIONS:
+        raise VideoRenderValidationError("Video export must use 1080 × 1350 canvas or 1080 × 1920 reel composition.")
     if fps not in SUPPORTED_VIDEO_FPS:
         raise VideoRenderValidationError("Frame rate must be 24, 30, or 60 FPS.")
     if quality not in QUALITY_SETTINGS:
@@ -334,9 +343,20 @@ def request_cancel(job_id: str) -> None:
         process = ACTIVE_PROCESSES.get(job_id)
     if process and process.poll() is None:
         process.terminate()
+        return
+    with PROCESS_LOCK:
+        ACTIVE_PROCESSES.pop(job_id, None)
+    _update_job(
+        job_id,
+        status="cancelled",
+        progress=0,
+        stage="Render cancelled",
+        completed_at=datetime.utcnow(),
+    )
+    cleanup_render_job_directory(RENDER_ROOT / job_id)
 
 
-def cleanup_expired_render_files() -> None:
+def cleanup_expired_render_files(update_database: bool = True) -> None:
     cutoff = datetime.utcnow() - timedelta(hours=max(settings.VIDEO_RENDER_RETENTION_HOURS, 1))
     db = SessionLocal()
     try:
@@ -344,6 +364,7 @@ def cleanup_expired_render_files() -> None:
             VideoRenderJob.completed_at.isnot(None),
             VideoRenderJob.completed_at < cutoff,
         ).all()
+        changed_jobs = False
         for job in expired_jobs:
             if job.output_path:
                 output_path = Path(job.output_path)
@@ -351,7 +372,11 @@ def cleanup_expired_render_files() -> None:
                     shutil.rmtree(output_path.parent, ignore_errors=True)
                 job.output_path = None
                 job.stage = "Expired"
-        db.commit()
+                changed_jobs = True
+        if changed_jobs and update_database:
+            db.commit()
+        elif changed_jobs:
+            db.rollback()
     finally:
         db.close()
 
@@ -524,13 +549,14 @@ def build_frame_sequence_command(
     codec, _, _ = FORMAT_CODECS[output_format]
     quality_settings = QUALITY_SETTINGS[quality]
     video_duration_ms = round(total_frames * 1000 / fps)
+    frame_pattern = "frame-%06d.jpg" if (frame_directory / "frame-000000.jpg").is_file() else "frame-%06d.png"
     command = [
         settings.FFMPEG_BINARY,
         "-hide_banner",
         "-y",
         "-framerate", str(fps),
         "-start_number", "0",
-        "-i", str(frame_directory / "frame-%06d.png"),
+        "-i", str(frame_directory / frame_pattern),
     ]
 
     def materialize_audio_url(url: Any, index: int):
@@ -595,7 +621,7 @@ def build_frame_sequence_command(
         "-frames:v", str(total_frames),
     ])
 
-    vf_string = "setsar=1,format=yuv420p"
+    vf_string = "scale=in_range=pc:out_range=tv,setsar=1,format=yuv420p"
     command.extend(["-vf", vf_string, "-c:v", codec, "-crf", quality_settings["crf"]])
 
     if valid_audio_inputs:

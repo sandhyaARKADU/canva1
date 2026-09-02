@@ -8,7 +8,7 @@ import type {
   TimelineKeyframe,
   TimelineVideoTrack,
 } from '../types/timeline';
-import { getPosterTrack } from '../types/timeline';
+import { resolveSceneAtTime } from '../types/timeline';
 import {
   evaluateKeyframeValue,
   evaluateObjectAnimationAtTime,
@@ -74,12 +74,21 @@ const getObjectId = (object: fabric.Object) => String(
 type ObjectBaseState = {
   left: number;
   top: number;
+  width: number;
+  height: number;
   scaleX: number;
   scaleY: number;
   angle: number;
   opacity: number;
   visible: boolean;
   text?: string;
+  strokeDashArray?: number[];
+  strokeDashOffset?: number;
+};
+
+const readBaseAnimationState = (object: fabric.Object): Partial<ObjectBaseState> | null => {
+  const value = objectValue(object, 'baseAnimationState');
+  return value && typeof value === 'object' ? value as Partial<ObjectBaseState> : null;
 };
 
 class MasterTimelineManager {
@@ -112,19 +121,66 @@ class MasterTimelineManager {
     this.canvas.getObjects().forEach((object) => {
       const id = getObjectId(object);
       const animationConfig = objectValue(object, 'animationConfig') as { fullText?: string } | undefined;
+      const baseAnimationState = readBaseAnimationState(object);
       this.objectBaseStates.set(id, {
-        left: object.left ?? 0,
-        top: object.top ?? 0,
-        scaleX: object.scaleX ?? 1,
-        scaleY: object.scaleY ?? 1,
-        angle: object.angle ?? 0,
-        opacity: object.opacity ?? 1,
-        visible: object.visible !== false,
+        left: Number(baseAnimationState?.left ?? object.left ?? 0),
+        top: Number(baseAnimationState?.top ?? object.top ?? 0),
+        width: Number(baseAnimationState?.width ?? object.width ?? object.getScaledWidth?.() ?? 0),
+        height: Number(baseAnimationState?.height ?? object.height ?? object.getScaledHeight?.() ?? 0),
+        scaleX: Number(baseAnimationState?.scaleX ?? object.scaleX ?? 1),
+        scaleY: Number(baseAnimationState?.scaleY ?? object.scaleY ?? 1),
+        angle: Number(baseAnimationState?.angle ?? object.angle ?? 0),
+        opacity: Number(baseAnimationState?.opacity ?? object.opacity ?? 1),
+        visible: baseAnimationState?.visible ?? object.visible !== false,
         text: 'text' in object
-          ? String(animationConfig?.fullText ?? (object as fabric.Text).text ?? '')
+          ? String(baseAnimationState?.text ?? objectValue(object, 'originalText') ?? animationConfig?.fullText ?? (object as fabric.Text).text ?? '')
           : undefined,
+        strokeDashArray: baseAnimationState?.strokeDashArray || (object.strokeDashArray ? [...object.strokeDashArray] : undefined),
+        strokeDashOffset: Number(baseAnimationState?.strokeDashOffset ?? object.strokeDashOffset ?? 0),
       });
     });
+  }
+
+  restoreBaseStates() {
+    if (!this.canvas) return;
+    this.canvas.getObjects().forEach((object) => this.restoreObjectBaseState(object));
+    this.canvas.requestRenderAll();
+  }
+
+  resetToEditMode(timeMs = 0) {
+    this.pause();
+    const state = useEditorStore.getState();
+    const durationMs = state.timelineProject.durationMs;
+    this.currentTimeMs = Math.min(Math.max(timeMs, 0), durationMs);
+    state.setTimelineCurrentTime(this.currentTimeMs);
+    state.setTimelinePreviewActive(false);
+    state.setTimelinePlaybackState('paused');
+    this.sceneRenderer?.clear();
+    this.restoreBaseStates();
+    this.syncMediaPlayback(false);
+  }
+
+  private restoreObjectBaseState(object: fabric.Object) {
+    const objectId = getObjectId(object);
+    const base = this.objectBaseStates.get(objectId);
+    if (!base) return;
+    object.set({
+      left: base.left,
+      top: base.top,
+      width: base.width,
+      height: base.height,
+      scaleX: base.scaleX,
+      scaleY: base.scaleY,
+      angle: base.angle,
+      opacity: base.opacity,
+      visible: base.visible,
+      strokeDashArray: base.strokeDashArray ? [...base.strokeDashArray] : undefined,
+      strokeDashOffset: base.strokeDashOffset || 0,
+    });
+    if (base.text !== undefined) {
+      (object as fabric.Text).set('text', base.text);
+    }
+    object.setCoords();
   }
 
   attachCanvas(canvas: fabric.Canvas) {
@@ -280,8 +336,9 @@ class MasterTimelineManager {
     this.currentTimeMs = 0;
     useEditorStore.getState().setTimelineCurrentTime(0);
     useEditorStore.getState().setTimelinePreviewActive(false);
-    this.synchronizeAll(false);
     this.sceneRenderer?.clear();
+    this.restoreBaseStates();
+    this.syncMediaPlayback(false);
   }
 
   seek(timeSeconds: number) {
@@ -292,6 +349,7 @@ class MasterTimelineManager {
     const state = useEditorStore.getState();
     const durationMs = state.timelineProject.durationMs;
     this.currentTimeMs = Math.min(Math.max(timeMs, 0), durationMs);
+    state.setTimelinePreviewActive(true);
     state.setTimelinePlaybackState('seeking');
     this.synchronizeAll(false);
     state.setTimelineCurrentTime(this.currentTimeMs);
@@ -418,8 +476,6 @@ class MasterTimelineManager {
         this.synchronizeAll(false);
         state.setTimelineCurrentTime(this.currentTimeMs);
         this.pause();
-        state.setTimelinePreviewActive(false);
-        this.sceneRenderer?.clear();
         return;
       }
     } else {
@@ -438,17 +494,12 @@ class MasterTimelineManager {
     const timeSeconds = this.currentTimeMs / 1000;
     const state = useEditorStore.getState();
     const timeline = state.timelineProject;
-    const clips = getPosterTrack(timeline).clips.filter((clip) => clip.visible);
+    const resolvedScene = resolveSceneAtTime(timeline, this.currentTimeMs);
 
     this.sceneRenderer?.render(this.currentTimeMs);
 
-    const activeClip = [...clips].reverse().find((candidate) => (
-      this.currentTimeMs >= candidate.startMs && this.currentTimeMs <= candidate.startMs + candidate.durationMs
-    )) || clips[0];
-
-    if (activeClip && this.canvas) {
-      const localTimeMs = Math.max(this.currentTimeMs - activeClip.startMs, 0);
-      this.applyObjectTimeline(localTimeMs);
+    if (resolvedScene.activeScene && this.canvas) {
+      this.applyObjectTimeline(resolvedScene.sceneLocalTimeMs);
     }
 
     Array.from(this.videoBindings.values()).forEach((binding, index) => (
@@ -650,22 +701,10 @@ class MasterTimelineManager {
       // Without this, every frame starts from the PREVIOUS frame's already-animated
       // position, causing cumulative drift (e.g. opacity compounds toward 0).
       const base = this.objectBaseStates.get(objectId);
-      if (base) {
-        object.set({
-          left: base.left,
-          top: base.top,
-          scaleX: base.scaleX,
-          scaleY: base.scaleY,
-          angle: base.angle,
-          opacity: base.opacity,
-          visible: base.visible,
-        });
-        if (base.text !== undefined) {
-          (object as fabric.Text).set('text', base.text);
-        }
-      }
+      this.restoreObjectBaseState(object);
 
       let strokeProgress: number | undefined;
+      let strokeDashOffset: number | undefined;
       const configuredAnimations = objectValue(object, 'objectAnimations') as FabricObjectAnimation[] | undefined;
       const legacyConfig = objectValue(object, 'animationConfig') as FabricObjectAnimationConfig | undefined;
       const animations = (
@@ -700,6 +739,9 @@ class MasterTimelineManager {
         let scaleY = baseScaleY;
         let angle = baseAngle;
         let visibleTextLength: number | undefined;
+        let textValue: string | undefined;
+        let widthFactor: number | undefined;
+        let heightFactor: number | undefined;
 
         animations.forEach((animation) => {
           const evaluation = evaluateObjectAnimationAtTime({
@@ -708,6 +750,8 @@ class MasterTimelineManager {
             width,
             height,
             textLength: fullText.length,
+            objectWidth: (base?.width ?? object.width ?? 0) * baseScaleX,
+            objectHeight: (base?.height ?? object.height ?? 0) * baseScaleY,
           });
           opacity *= evaluation.opacity;
           left += evaluation.translateX;
@@ -716,25 +760,70 @@ class MasterTimelineManager {
           scaleY *= evaluation.scaleY;
           angle += evaluation.rotation;
           if (evaluation.strokeProgress !== undefined) strokeProgress = evaluation.strokeProgress;
+          if (evaluation.strokeDashOffset !== undefined) strokeDashOffset = evaluation.strokeDashOffset;
+          if (evaluation.widthFactor !== undefined) widthFactor = evaluation.widthFactor;
+          if (evaluation.heightFactor !== undefined) heightFactor = evaluation.heightFactor;
+          if (evaluation.textValue !== undefined) textValue = evaluation.textValue;
           if (evaluation.visibleTextLength !== undefined) {
+            const nextVisibleTextLength = (() => {
+              if (!fullText) return evaluation.visibleTextLength;
+              if (animation.type === 'line-reveal' || animation.type === 'code-line-reveal') {
+                return fullText
+                  .split('\n')
+                  .slice(0, Math.ceil(fullText.split('\n').length * evaluation.progress))
+                  .join('\n')
+                  .length;
+              }
+              if (animation.type === 'word-reveal') {
+                return fullText
+                  .split(/(\s+)/)
+                  .slice(0, Math.ceil(fullText.split(/(\s+)/).length * evaluation.progress))
+                  .join('')
+                  .length;
+              }
+              return evaluation.visibleTextLength;
+            })();
             visibleTextLength = visibleTextLength === undefined
-              ? evaluation.visibleTextLength
-              : Math.min(visibleTextLength, evaluation.visibleTextLength);
+              ? nextVisibleTextLength
+              : Math.min(visibleTextLength, nextVisibleTextLength);
           }
         });
 
-        object.set({ opacity, left, top, scaleX, scaleY, angle });
-        if ('text' in object && visibleTextLength !== undefined) {
+        const dimensionPatch: Record<string, unknown> = {};
+        if (widthFactor !== undefined && object.width !== undefined) {
+          dimensionPatch.width = Math.max((base?.width ?? object.width ?? 1) * widthFactor, 0.001);
+          dimensionPatch.scaleX = baseScaleX;
+        }
+        if (heightFactor !== undefined && object.height !== undefined) {
+          dimensionPatch.height = Math.max((base?.height ?? object.height ?? 1) * heightFactor, 0.001);
+          dimensionPatch.scaleY = baseScaleY;
+        }
+        object.set({ opacity, left, top, scaleX, scaleY, angle, ...dimensionPatch });
+        if ('text' in object && textValue !== undefined) {
+          (object as fabric.Text).set('text', textValue);
+        } else if ('text' in object && visibleTextLength !== undefined) {
           (object as fabric.Text).set('text', fullText.slice(0, visibleTextLength));
         }
-        if (strokeProgress !== undefined) {
+          if (strokeProgress !== undefined) {
           const applyStrokeProgress = (target: fabric.Object) => {
-            if (target.type === 'line' || target.type === 'path') {
+            if (target.type === 'line' || target.type === 'path' || target.type === 'circle' || target.type === 'rect') {
               target.set('strokeDashArray', [Math.max(strokeProgress! * 1000, 0.001), 1000] as never);
             }
           };
           if (object.type === 'group') (object as fabric.Group).forEachObject(applyStrokeProgress);
           else applyStrokeProgress(object);
+        }
+        if (strokeDashOffset !== undefined) {
+          const applyDashFlow = (target: fabric.Object) => {
+            if (target.type === 'line' || target.type === 'path') {
+              target.set({
+                strokeDashArray: target.strokeDashArray?.length ? target.strokeDashArray : [16, 12],
+                strokeDashOffset,
+              } as never);
+            }
+          };
+          if (object.type === 'group') (object as fabric.Group).forEachObject(applyDashFlow);
+          else applyDashFlow(object);
         }
       }
 

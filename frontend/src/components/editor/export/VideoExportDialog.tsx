@@ -25,6 +25,7 @@ import {
   getVideoRenderStatus,
   uploadVideoRenderFrames,
 } from '../../../services/videoExportService';
+import { API_BASE_URL, apiUrl, getAuthToken } from '../../../services/apiClient';
 import type { VideoRenderStatus } from '../../../types/videoExport';
 import {
   canvasToPngBlob,
@@ -51,6 +52,13 @@ const AUDIO_TRACK_LABELS = {
   sfx: 'Sound Effects',
 } satisfies Record<TimelineAudioClip['trackType'], string>;
 
+const REEL_VIDEO_COMPOSITION = {
+  width: 1080,
+  height: 1920,
+} as const;
+
+type ExportResolution = 'reel' | 'canvas';
+
 const audioFileExtension = (clip: TimelineAudioClip, blob: Blob) => {
   const nameExtension = clip.name.match(/\.(aac|m4a|mp3|ogg|wav|webm)$/i)?.[0].toLowerCase();
   if (nameExtension) return nameExtension;
@@ -67,6 +75,65 @@ const activeAudioClipsForExport = (timeline: TimelineProject) => (
   (timeline.audioClips || []).filter((clip) => !clip.muted && Boolean(clip.assetUrl))
 );
 
+const BACKEND_AUDIO_PATH_PREFIXES = ['/media/'];
+
+const shouldResolveThroughBackend = (assetUrl: string) => {
+  if (BACKEND_AUDIO_PATH_PREFIXES.some((prefix) => assetUrl.startsWith(prefix))) return true;
+  try {
+    const asset = new URL(assetUrl, window.location.href);
+    const frontendOrigin = window.location.origin;
+    const backendOrigin = new URL(API_BASE_URL).origin;
+    return (
+      BACKEND_AUDIO_PATH_PREFIXES.some((prefix) => asset.pathname.startsWith(prefix))
+      && (asset.origin === frontendOrigin || asset.origin === backendOrigin)
+    );
+  } catch {
+    return false;
+  }
+};
+
+const resolveExportAudioUrl = (assetUrl: string) => {
+  if (assetUrl.startsWith('data:') || assetUrl.startsWith('blob:')) return assetUrl;
+  if (shouldResolveThroughBackend(assetUrl)) {
+    const parsed = new URL(assetUrl, window.location.href);
+    return apiUrl(`${parsed.pathname}${parsed.search}`);
+  }
+  if (assetUrl.startsWith('http://') || assetUrl.startsWith('https://')) return assetUrl;
+  return apiUrl(assetUrl.startsWith('/') ? assetUrl : `/${assetUrl}`);
+};
+
+const fetchAudioBlobForExport = async (clip: TimelineAudioClip) => {
+  const resolvedUrl = resolveExportAudioUrl(clip.assetUrl);
+  const headers = new Headers();
+  const token = getAuthToken();
+  let usesBackend = false;
+  try {
+    usesBackend = new URL(resolvedUrl, window.location.href).origin === new URL(API_BASE_URL).origin;
+  } catch {
+    usesBackend = false;
+  }
+  if (token && usesBackend) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  const response = await fetch(resolvedUrl, {
+    credentials: 'include',
+    headers,
+  });
+  if (!response.ok) {
+    throw new Error(`${AUDIO_TRACK_LABELS[clip.trackType]} source is unavailable for export (${response.status}).`);
+  }
+  const blob = await response.blob();
+  const contentType = response.headers.get('content-type') || blob.type || '';
+  const hasAudioType = contentType.startsWith('audio/') || contentType === 'application/octet-stream';
+  if (!blob.size) {
+    throw new Error(`${AUDIO_TRACK_LABELS[clip.trackType]} source is empty.`);
+  }
+  if (!hasAudioType) {
+    throw new Error(`${AUDIO_TRACK_LABELS[clip.trackType]} source is not an audio file (${contentType || 'unknown type'}).`);
+  }
+  return blob;
+};
+
 const audioSummaryForTimeline = (timeline: TimelineProject) => {
   const labels = Array.from(new Set(
     activeAudioClipsForExport(timeline).map((clip) => AUDIO_TRACK_LABELS[clip.trackType]),
@@ -82,16 +149,8 @@ const prepareTimelineForExport = async (
 
   for (const clip of exportTimeline.audioClips || []) {
     if (clip.muted || !clip.assetUrl) continue;
-    if (!clip.assetUrl.startsWith('data:') && !clip.assetUrl.startsWith('blob:')) continue;
 
-    const response = await fetch(clip.assetUrl);
-    if (!response.ok) {
-      throw new Error(`${AUDIO_TRACK_LABELS[clip.trackType]} source is unavailable for export.`);
-    }
-    const blob = await response.blob();
-    if (!blob.size) {
-      throw new Error(`${AUDIO_TRACK_LABELS[clip.trackType]} source is empty.`);
-    }
+    const blob = await fetchAudioBlobForExport(clip);
     const fileName = `audio-${clip.id}${audioFileExtension(clip, blob)}`;
     audioFiles.push({ clipId: clip.id, fileName, blob });
     clip.assetUrl = `uploaded-audio://${clip.id}`;
@@ -109,8 +168,9 @@ export const VideoExportDialog: React.FC<VideoExportDialogProps> = ({
   const setTimelineRecording = store.setTimelineRecording;
   const clips = getPosterTrack(store.timelineProject).clips.filter((clip) => clip.visible);
   const [format, setFormat] = useState<VideoExportFormat>(initialFormat);
-  const width = VIDEO_COMPOSITION.width;
-  const height = VIDEO_COMPOSITION.height;
+  const [resolution, setResolution] = useState<ExportResolution>('reel');
+  const width = resolution === 'reel' ? REEL_VIDEO_COMPOSITION.width : VIDEO_COMPOSITION.width;
+  const height = resolution === 'reel' ? REEL_VIDEO_COMPOSITION.height : VIDEO_COMPOSITION.height;
   const fps = store.timelineProject.fps;
   const [quality, setQuality] = useState<VideoExportQuality>('high');
   const [status, setStatus] = useState<VideoRenderStatus | null>(null);
@@ -250,7 +310,7 @@ export const VideoExportDialog: React.FC<VideoExportDialogProps> = ({
       } : current);
       await renderer.prepare();
 
-      const batchSize = 6;
+      const batchSize = 3;
       let frameBatch: Blob[] = [];
       let batchStartIndex = 0;
       for (let frameIndex = 0; frameIndex < totalFrames; frameIndex += 1) {
@@ -351,12 +411,13 @@ export const VideoExportDialog: React.FC<VideoExportDialogProps> = ({
           </label>
           <label className="text-[10px] text-zinc-500">Resolution
             <select
-              value={`${width}x${height}`}
-              onChange={() => undefined}
+              value={resolution}
+              onChange={(event) => setResolution(event.target.value as ExportResolution)}
               disabled={busy}
               className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-zinc-200"
             >
-              <option value={`${VIDEO_COMPOSITION.width}x${VIDEO_COMPOSITION.height}`}>Fixed 4:5 · {VIDEO_COMPOSITION.width} × {VIDEO_COMPOSITION.height}</option>
+              <option value="reel">Vertical Reel · {REEL_VIDEO_COMPOSITION.width} × {REEL_VIDEO_COMPOSITION.height}</option>
+              <option value="canvas">Canvas 4:5 · {VIDEO_COMPOSITION.width} × {VIDEO_COMPOSITION.height}</option>
             </select>
           </label>
           <label className="text-[10px] text-zinc-500">Frame rate

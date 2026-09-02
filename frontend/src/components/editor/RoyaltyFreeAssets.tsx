@@ -12,6 +12,14 @@ import {
 import { useEditorStore } from '../../store/useEditorStore';
 import { fabric } from 'fabric';
 import { apiFetch, apiUrl } from '../../services/apiClient';
+import {
+  AI_ARCHITECTURE_PALETTE,
+  type ArchitectureIconName,
+} from '../../utils/architectureDiagramTypes';
+import {
+  createDiagramConnector,
+  updateAllDiagramConnectors,
+} from '../../utils/diagramConnectors';
 
 interface BackendAsset {
   id: string;
@@ -269,12 +277,325 @@ const IMAGE_CATEGORIES: ImageCategory[] = [
   { id: 'infographics', name: 'Infographics', emoji: '📊', query: 'infographics process timeline diagram data' },
   { id: 'charts', name: 'Charts', emoji: '📈', query: 'charts graph analytics dashboard finance data' },
   { id: 'maps', name: 'Maps', emoji: '🗺️', query: 'maps location route travel city geography' },
+  { id: 'technical-diagrams', name: 'Technical Diagrams', emoji: '🧠', query: 'distributed systems microservices api gateway database sharding cloud architecture network diagram' },
 ];
 
 const IMAGE_CATEGORY_BY_ID = new Map(IMAGE_CATEGORIES.map((category) => [category.id, category]));
 const LOCAL_FAVORITES_KEY = 'teckstudio_favourite_assets';
 const LOCAL_RECENT_KEY = 'teckstudio_recent_assets';
 const RECENT_ASSET_LIMIT = 24;
+
+const TECHNICAL_DIAGRAM_SUBCATEGORIES = [
+  { id: 'distributed-systems', label: 'Distributed Systems', query: 'distributed systems' },
+  { id: 'system-architecture', label: 'System Architecture', query: 'system architecture' },
+  { id: 'client-server', label: 'Client Server', query: 'client server architecture' },
+  { id: 'microservices', label: 'Microservices', query: 'microservices architecture' },
+  { id: 'backend-architecture', label: 'Backend Architecture', query: 'backend architecture' },
+  { id: 'database-architecture', label: 'Database Architecture', query: 'database architecture' },
+  { id: 'cloud-architecture', label: 'Cloud Architecture', query: 'cloud architecture' },
+  { id: 'network-diagrams', label: 'Network Diagrams', query: 'network architecture' },
+  { id: 'api-architecture', label: 'API Architecture', query: 'API gateway' },
+  { id: 'load-balancing', label: 'Load Balancing', query: 'load balancer' },
+  { id: 'sharding', label: 'Sharding', query: 'database sharding' },
+  { id: 'distributed-database', label: 'Distributed Database', query: 'distributed database' },
+  { id: 'operating-systems', label: 'Operating Systems', query: 'operating systems process flow' },
+  { id: 'process-flow', label: 'Process Flow', query: 'process flow' },
+  { id: 'data-flow', label: 'Data Flow', query: 'data flow' },
+  { id: 'software-architecture', label: 'Software Architecture', query: 'software architecture' },
+  { id: 'ai-architecture', label: 'AI Architecture', query: 'AI architecture' },
+  { id: 'machine-learning', label: 'Machine Learning Architecture', query: 'machine learning architecture' },
+  { id: 'devops-architecture', label: 'DevOps Architecture', query: 'DevOps architecture' },
+];
+
+const TECHNICAL_SEARCH_HINTS = [
+  'distributed systems',
+  'client server architecture',
+  'microservices architecture',
+  'database sharding',
+  'distributed database',
+  'load balancer',
+  'API gateway',
+  'cloud architecture',
+  'network architecture',
+  'backend architecture',
+];
+
+const getAssetTags = (asset?: BackendAsset | AssetSearchItem | null) => {
+  if (!asset) return [] as string[];
+  const rawTags = 'tags' in asset ? asset.tags : undefined;
+  if (Array.isArray(rawTags)) return rawTags.map(String);
+  if (typeof rawTags === 'string') return rawTags.split(',').map((tag) => tag.trim()).filter(Boolean);
+  return [];
+};
+
+const isTechnicalDiagramAsset = (asset: ImageResult) => {
+  const metadata = asset.metadata;
+  const tags = getAssetTags(metadata).join(' ').toLowerCase();
+  return metadata?.category === 'technical-diagrams'
+    || tags.includes('category:technical-diagrams')
+    || tags.includes('architecture diagram')
+    || tags.includes('distributed-systems')
+    || tags.includes('api-gateway')
+    || tags.includes('sharding');
+};
+
+const getTechnicalDiagramKind = (asset: ImageResult, searchQuery: string) => {
+  const metadata = asset.metadata;
+  const searchable = [
+    asset.alt,
+    metadata?.title,
+    metadata?.description,
+    searchQuery,
+    ...getAssetTags(metadata),
+  ].filter(Boolean).join(' ').toLowerCase();
+  return TECHNICAL_DIAGRAM_SUBCATEGORIES.find((item) => (
+    searchable.includes(item.id)
+    || searchable.includes(item.label.toLowerCase())
+    || searchable.includes(item.query.toLowerCase())
+  ))?.id || 'system-architecture';
+};
+
+type EditableDiagramNode = {
+  key: string;
+  title: string;
+  subtitle: string;
+  icon: ArchitectureIconName;
+  x: number;
+  y: number;
+  color: string;
+};
+
+type EditableDiagramLink = {
+  from: string;
+  to: string;
+  label?: string;
+  dashed?: boolean;
+};
+
+const editableDiagramSpecFor = (kind: string): { nodes: EditableDiagramNode[]; links: EditableDiagramLink[] } => {
+  const palette = AI_ARCHITECTURE_PALETTE;
+  if (kind === 'microservices' || kind === 'api-architecture') {
+    return {
+      nodes: [
+        { key: 'client', title: 'Client', subtitle: 'web / mobile', icon: 'member', x: -420, y: -170, color: palette.green },
+        { key: 'gateway', title: 'API Gateway', subtitle: 'auth / routing', icon: 'gateway', x: -105, y: -170, color: palette.purple },
+        { key: 'service-a', title: 'Service A', subtitle: 'domain logic', icon: 'server', x: 210, y: -250, color: palette.blue },
+        { key: 'service-b', title: 'Service B', subtitle: 'domain logic', icon: 'server', x: 210, y: -90, color: palette.orange },
+        { key: 'database', title: 'Database', subtitle: 'owned data', icon: 'database', x: -105, y: 90, color: palette.yellow },
+      ],
+      links: [
+        { from: 'client', to: 'gateway', label: 'request' },
+        { from: 'gateway', to: 'service-a' },
+        { from: 'gateway', to: 'service-b' },
+        { from: 'service-a', to: 'database', dashed: true },
+        { from: 'service-b', to: 'database', dashed: true },
+      ],
+    };
+  }
+  if (kind === 'sharding' || kind === 'distributed-database' || kind === 'database-architecture') {
+    return {
+      nodes: [
+        { key: 'app', title: 'App Server', subtitle: 'query source', icon: 'server', x: -360, y: -120, color: palette.green },
+        { key: 'router', title: 'Shard Router', subtitle: 'partition key', icon: 'router', x: -70, y: -120, color: palette.purple },
+        { key: 'shard-a', title: 'Shard 1', subtitle: 'partition A', icon: 'database', x: 230, y: -240, color: palette.blue },
+        { key: 'shard-b', title: 'Shard 2', subtitle: 'partition B', icon: 'database', x: 230, y: -80, color: palette.yellow },
+        { key: 'shard-c', title: 'Shard 3', subtitle: 'partition C', icon: 'database', x: 230, y: 80, color: palette.orange },
+      ],
+      links: [
+        { from: 'app', to: 'router', label: 'query' },
+        { from: 'router', to: 'shard-a' },
+        { from: 'router', to: 'shard-b' },
+        { from: 'router', to: 'shard-c' },
+      ],
+    };
+  }
+  if (kind === 'load-balancing' || kind === 'distributed-systems' || kind === 'network-diagrams') {
+    return {
+      nodes: [
+        { key: 'clients', title: 'Clients', subtitle: 'traffic', icon: 'member', x: -420, y: -110, color: palette.green },
+        { key: 'lb', title: 'Load Balancer', subtitle: 'health checks', icon: 'router', x: -120, y: -110, color: palette.purple },
+        { key: 'server-a', title: 'Server 1', subtitle: 'instance', icon: 'server', x: 200, y: -240, color: palette.blue },
+        { key: 'server-b', title: 'Server 2', subtitle: 'instance', icon: 'server', x: 200, y: -80, color: palette.orange },
+        { key: 'cluster-db', title: 'DB Cluster', subtitle: 'replication', icon: 'database', x: 200, y: 90, color: palette.yellow },
+      ],
+      links: [
+        { from: 'clients', to: 'lb', label: 'requests' },
+        { from: 'lb', to: 'server-a' },
+        { from: 'lb', to: 'server-b' },
+        { from: 'server-a', to: 'cluster-db', dashed: true },
+        { from: 'server-b', to: 'cluster-db', dashed: true },
+      ],
+    };
+  }
+  if (kind === 'cloud-architecture' || kind === 'devops-architecture' || kind === 'ai-architecture' || kind === 'machine-learning') {
+    return {
+      nodes: [
+        { key: 'input', title: 'Input', subtitle: 'events / data', icon: 'stream', x: -410, y: -115, color: palette.green },
+        { key: 'compute', title: 'Compute', subtitle: 'cloud service', icon: 'cloud', x: -115, y: -115, color: palette.blue },
+        { key: 'model', title: 'Processor', subtitle: 'logic / model', icon: 'chip', x: 180, y: -115, color: palette.purple },
+        { key: 'store', title: 'Storage', subtitle: 'database / files', icon: 'database', x: -115, y: 90, color: palette.yellow },
+      ],
+      links: [
+        { from: 'input', to: 'compute' },
+        { from: 'compute', to: 'model' },
+        { from: 'compute', to: 'store', dashed: true },
+        { from: 'model', to: 'store', dashed: true },
+      ],
+    };
+  }
+  return {
+    nodes: [
+      { key: 'client', title: 'Client', subtitle: 'web / mobile', icon: 'member', x: -420, y: -100, color: palette.green },
+      { key: 'api', title: 'API Gateway', subtitle: 'auth / routing', icon: 'gateway', x: -110, y: -100, color: palette.purple },
+      { key: 'backend', title: 'Backend', subtitle: 'business logic', icon: 'server', x: 200, y: -100, color: palette.blue },
+      { key: 'database', title: 'Database', subtitle: 'persistent data', icon: 'database', x: 200, y: 90, color: palette.yellow },
+    ],
+    links: [
+      { from: 'client', to: 'api', label: 'request' },
+      { from: 'api', to: 'backend' },
+      { from: 'backend', to: 'database', dashed: true },
+    ],
+  };
+};
+
+const createEditableTechnicalNode = (
+  node: EditableDiagramNode,
+  options: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    kind: string;
+    sourceAssetId: string;
+  },
+) => {
+  const nodeId = `technical-${options.kind}-${node.key}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const iconGlyph: Record<ArchitectureIconName, string> = {
+    member: '◉',
+    globe: '◎',
+    gateway: '⌗',
+    database: '◍',
+    chat: '✦',
+    router: '◇',
+    event: '≡',
+    chip: '▣',
+    workers: '⌘',
+    server: '▤',
+    cloud: '☁',
+    auth: '⌾',
+    stream: '↝',
+    queue: '☰',
+    analytics: '▥',
+    browser: '▣',
+    mobile: '▯',
+    desktop: '▤',
+    loadBalancer: '⇄',
+    reverseProxy: '⇆',
+    cache: '◌',
+    storage: '▱',
+    payment: '▰',
+    email: '✉',
+    monitoring: '◷',
+    logging: '≣',
+    metrics: '▥',
+    registry: '☷',
+    identity: '◈',
+  };
+  const background = new fabric.Rect({
+    left: 0,
+    top: 0,
+    width: options.width,
+    height: options.height,
+    rx: 16,
+    ry: 16,
+    fill: '#111827',
+    stroke: node.color,
+    strokeWidth: 6,
+    strokeUniform: true,
+    shadow: new fabric.Shadow({
+      color: node.color,
+      blur: 10,
+      offsetX: 0,
+      offsetY: 0,
+    }),
+    selectable: false,
+    evented: false,
+  });
+  const accent = new fabric.Rect({
+    left: 0,
+    top: 12,
+    width: 7,
+    height: options.height - 24,
+    rx: 4,
+    ry: 4,
+    fill: node.color,
+    selectable: false,
+    evented: false,
+  });
+  const icon = new fabric.Text(iconGlyph[node.icon] || '▣', {
+    left: 22,
+    top: 22,
+    fontFamily: 'Inter, Arial, sans-serif',
+    fontSize: 40,
+    fontWeight: '700',
+    fill: node.color,
+    selectable: false,
+    evented: false,
+  });
+  const title = new fabric.Textbox(node.title.toUpperCase(), {
+    left: 72,
+    top: 24,
+    width: options.width - 96,
+    fontFamily: 'Inter, Arial, sans-serif',
+    fontSize: 30,
+    fontWeight: '800',
+    fill: '#F8FAFC',
+    charSpacing: 45,
+    selectable: false,
+    evented: false,
+  });
+  const subtitle = new fabric.Textbox(node.subtitle, {
+    left: 72,
+    top: 56,
+    width: options.width - 96,
+    fontFamily: 'Inter, Arial, sans-serif',
+    fontSize: 20,
+    fontWeight: '500',
+    fill: '#A1A1AA',
+    selectable: false,
+    evented: false,
+  });
+  const status = new fabric.Circle({
+    left: options.width - 22,
+    top: 22,
+    radius: 8,
+    fill: node.color,
+    selectable: false,
+    evented: false,
+  });
+  return new fabric.Group([background, accent, icon, title, subtitle, status], {
+    left: options.left,
+    top: options.top,
+    originX: 'left',
+    originY: 'top',
+    objectCaching: false,
+    subTargetCheck: true,
+    id: nodeId,
+    objectId: nodeId,
+    architectureNodeId: nodeId,
+    name: node.title,
+    objectType: 'architectureNode',
+    teckstudioObjectType: 'architectureNode',
+    architectureRole: 'architectureNode',
+    assetCategory: 'technical-diagrams',
+    sourceAssetId: options.sourceAssetId,
+    sourceTechnicalDiagramKind: options.kind,
+    elementCategory: 'Technology',
+    elementSubcategory: 'Technical Diagrams',
+    elementTags: ['technical-diagram', 'architecture', options.kind, node.key],
+    elementEditable: true,
+  } as fabric.IGroupOptions & Record<string, unknown>);
+};
 
 // Free SVG elements/illustrations (inline SVGs for instant use)
 const SVG_ELEMENTS = [
@@ -920,6 +1241,83 @@ export const RoyaltyFreeAssets: React.FC = () => {
     }
   };
 
+  const addEditableDiagramToCanvas = (asset: ImageResult) => {
+    const targetCanvas = getEditorCanvas();
+    if (!targetCanvas) {
+      setAssetError('Canvas is not ready. Please wait a moment and try again.');
+      return;
+    }
+
+    setAssetError('');
+    const kind = getTechnicalDiagramKind(asset, searchQuery);
+    const { nodes, links } = editableDiagramSpecFor(kind);
+    const minNodeX = Math.min(...nodes.map((node) => node.x));
+    const minNodeY = Math.min(...nodes.map((node) => node.y));
+    const safeOrigin = {
+      x: Math.max(80, targetCanvas.getWidth() * 0.08),
+      y: 20,
+    };
+    const nodeObjects = new Map<string, fabric.Object>();
+    const connectorObjects: fabric.Object[] = [];
+
+    nodes.forEach((node) => {
+      const fabricNode = createEditableTechnicalNode(node, {
+        left: safeOrigin.x + (node.x - minNodeX),
+        top: safeOrigin.y + (node.y - minNodeY),
+        width: 360,
+        height: 150,
+        kind,
+        sourceAssetId: asset.id,
+      });
+      targetCanvas.add(fabricNode);
+      fabricNode.setCoords();
+      nodeObjects.set(node.key, fabricNode);
+    });
+
+    links.forEach((link) => {
+      const source = nodeObjects.get(link.from);
+      const target = nodeObjects.get(link.to);
+      if (!source || !target) return;
+      const sourceCenter = source.getCenterPoint();
+      const targetCenter = target.getCenterPoint();
+      const horizontal = Math.abs(targetCenter.x - sourceCenter.x) >= Math.abs(targetCenter.y - sourceCenter.y);
+      const sourceAnchor = horizontal
+        ? (targetCenter.x >= sourceCenter.x ? 'right' : 'left')
+        : (targetCenter.y >= sourceCenter.y ? 'bottom' : 'top');
+      const targetAnchor = horizontal
+        ? (targetCenter.x >= sourceCenter.x ? 'left' : 'right')
+        : (targetCenter.y >= sourceCenter.y ? 'top' : 'bottom');
+      const sourceId = String(source.get('architectureNodeId' as keyof fabric.Object) || source.get('id' as keyof fabric.Object));
+      const targetId = String(target.get('architectureNodeId' as keyof fabric.Object) || target.get('id' as keyof fabric.Object));
+      connectorObjects.push(...createDiagramConnector(targetCanvas, {
+        sourceNodeId: sourceId,
+        targetNodeId: targetId,
+        sourceObjectId: sourceId,
+        targetObjectId: targetId,
+        sourceAnchor,
+        targetAnchor,
+        connectorType: link.dashed ? 'elbow' : 'straight',
+        routing: horizontal ? 'elbow' : 'vertical',
+        lineStyle: link.dashed ? 'dashed' : 'solid',
+        style: link.dashed ? 'dashed' : 'solid',
+        color: AI_ARCHITECTURE_PALETTE.green,
+        width: 3,
+        endArrow: 'arrow',
+        label: link.label || '',
+        labelVisible: Boolean(link.label),
+      }));
+    });
+
+    updateAllDiagramConnectors(targetCanvas);
+    connectorObjects.forEach((object) => targetCanvas.bringToFront(object));
+    nodeObjects.forEach((object) => targetCanvas.bringToFront(object));
+    targetCanvas.discardActiveObject();
+    setSelectedObject(null);
+    targetCanvas.requestRenderAll();
+    rememberRecentAsset(asset);
+    saveHistory();
+  };
+
   // Add SVG element to canvas
   const addSvgElement = (svgData: string, color: string = '#8b5cf6') => {
     if (!canvas) return;
@@ -1112,7 +1510,7 @@ export const RoyaltyFreeAssets: React.FC = () => {
 
             {showImageResults && imageCategories.length > 0 && (
               <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none]">
-                {imageCategories.slice(0, 20).map((category) => (
+                {imageCategories.map((category) => (
                   <button
                     key={category.id}
                     type="button"
@@ -1126,6 +1524,49 @@ export const RoyaltyFreeAssets: React.FC = () => {
                     {category.emoji} {category.name}
                   </button>
                 ))}
+              </div>
+            )}
+
+            {selectedCategory === 'technical-diagrams' && (
+              <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-violet-200">Technical Diagrams</p>
+                  <p className="text-[10px] text-zinc-500">Use as Image or Create Editable Diagram</p>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {TECHNICAL_DIAGRAM_SUBCATEGORIES.map((subcategory) => (
+                    <button
+                      key={subcategory.id}
+                      type="button"
+                      onClick={() => {
+                        setSearchQuery(subcategory.query);
+                        setImagePage(1);
+                        setImageTotal(0);
+                      }}
+                      className="rounded-full border border-zinc-700 bg-zinc-900/80 px-2.5 py-1 text-[10px] font-semibold text-zinc-300 transition-colors hover:border-violet-500/60 hover:text-white"
+                    >
+                      {subcategory.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!selectedCategory && searchQuery.trim() === '' && assetCollection === 'browse' && (
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
+                <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-zinc-400">Technical Search Examples</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {TECHNICAL_SEARCH_HINTS.map((hint) => (
+                    <button
+                      key={hint}
+                      type="button"
+                      onClick={() => handleSearchChange(hint)}
+                      className="rounded-full border border-zinc-800 bg-black/30 px-2.5 py-1 text-[10px] font-semibold text-zinc-400 transition-colors hover:border-violet-500/50 hover:text-zinc-100"
+                    >
+                      {hint}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -1229,7 +1670,7 @@ export const RoyaltyFreeAssets: React.FC = () => {
 	                      }}
 	                    />
                     {/* Overlay */}
-	                    <div className="pointer-events-none absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                    <div className="pointer-events-none absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
 	                      <button
 	                        type="button"
 	                        title="Add image to canvas"
@@ -1263,6 +1704,30 @@ export const RoyaltyFreeAssets: React.FC = () => {
                         />
                       </button>
                     </div>
+                    {isTechnicalDiagramAsset(img) && (
+                      <div className="absolute inset-x-1 bottom-1 z-10 grid grid-cols-2 gap-1">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            addImageToCanvas(img.src, img.metadata);
+                          }}
+                          className="rounded-md bg-black/75 px-1.5 py-1 text-[9px] font-bold text-white backdrop-blur-sm transition-colors hover:bg-violet-600"
+                        >
+                          Use as Image
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            addEditableDiagramToCanvas(img);
+                          }}
+                          className="rounded-md bg-violet-600 px-1.5 py-1 text-[9px] font-bold text-white shadow-lg shadow-violet-950/30 transition-colors hover:bg-violet-500"
+                        >
+                          Create Editable Diagram
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

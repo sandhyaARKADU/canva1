@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import uuid
+from io import BytesIO
 from math import ceil
 from pathlib import Path
 from typing import Annotated
@@ -19,8 +20,7 @@ from schemas.video_render import VideoRenderCreated, VideoRenderStatusResponse
 from services.video_render_service import (
     FORMAT_CODECS,
     RENDER_ROOT,
-    VIDEO_COMPOSITION_HEIGHT,
-    VIDEO_COMPOSITION_WIDTH,
+    SUPPORTED_VIDEO_COMPOSITIONS,
     VideoRenderValidationError,
     cleanup_expired_render_files,
     parse_timeline_json,
@@ -37,13 +37,18 @@ MAX_FRAME_BYTES = 12 * 1024 * 1024
 MAX_AUDIO_BYTES = 50 * 1024 * 1024
 MAX_EXPORT_AUDIO_FILES = 24
 MAX_RENDER_FRAMES = 36_000
+FRAME_SEQUENCE_EXTENSION = ".jpg"
+FRAME_JPEG_QUALITY = 88
 AUDIO_EXTENSIONS_BY_TYPE = {
     "audio/aac": ".aac",
+    "audio/mp3": ".mp3",
     "audio/mp4": ".m4a",
     "audio/mpeg": ".mp3",
+    "audio/m4a": ".m4a",
     "audio/ogg": ".ogg",
     "audio/wav": ".wav",
     "audio/webm": ".webm",
+    "audio/x-m4a": ".m4a",
     "audio/x-wav": ".wav",
     "application/octet-stream": ".audio",
 }
@@ -118,10 +123,10 @@ async def _persist_scene(upload: UploadFile, destination: Path) -> None:
             if image.format != "PNG":
                 raise HTTPException(status_code=415, detail="Every render scene must be a valid PNG image.")
             width, height = image.size
-            if image.size != (VIDEO_COMPOSITION_WIDTH, VIDEO_COMPOSITION_HEIGHT):
+            if image.size not in SUPPORTED_VIDEO_COMPOSITIONS:
                 raise HTTPException(
                     status_code=400,
-                    detail="Every render scene must already be composed at 1080 × 1350.",
+                    detail="Every render scene must already be composed at 1080 × 1350 or 1080 × 1920.",
                 )
     except (UnidentifiedImageError, OSError) as error:
         raise HTTPException(status_code=400, detail="A render scene is not a valid image.") from error
@@ -140,11 +145,10 @@ async def _persist_frame(
         raise HTTPException(status_code=400, detail="An animation frame is empty.")
     if len(payload) > MAX_FRAME_BYTES:
         raise HTTPException(status_code=413, detail="An animation frame exceeds the 12 MB limit.")
-    destination.write_bytes(payload)
     try:
-        with Image.open(destination) as image:
+        with Image.open(BytesIO(payload)) as image:
             image.verify()
-        with Image.open(destination) as image:
+        with Image.open(BytesIO(payload)) as image:
             if image.format != "PNG":
                 raise HTTPException(status_code=415, detail="Every animation frame must be a valid PNG image.")
             if image.size != (expected_width, expected_height):
@@ -152,6 +156,19 @@ async def _persist_frame(
                     status_code=400,
                     detail="Animation frame dimensions do not match the export settings.",
                 )
+            if image.mode in {"RGBA", "LA"} or (image.mode == "P" and "transparency" in image.info):
+                flattened = Image.new("RGB", image.size, (0, 0, 0))
+                flattened.paste(image.convert("RGBA"), mask=image.convert("RGBA").getchannel("A"))
+                frame_image = flattened
+            else:
+                frame_image = image.convert("RGB")
+            frame_image.save(
+                destination,
+                format="JPEG",
+                quality=FRAME_JPEG_QUALITY,
+                optimize=True,
+                progressive=False,
+            )
     except (UnidentifiedImageError, OSError) as error:
         raise HTTPException(status_code=400, detail="An animation frame is not a valid image.") from error
 
@@ -186,6 +203,7 @@ def _reject_duplicate_job(db: Session, user: User, project: Project) -> None:
         VideoRenderJob.user_id == user.id,
         VideoRenderJob.project_id == project.id,
         VideoRenderJob.status.in_(["queued", "processing"]),
+        VideoRenderJob.cancel_requested.is_(False),
     ).first()
     if active_job:
         raise HTTPException(status_code=409, detail="A video export is already running for this project.")
@@ -199,21 +217,42 @@ async def create_frame_video_render(
     height: Annotated[int, Form()],
     fps: Annotated[int, Form()],
     quality: Annotated[str, Form()],
-    timeline_json: Annotated[str, Form()],
     total_frames: Annotated[int, Form()],
+    timeline_json: Annotated[str | None, Form()] = None,
     include_audio: Annotated[bool, Form()] = False,
     audio_file_ids: Annotated[str, Form()] = "[]",
+    timeline_file: Annotated[UploadFile | None, File()] = None,
     audio_files: Annotated[list[UploadFile] | None, File()] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    print(
+        "[EXPORT] route entered",
+        {
+            "project_id": project_id,
+            "format": format,
+            "width": width,
+            "height": height,
+            "fps": fps,
+            "quality": quality,
+            "total_frames": total_frames,
+            "include_audio": include_audio,
+            "has_timeline_file": timeline_file is not None,
+            "audio_files": len(audio_files or []),
+        },
+    )
     project = _owned_project(db, current_user, project_id)
     if not _ffmpeg_available():
       raise HTTPException(status_code=503, detail="Video rendering is unavailable because FFmpeg is not configured.")
-    width = VIDEO_COMPOSITION_WIDTH
-    height = VIDEO_COMPOSITION_HEIGHT
+    if (width, height) not in SUPPORTED_VIDEO_COMPOSITIONS:
+        raise HTTPException(status_code=400, detail="Video export must use 1080 × 1350 canvas or 1080 × 1920 reel composition.")
     try:
-        timeline = parse_timeline_json(timeline_json)
+        timeline_payload = timeline_json
+        if timeline_file is not None:
+            timeline_payload = (await timeline_file.read()).decode("utf-8")
+        if not timeline_payload:
+            raise VideoRenderValidationError("Timeline JSON is required.")
+        timeline = parse_timeline_json(timeline_payload)
         _, duration_ms = validate_render_request(
             timeline,
             _visible_clip_count(timeline),
@@ -232,7 +271,7 @@ async def create_frame_video_render(
         raise HTTPException(status_code=400, detail=f"Video export supports up to {MAX_RENDER_FRAMES} frames.")
     _reject_duplicate_job(db, current_user, project)
     print(f"[VIDEO EXPORT FPS] project_id={project.id} fps={fps} duration_ms={duration_ms} total_frames={total_frames}")
-    cleanup_expired_render_files()
+    cleanup_expired_render_files(update_database=False)
     job_id = f"video_{uuid.uuid4().hex}"
     job_directory = RENDER_ROOT / job_id
     job_directory.mkdir(parents=True, exist_ok=False)
@@ -311,7 +350,7 @@ async def upload_video_frames(
     written_paths: list[Path] = []
     try:
         for offset, frame in enumerate(frames):
-            frame_path = job_directory / f"frame-{start_index + offset:06d}.png"
+            frame_path = job_directory / f"frame-{start_index + offset:06d}{FRAME_SEQUENCE_EXTENSION}"
             await _persist_frame(frame, frame_path, job.width, job.height)
             written_paths.append(frame_path)
     except Exception:
@@ -343,7 +382,10 @@ def finalize_frame_video_render(
             status_code=409,
             detail=f"Only {job.rendered_frames} of {job.total_frames} animation frames were uploaded.",
         )
-    frame_count = len(list((RENDER_ROOT / job.id).glob("frame-*.png")))
+    frame_count = (
+        len(list((RENDER_ROOT / job.id).glob("frame-*.png")))
+        + len(list((RENDER_ROOT / job.id).glob("frame-*.jpg")))
+    )
     if frame_count != job.total_frames:
         raise HTTPException(status_code=409, detail="One or more animation frame files are missing.")
     project = _owned_project(db, current_user, job.project_id)
@@ -373,8 +415,8 @@ async def create_video_render(
     project = _owned_project(db, current_user, project_id)
     if not _ffmpeg_available():
       raise HTTPException(status_code=503, detail="Video rendering is unavailable because FFmpeg is not configured.")
-    width = VIDEO_COMPOSITION_WIDTH
-    height = VIDEO_COMPOSITION_HEIGHT
+    if (width, height) not in SUPPORTED_VIDEO_COMPOSITIONS:
+        raise HTTPException(status_code=400, detail="Video export must use 1080 × 1350 canvas or 1080 × 1920 reel composition.")
     try:
         timeline = parse_timeline_json(timeline_json)
         _, duration_ms = validate_render_request(timeline, len(scenes), format, width, height, fps, quality)
@@ -384,7 +426,7 @@ async def create_video_render(
     _reject_duplicate_job(db, current_user, project)
     print(f"[VIDEO EXPORT FPS] project_id={project.id} fps={fps} duration_ms={duration_ms} scenes={len(scenes)}")
 
-    cleanup_expired_render_files()
+    cleanup_expired_render_files(update_database=False)
     job_id = f"video_{uuid.uuid4().hex}"
     job_directory = RENDER_ROOT / job_id
     job_directory.mkdir(parents=True, exist_ok=False)
@@ -437,8 +479,8 @@ def cancel_video_render(
     if job.status in {"completed", "failed", "cancelled"}:
         return _status_response(job)
     request_cancel(job.id)
-    db.refresh(job)
-    return _status_response(job)
+    db.rollback()
+    return _status_response(_owned_job(db, current_user, job_id))
 
 
 @router.get("/download/{job_id}")

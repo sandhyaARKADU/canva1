@@ -20,6 +20,7 @@ CORE_CATEGORIES = {
     "animals",
     "people",
     "minimal",
+    "technical-diagrams",
 }
 CANONICAL_CATEGORIES = [category["id"] for category in __import__("routes.assets", fromlist=["CANONICAL_IMAGE_CATEGORIES"]).CANONICAL_IMAGE_CATEGORIES]
 
@@ -153,6 +154,14 @@ def test_asset_api_contract() -> None:
         assert data_url.dataUrl.startswith(f"data:{data_url.mimeType};base64,")
         assert data_url.width > 0
         assert data_url.height > 0
+
+        technical = search_assets(q="distributed systems", page=1, per_page=24, db=db)
+        assert technical.success is True
+        assert technical.category == "technical-diagrams"
+        assert technical.total >= 30
+        assert 1 <= len(technical.items) <= 24
+        assert all(item.category == "technical-diagrams" for item in technical.items)
+        assert all("diagram" in " ".join(item.tags).lower() or "architecture" in " ".join(item.tags).lower() for item in technical.items)
     finally:
         db.close()
 

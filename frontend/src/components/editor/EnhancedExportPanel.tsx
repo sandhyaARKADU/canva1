@@ -9,6 +9,7 @@ import { beginStaticConnectorExport } from '../../utils/connectorAnimationManage
 import {
   createTeckStudioTimelineSchema,
 } from '../../utils/timelineExport';
+import { removeStrayConnectorMarkers } from '../../utils/posterLayoutTools';
 
 interface ExportSettings {
   format: 'png' | 'jpg' | 'svg' | 'pdf';
@@ -79,6 +80,7 @@ export const EnhancedExportPanel: React.FC = () => {
     setError('');
     setExported(false);
     const activeObject = canvas.getActiveObject();
+    removeStrayConnectorMarkers(canvas);
     const viewportTransform = canvas.viewportTransform
       ? [...canvas.viewportTransform]
       : [1, 0, 0, 1, 0, 0];

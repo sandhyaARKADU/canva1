@@ -41,10 +41,20 @@ import { UPLOAD_IMAGE_RULES } from '../../config/uploads';
 import { enterInlineTextEditing, isEditableTextObject } from '../../utils/textSelectionStyles';
 import { enterPosterTextEditing, isPosterEditableText } from '../../utils/posterConversionCanvas';
 import { MediaFittingControls } from './MediaFittingControls';
+import { ContextualTextToolbar } from './ContextualTextToolbar';
+import { moveLayerObject, type LayerOrderAction } from '../../utils/layerOrdering';
+import { applyDiagramArrowStyle, getDiagramArrowAppearance } from '../../utils/diagramConnectors';
+import { applyBoxStyle, getBoxAppearance } from '../../utils/boxStyling';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // FLOATING TOOLBAR — positioned near the selected element
 // ═══════════════════════════════════════════════════════════════════════════════
+
+const getEditableTextTargetsFromSelection = (object: fabric.Object | null | undefined) => {
+  if (isEditableTextObject(object)) return [object];
+  if (object?.type !== 'activeSelection') return [];
+  return (object as fabric.ActiveSelection).getObjects().filter(isEditableTextObject);
+};
 
 export const ElementToolbar: React.FC = () => {
   const {
@@ -84,10 +94,12 @@ export const ElementToolbar: React.FC = () => {
   // ─── Sync local state from selected object ───────────────────────────────
   useEffect(() => {
     if (!selectedObject) return;
-    const currentFill = (selectedObject.get('fill') as string) || '#8b5cf6';
-    const currentStroke = (selectedObject.get('stroke') as string) || '#000000';
-    const currentStrokeWidth = (selectedObject.get('strokeWidth') as number) || 0;
-    const currentOpacity = selectedObject.get('opacity') ?? 1;
+    const arrowAppearance = getDiagramArrowAppearance(selectedObject);
+    const boxAppearance = arrowAppearance ? null : getBoxAppearance(selectedObject);
+    const currentFill = arrowAppearance?.arrowColor || boxAppearance?.fill || (selectedObject.get('fill') as string) || '#8b5cf6';
+    const currentStroke = arrowAppearance?.strokeColor || boxAppearance?.stroke || (selectedObject.get('stroke') as string) || '#000000';
+    const currentStrokeWidth = arrowAppearance?.strokeWidth || boxAppearance?.strokeWidth || (selectedObject.get('strokeWidth') as number) || 0;
+    const currentOpacity = arrowAppearance?.opacity ?? boxAppearance?.opacity ?? selectedObject.get('opacity') ?? 1;
     const locked = Boolean(
       selectedObject.lockMovementX
       || selectedObject.lockMovementY
@@ -136,7 +148,12 @@ export const ElementToolbar: React.FC = () => {
     const centerX = canvasRect.left + (bounds.left + bounds.width / 2) * zoom + vpt[4];
     const topY = canvasRect.top + bounds.top * zoom + vpt[5];
 
-    const toolbarWidth = selectedObject.type === 'image' ? 720 : 480;
+    const hasTextTargets = getEditableTextTargetsFromSelection(selectedObject).length > 0;
+    const toolbarWidth = hasTextTargets
+      ? Math.min(1180, window.innerWidth - 16)
+      : selectedObject.type === 'image'
+        ? 720
+        : 480;
     const gap = 10;
 
     let left = centerX - toolbarWidth / 2;
@@ -209,11 +226,22 @@ export const ElementToolbar: React.FC = () => {
 
   // ─── Action handlers ─────────────────────────────────────────────────────
   if (isEditing || !selectedObject || !canvas || !toolbarPos) return null;
+  const isArrowSelection = Boolean(getDiagramArrowAppearance(selectedObject));
 
   const handleFillChange = (color: string) => {
     setFillColor(color);
     if (isEditableTextObject(selectedObject)) {
       applyFillColor(color);
+      return;
+    }
+    if (applyDiagramArrowStyle(canvas, selectedObject, { color }, { syncWholeArrowColor: true })) {
+      canvas.renderAll();
+      saveHistory();
+      return;
+    }
+    if (applyBoxStyle(canvas, selectedObject, { fill: color })) {
+      canvas.renderAll();
+      saveHistory();
       return;
     }
     selectedObject.set('fill', color);
@@ -227,6 +255,16 @@ export const ElementToolbar: React.FC = () => {
       applyStrokeColor(color);
       return;
     }
+    if (applyDiagramArrowStyle(canvas, selectedObject, { color })) {
+      canvas.renderAll();
+      saveHistory();
+      return;
+    }
+    if (applyBoxStyle(canvas, selectedObject, { stroke: color })) {
+      canvas.renderAll();
+      saveHistory();
+      return;
+    }
     selectedObject.set('stroke', color);
     canvas.renderAll();
     saveHistory();
@@ -238,6 +276,16 @@ export const ElementToolbar: React.FC = () => {
       applyStrokeWidth(width);
       return;
     }
+    if (applyDiagramArrowStyle(canvas, selectedObject, { width })) {
+      canvas.renderAll();
+      saveHistory();
+      return;
+    }
+    if (applyBoxStyle(canvas, selectedObject, { strokeWidth: width })) {
+      canvas.renderAll();
+      saveHistory();
+      return;
+    }
     selectedObject.set('strokeWidth', width);
     canvas.renderAll();
     saveHistory();
@@ -247,6 +295,16 @@ export const ElementToolbar: React.FC = () => {
     setOpacity(val);
     if (isEditableTextObject(selectedObject)) {
       applyOpacity(val);
+      return;
+    }
+    if (applyDiagramArrowStyle(canvas, selectedObject, { opacity: val })) {
+      canvas.renderAll();
+      saveHistory();
+      return;
+    }
+    if (applyBoxStyle(canvas, selectedObject, { opacity: val })) {
+      canvas.renderAll();
+      saveHistory();
       return;
     }
     selectedObject.set('opacity', val);
@@ -283,15 +341,11 @@ export const ElementToolbar: React.FC = () => {
   };
 
   const handleBringForward = () => {
-    canvas.bringForward(selectedObject);
-    canvas.renderAll();
-    saveHistory();
+    if (moveLayerObject(canvas, selectedObject, 'forward')) saveHistory();
   };
 
   const handleSendBackward = () => {
-    canvas.sendBackwards(selectedObject);
-    canvas.renderAll();
-    saveHistory();
+    if (moveLayerObject(canvas, selectedObject, 'backward')) saveHistory();
   };
 
   const handleReplaceImage = async (file: File) => {
@@ -370,15 +424,8 @@ export const ElementToolbar: React.FC = () => {
     setOpenSubmenu(null);
   };
 
-  const handleLayerAction = (action: 'front' | 'forward' | 'backward' | 'back') => {
-    switch (action) {
-      case 'front': canvas.bringToFront(selectedObject); break;
-      case 'forward': canvas.bringForward(selectedObject); break;
-      case 'backward': canvas.sendBackwards(selectedObject); break;
-      case 'back': canvas.sendToBack(selectedObject); break;
-    }
-    canvas.renderAll();
-    saveHistory();
+  const handleLayerAction = (action: LayerOrderAction) => {
+    if (moveLayerObject(canvas, selectedObject, action)) saveHistory();
     setShowOverflow(false);
   };
 
@@ -471,6 +518,14 @@ export const ElementToolbar: React.FC = () => {
   const isGroup = selectedObject.type === 'group';
   const isVisible = selectedObject.visible !== false;
   const isImage = selectedObject.type === 'image';
+  const textTargets = getEditableTextTargetsFromSelection(selectedObject);
+
+  if (textTargets.length > 0) {
+    return createPortal(
+      <ContextualTextToolbar position={toolbarPos} textTargets={textTargets} />,
+      document.body,
+    );
+  }
 
   // ─── Alignment submenu items ─────────────────────────────────────────────
   const alignmentItems: { id: string; label: string; icon: React.ReactNode; alignment: PageAlignment }[] = [
@@ -565,7 +620,7 @@ export const ElementToolbar: React.FC = () => {
               value={fillColor.startsWith('#') ? fillColor : '#8b5cf6'}
               onChange={(e) => handleFillChange(e.target.value)}
               className="w-5 h-5 rounded border border-zinc-700 bg-transparent cursor-pointer"
-              title="Fill Color"
+              title={isArrowSelection ? 'Arrow Color' : 'Fill Color'}
             />
           </div>
         )}
@@ -577,7 +632,7 @@ export const ElementToolbar: React.FC = () => {
             value={strokeColor.startsWith('#') ? strokeColor : '#000000'}
             onChange={(e) => handleStrokeChange(e.target.value)}
             className="w-5 h-5 rounded border border-zinc-700 bg-transparent cursor-pointer"
-            title="Border Color"
+            title={isArrowSelection ? 'Stroke Color' : 'Border Color'}
           />
           <input
             type="number"

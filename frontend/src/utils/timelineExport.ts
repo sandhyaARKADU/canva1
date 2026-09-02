@@ -7,6 +7,7 @@ import type {
 } from '../types/timeline';
 import { CUSTOM_FABRIC_PROPERTIES } from './editorElementFactory';
 import { masterTimelineManager } from './masterTimelineManager';
+import { removeStrayConnectorMarkers } from './posterLayoutTools';
 
 const objectValue = (object: fabric.Object, key: string) => (
   object.get(key as keyof fabric.Object) as unknown
@@ -24,6 +25,7 @@ const getObjectId = (object: fabric.Object, index: number) => String(
 export const createTeckStudioTimelineSchema = (
   canvas: fabric.Canvas,
 ): TeckStudioTimelineSchema => {
+  removeStrayConnectorMarkers(canvas);
   const state = useEditorStore.getState();
   const videoObjectIds = new Set(masterTimelineManager.getVideoTracks().map((track) => track.objectId));
   const objectTracks: TimelineObjectTrack[] = canvas.getObjects()

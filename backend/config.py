@@ -65,6 +65,12 @@ class Settings(BaseSettings):
     POSTER_TEXT_MASK_PADDING: int = 8
     POSTER_REGION_MIN_PERCENTAGE: float = 2.0
 
+    # Third-party asset providers. Keys stay on the FastAPI server.
+    ICONIFY_API_KEY: str = ""
+    UNSPLASH_ACCESS_KEY: str = ""
+    LOTTIEFILES_API_KEY: str = ""
+    LOTTIEFILES_API_URL: str = "https://api.lottiefiles.com/v2/animations"
+
     # Background video rendering
     FFMPEG_BINARY: str = "ffmpeg"
     VIDEO_RENDER_RETENTION_HOURS: int = 24

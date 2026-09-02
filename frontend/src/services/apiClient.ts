@@ -29,7 +29,11 @@ export function getAuthToken() {
 export async function apiFetch(path: string, options: ApiFetchOptions = {}) {
   const { timeoutMs = 30000, auth = true, headers, signal, ...init } = options;
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const timeout = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
   const token = auth ? getAuthToken() : null;
 
   const requestHeaders = new Headers(headers);
@@ -53,6 +57,9 @@ export async function apiFetch(path: string, options: ApiFetchOptions = {}) {
       });
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
+        if (signal?.aborted && !timedOut) {
+          throw new DOMException('Backend request aborted.', 'AbortError');
+        }
         throw new Error(`Backend request timed out after ${timeoutMs}ms: ${apiUrl(path)}`, { cause: error });
       }
       throw error;

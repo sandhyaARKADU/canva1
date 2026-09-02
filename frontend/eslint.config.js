@@ -31,6 +31,7 @@ export default defineConfig([
     ],
     rules: {
       'react-hooks/immutability': 'off',
+      'react-hooks/purity': 'warn',
       'react-hooks/refs': 'warn',
       'react-hooks/set-state-in-effect': 'warn',
       'react-hooks/static-components': 'warn',
