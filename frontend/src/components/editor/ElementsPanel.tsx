@@ -91,7 +91,6 @@ import {
   createTechnicalReelElement,
   type TechnicalReelLibraryId,
 } from '../../utils/technicalReelDesign';
-import ProviderAssetPanel from './ProviderAssetPanel';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -153,11 +152,6 @@ const CATEGORY_CONFIGS: CategoryConfig[] = [
     type: 'asset',
     assetQuery: { search: 'illustration,graphic,abstract,decorative' },
     subcategories: ['Illustrations', 'Decorative', 'Abstract', 'Business', 'Technology', 'Education', 'Medical', 'Social Media', 'Patterns'],
-  },
-  {
-    id: 'provider-assets', label: 'Connected Assets', icon: Globe2,
-    gradient: 'from-cyan-500/30 to-violet-500/30', iconColor: 'text-cyan-300',
-    type: 'interactive',
   },
   {
     id: 'videos', label: 'Videos', icon: Film,
@@ -259,7 +253,7 @@ const CATEGORY_CONFIGS: CategoryConfig[] = [
 ];
 
 const ELEMENT_CATEGORY_GROUPS: Array<{ title: string; ids: string[] }> = [
-  { title: 'Media', ids: ['images', 'graphics', 'provider-assets', 'videos'] },
+  { title: 'Media', ids: ['images', 'graphics', 'videos'] },
   { title: 'Audio', ids: ['music', 'sound-effects', 'voiceover'] },
   { title: 'Technical', ids: ['system-design', 'technical-infographic', 'technical-reel', 'technical-icons', 'connectors', 'code'] },
   { title: 'Design', ids: ['shapes', '3d', 'animations', 'charts', 'forms', 'frames', 'grids', 'tables', 'sheets'] },
@@ -2731,38 +2725,69 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
     setAnimationApplyMessage(result.message);
   };
 
+  const getAnimationLabelLines = (name: string) => {
+    const displayName = name.replace(/\s+->\s+/g, ' → ');
+    if (displayName.length <= 13) return [displayName];
+    const words = displayName.split(/\s+/);
+    if (words.length <= 1) return [displayName];
+    let bestIndex = 1;
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (let index = 1; index < words.length; index += 1) {
+      const firstLine = words.slice(0, index).join(' ');
+      const secondLine = words.slice(index).join(' ');
+      const score = Math.abs(firstLine.length - secondLine.length);
+      if (score < bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    }
+    return [words.slice(0, bestIndex).join(' '), words.slice(bestIndex).join(' ')];
+  };
+
   const renderAnimCard = (def: EditorAnimationLibraryItem) => {
     const appliedIds = getAppliedAnimationIds(getCurrentAnimationSelection());
     const isActive = def.mode !== 'insert' && (appliedIds.has(def.id) || appliedIds.has(def.type));
+    const labelLines = getAnimationLabelLines(def.name);
     return (
-    <div key={def.id} className="relative aspect-square">
+    <div key={def.id} className="relative min-h-[98px]">
       <button
         type="button"
         onMouseDown={(event) => event.stopPropagation()}
         onClick={() => insertAnimation(def)}
         onMouseEnter={() => previewAnimationOnSelection(def)}
         onMouseLeave={clearAnimationHoverPreview}
-        className={`h-full w-full bg-[#12121B]/80 border rounded-xl flex flex-col items-center justify-center gap-1 cursor-pointer transition-all hover:scale-[1.03] group overflow-hidden relative ${
+        className={`min-h-[98px] w-full bg-[#12121B]/80 border rounded-xl flex flex-col items-center justify-between cursor-pointer transition-all hover:scale-[1.03] group overflow-visible relative px-1.5 pt-2.5 pb-2 ${
           isActive
             ? 'border-cyan-400/80 shadow-[0_0_18px_rgba(34,211,238,0.22)]'
             : 'border-white/[0.08]/60 hover:border-orange-500/50'
         }`}
         title={def.name}
       >
-        <div className="flex h-full w-full items-center justify-center p-2">
+        <div className="flex min-h-[48px] w-full flex-1 flex-col items-center justify-center gap-1 px-1 pb-1 pt-2">
           <span className="rounded-lg border border-orange-400/30 bg-orange-500/10 px-2 py-1 text-[13px] font-black tracking-tight text-orange-200">
             {def.preview}
           </span>
+          {isActive && (
+            <span className="rounded-full border border-cyan-300/40 bg-cyan-500/20 px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-wide text-cyan-100">
+              ACTIVE
+            </span>
+          )}
         </div>
         <div className="absolute top-1 right-1 rounded-full bg-orange-500/80 px-1.5 py-0.5 opacity-0 transition-opacity group-hover:opacity-100">
           <span className="text-[7px] font-bold uppercase text-white">{def.mode === 'insert' ? '+' : 'APPLY'}</span>
         </div>
-        {isActive && (
-          <div className="absolute bottom-5 left-1 rounded-full border border-cyan-300/40 bg-cyan-500/20 px-1.5 py-0.5">
-            <span className="text-[7px] font-bold uppercase tracking-wide text-cyan-100">ACTIVE</span>
-          </div>
-        )}
-        <span className="text-[9px] font-medium text-zinc-500 group-hover:text-zinc-300 transition-colors text-center px-1 leading-tight truncate w-full">{def.name}</span>
+        <span
+          className={`flex min-h-[26px] w-full flex-col items-center justify-center px-0.5 text-center font-semibold text-zinc-200 transition-colors group-hover:text-white ${
+            labelLines.length > 1 ? 'text-[8.5px] leading-[1.05]' : 'text-[10px] leading-[1.15]'
+          }`}
+          aria-label={def.name}
+        >
+          {labelLines.map((line) => (
+            <span key={line} className="block max-w-full whitespace-nowrap">
+              {line}
+            </span>
+          ))}
+        </span>
       </button>
       <button
         type="button"
@@ -2782,18 +2807,18 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
 
   const renderAnimRow = (catDef: { id: EditorAnimationCategory; label: string }, anims: EditorAnimationLibraryItem[]) => (
     <div key={catDef.id}>
-      <div className="flex items-center justify-between mb-2">
-        <h4 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">{catDef.label}</h4>
+      <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
+        <h4 className="min-w-0 truncate text-[10px] font-bold text-zinc-500 uppercase tracking-wider">{catDef.label}</h4>
         {anims.length > 5 && (
           <button onClick={() => { setAnimSeeAll(catDef.id); setAnimSearch(''); }}
-            className="text-[10px] font-semibold text-orange-400 hover:text-orange-300 cursor-pointer">
+            className="shrink-0 text-[10px] font-semibold text-orange-400 hover:text-orange-300 cursor-pointer">
             See all ({anims.length})
           </button>
         )}
       </div>
       <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {anims.slice(0, 6).map((def) => (
-          <div key={def.id} className="shrink-0 w-[72px]">
+          <div key={def.id} className="shrink-0 w-[82px]">
             {renderAnimCard(def)}
           </div>
         ))}
@@ -2827,7 +2852,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
             <p className="text-xs text-zinc-400">No matching animations found</p>
           </div>
         ) : (
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-3 gap-2.5">
             {filtered.map((def) => renderAnimCard(def))}
           </div>
         )}
@@ -2873,7 +2898,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
               View all
             </button>
           </div>
-          <div className="mt-3 grid grid-cols-3 gap-2">
+          <div className="mt-3 grid grid-cols-3 gap-2.5">
             {EDITOR_ANIMATIONS_BY_CATEGORY.motion.slice(0, 9).map((def) => renderAnimCard(def))}
           </div>
           {activeMovingAnimation && (
@@ -2952,7 +2977,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
                 <button onClick={() => setAnimSearch('')} className="text-[10px] text-orange-400 hover:text-orange-300 cursor-pointer">Clear search</button>
               </div>
             ) : (
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-3 gap-2.5">
                 {displayedSearch.map((def) => renderAnimCard(def))}
               </div>
             )}
@@ -2966,7 +2991,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
               ) : (
                 <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                   {recentAnimationIds.map(animationById).filter(Boolean).slice(0, 8).map((def) => (
-                    <div key={def!.id} className="shrink-0 w-[72px]">{renderAnimCard(def!)}</div>
+                    <div key={def!.id} className="shrink-0 w-[82px]">{renderAnimCard(def!)}</div>
                   ))}
                 </div>
               )}
@@ -2979,7 +3004,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
               ) : (
                 <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                   {favoriteAnimationIds.map(animationById).filter(Boolean).slice(0, 8).map((def) => (
-                    <div key={def!.id} className="shrink-0 w-[72px]">{renderAnimCard(def!)}</div>
+                    <div key={def!.id} className="shrink-0 w-[82px]">{renderAnimCard(def!)}</div>
                   ))}
                 </div>
               )}
@@ -2990,7 +3015,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
               <h4 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-2">Trending</h4>
               <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 {recommended.slice(0, 6).map((def) => (
-                  <div key={def.id} className="shrink-0 w-[72px]">{renderAnimCard(def)}</div>
+                  <div key={def.id} className="shrink-0 w-[82px]">{renderAnimCard(def)}</div>
                 ))}
               </div>
             </div>
@@ -3406,7 +3431,6 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
     if (cat.type === 'interactive') {
       switch (cat.id) {
         case 'system-design': return renderArchitectureLibrary();
-        case 'provider-assets': return <ProviderAssetPanel canvas={canvas} saveHistory={saveHistory} />;
         case 'technical-infographic': return renderTechnicalInfographic();
         case 'technical-reel': return renderTechnicalReel();
         case 'technical-icons': return renderTechnicalIcons();
@@ -3434,14 +3458,14 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
 
     return (
       <div className="space-y-5">
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-3">
           <button onClick={() => handleCategoryClick('recents')}
-            className="group flex items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.035] p-3 transition-colors hover:border-violet-400/40 hover:bg-white/[0.055]">
+            className="group flex h-[50px] items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.035] px-3 transition-colors hover:border-violet-400/40 hover:bg-white/[0.055]">
             <Clock className="w-4 h-4 text-zinc-500 transition-colors group-hover:text-violet-300" />
             <span className="text-xs font-semibold text-zinc-400 transition-colors group-hover:text-zinc-100">Recent</span>
           </button>
           <button onClick={() => handleCategoryClick('favorites')}
-            className="group flex items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.035] p-3 transition-colors hover:border-pink-400/40 hover:bg-white/[0.055]">
+            className="group flex h-[50px] items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.035] px-3 transition-colors hover:border-pink-400/40 hover:bg-white/[0.055]">
             <Heart className="w-4 h-4 text-zinc-500 transition-colors group-hover:text-pink-300" />
             <span className="text-xs font-semibold text-zinc-400 transition-colors group-hover:text-zinc-100">Favorites</span>
           </button>
@@ -3450,7 +3474,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
         {ELEMENT_CATEGORY_GROUPS.map((group) => (
           <section key={group.title} className="space-y-2.5">
             <h4 className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500">{group.title}</h4>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 gap-3">
               {group.ids.map((id) => {
                 const cat = categoryById.get(id);
                 if (!cat) return null;
@@ -3459,10 +3483,10 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
                   <button
                     key={cat.id}
                     onClick={() => handleCategoryClick(cat.id)}
-                    className="group relative flex min-h-[58px] items-center gap-2 overflow-hidden rounded-xl border border-white/[0.08] bg-[#12121B]/70 px-3 py-2 text-left transition-all hover:border-white/[0.16] hover:bg-[#171722]"
+                    className="group relative flex h-[68px] items-center gap-2 overflow-hidden rounded-xl border border-white/[0.08] bg-[#12121B]/70 px-3 py-2 text-left transition-all hover:-translate-y-0.5 hover:border-white/[0.16] hover:bg-[#171722]"
                     title={cat.label}
                   >
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/[0.08] bg-black/20">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/[0.08] bg-black/20">
                       <Icon className={`w-4 h-4 ${cat.iconColor}`} />
                     </span>
                     <span className="min-w-0 flex-1 text-[11px] font-semibold leading-tight text-zinc-300 group-hover:text-white">
@@ -3541,7 +3565,7 @@ export const ElementsPanel: React.FC<ElementsPanelProps> = ({ initialTab = 'all'
     if (cat.id === 'images') return null;
     return (
       <div className="relative">
-        <Search className="absolute left-3 w-3.5 h-3.5 text-zinc-500" />
+        <Search className="absolute left-3 top-1/2 w-3.5 h-3.5 -translate-y-1/2 text-zinc-500" />
         <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
           placeholder={`Search ${cat.label.toLowerCase()}...`}
           className="w-full bg-[#12121B] border border-white/[0.08] focus:border-violet-500 rounded-lg pl-8 pr-8 py-2 text-[11px] text-zinc-100 placeholder:text-zinc-500 focus:outline-none transition-all" />

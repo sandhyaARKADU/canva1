@@ -1,5 +1,6 @@
 export const AI_ARCHITECTURE_TEMPLATE_NAME = 'AI Chat System Architecture';
 export const DISTRIBUTED_SYSTEM_TEMPLATE_NAME = 'Distributed System Architecture';
+export const AI_APPLICATION_ARCHITECTURE_TEMPLATE_NAME = 'AI Application Architecture';
 
 export const AI_ARCHITECTURE_PALETTE = {
   background: '#070A0F',

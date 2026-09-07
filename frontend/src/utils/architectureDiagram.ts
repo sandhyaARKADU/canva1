@@ -1000,7 +1000,7 @@ export function createTechnicalGrid(
 export function createSegmentedHeaderBars(
   width: number,
   top = 185,
-  colors = [
+  colors: string[] = [
     AI_ARCHITECTURE_PALETTE.green,
     AI_ARCHITECTURE_PALETTE.yellow,
     AI_ARCHITECTURE_PALETTE.orange,

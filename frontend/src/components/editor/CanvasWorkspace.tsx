@@ -188,14 +188,14 @@ export const CanvasWorkspace: React.FC = () => {
   useEffect(() => {
     if (!canvasRef.current || fabricRef.current) return;
 
-    fabric.Object.prototype.borderColor = '#a78bfa';
+    fabric.Object.prototype.borderColor = 'rgba(167, 139, 250, 0.9)';
     fabric.Object.prototype.cornerColor = '#f8fafc';
-    fabric.Object.prototype.cornerStrokeColor = '#7c3aed';
+    fabric.Object.prototype.cornerStrokeColor = '#8b5cf6';
     fabric.Object.prototype.cornerStyle = 'circle';
-    fabric.Object.prototype.cornerSize = 8;
+    fabric.Object.prototype.cornerSize = 7;
     fabric.Object.prototype.transparentCorners = false;
     fabric.Object.prototype.borderScaleFactor = 1;
-    fabric.Object.prototype.padding = 4;
+    fabric.Object.prototype.padding = 3;
 
     const assignObjectId = (obj: fabric.Object) => {
       if (obj.get('id' as any)) return;
@@ -1728,7 +1728,7 @@ export const CanvasWorkspace: React.FC = () => {
 
       <div className="teckstudio-main-preview absolute inset-0 z-0 overflow-hidden">
         <div
-          className="pointer-events-none absolute z-[1] rounded-[10px] border border-white/70 bg-white/[0.018] shadow-[0_26px_80px_rgba(0,0,0,0.48),0_0_0_1px_rgba(255,255,255,0.10)]"
+          className="pointer-events-none absolute z-[1] rounded-[10px] border border-white/55 bg-white/[0.018] shadow-[0_26px_80px_rgba(0,0,0,0.48),0_0_0_1px_rgba(255,255,255,0.08)]"
           style={previewFrameStyle}
           aria-hidden="true"
         />

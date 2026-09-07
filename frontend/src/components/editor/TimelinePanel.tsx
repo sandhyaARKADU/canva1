@@ -379,11 +379,11 @@ export const TimelinePanel: React.FC = () => {
       />
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <header className="flex h-11 shrink-0 items-center gap-1 border-b border-white/[0.08] bg-[#101018]/95 px-2 pt-1">
+      <header className="flex h-10 shrink-0 items-center gap-1 border-b border-white/[0.08] bg-[#101018]/95 px-2">
         <button
           type="button"
           onClick={() => store.setTimelineCollapsed(true)}
-          className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-white"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-800 hover:text-white"
           title="Collapse timeline"
         >
           <ChevronDown className="h-3.5 w-3.5" />
@@ -395,7 +395,7 @@ export const TimelinePanel: React.FC = () => {
         <button
           type="button"
           onClick={() => masterTimelineManager.seekMs(0)}
-          className="rounded p-1.5 text-zinc-400 hover:bg-zinc-800"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800"
           title="Go to beginning"
         >
           <ChevronsLeft className="h-3.5 w-3.5" />
@@ -406,7 +406,7 @@ export const TimelinePanel: React.FC = () => {
             const frameMs = 1000 / timeline.fps;
             masterTimelineManager.seekMs(Math.max(0, timeline.currentTimeMs - frameMs));
           }}
-          className="rounded p-1.5 text-zinc-400 hover:bg-zinc-800"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800"
           title="Previous frame"
         >
           <ChevronLeft className="h-3.5 w-3.5" />
@@ -418,7 +418,7 @@ export const TimelinePanel: React.FC = () => {
               ? masterTimelineManager.pause()
               : void play()
           }
-          className="rounded-lg bg-violet-600 p-1.5 text-white shadow-md hover:bg-violet-500"
+          className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-600 text-white shadow-md hover:bg-violet-500"
           title={store.timelinePlaybackState === 'playing' ? 'Pause' : 'Play'}
         >
           {store.timelinePlaybackState === 'playing' ? (
@@ -433,7 +433,7 @@ export const TimelinePanel: React.FC = () => {
             const frameMs = 1000 / timeline.fps;
             masterTimelineManager.seekMs(Math.min(timeline.durationMs, timeline.currentTimeMs + frameMs));
           }}
-          className="rounded p-1.5 text-zinc-400 hover:bg-zinc-800"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800"
           title="Next frame"
         >
           <ChevronRight className="h-3.5 w-3.5" />
@@ -441,7 +441,7 @@ export const TimelinePanel: React.FC = () => {
         <button
           type="button"
           onClick={() => masterTimelineManager.stop()}
-          className="rounded p-1.5 text-zinc-400 hover:bg-zinc-800"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800"
           title="Stop"
         >
           <CircleStop className="h-3.5 w-3.5" />
@@ -449,7 +449,7 @@ export const TimelinePanel: React.FC = () => {
         <button
           type="button"
           onClick={() => masterTimelineManager.seekMs(timeline.durationMs)}
-          className="rounded p-1.5 text-zinc-400 hover:bg-zinc-800"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800"
           title="Go to end"
         >
           <ChevronsRight className="h-3.5 w-3.5" />
@@ -468,7 +468,7 @@ export const TimelinePanel: React.FC = () => {
         <select
           value={timeline.fps}
           onChange={(event) => store.setTimelineFps(Number(event.target.value) as TimelineFps)}
-          className="rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[9px]"
+          className="h-7 rounded-lg border border-white/[0.08] bg-zinc-950 px-2 text-[9px] text-zinc-300"
           title="Frame rate"
           aria-label="Frame rate"
         >
@@ -484,7 +484,7 @@ export const TimelinePanel: React.FC = () => {
         <button
           type="button"
           onClick={() => store.setTimelineZoom(timeline.zoom / 1.25)}
-          className="rounded p-1.5 text-zinc-500 hover:bg-zinc-800"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-800"
           title="Zoom timeline out"
         >
           <ZoomOut className="h-3.5 w-3.5" />
@@ -502,7 +502,7 @@ export const TimelinePanel: React.FC = () => {
         <button
           type="button"
           onClick={() => store.setTimelineZoom(timeline.zoom * 1.25)}
-          className="rounded p-1.5 text-zinc-500 hover:bg-zinc-800"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-800"
           title="Zoom timeline in"
         >
           <ZoomIn className="h-3.5 w-3.5" />
@@ -513,7 +513,7 @@ export const TimelinePanel: React.FC = () => {
         <button
           type="button"
           onClick={fitTimeline}
-          className="rounded border border-zinc-800 px-2 py-1 text-[9px] text-zinc-400 hover:bg-zinc-800"
+          className="h-7 rounded-lg border border-white/[0.08] px-2 text-[9px] text-zinc-400 hover:bg-zinc-800"
           title="Fit timeline"
         >
           Fit
@@ -521,7 +521,7 @@ export const TimelinePanel: React.FC = () => {
         <button
           type="button"
           onClick={() => store.setTimelineLoopPreview(!timeline.loopPreview)}
-          className={`rounded p-1.5 ${
+          className={`flex h-7 w-7 items-center justify-center rounded-lg ${
             timeline.loopPreview ? 'bg-violet-500/15 text-violet-300' : 'text-zinc-500 hover:bg-zinc-800'
           }`}
           title="Loop preview"
@@ -535,7 +535,7 @@ export const TimelinePanel: React.FC = () => {
         <button
           type="button"
           onClick={() => store.addPageToTimeline(store.activePageId)}
-          className="flex items-center gap-1 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2 py-1.5 text-[9px] font-bold text-cyan-300 hover:bg-cyan-500/20"
+          className="flex h-8 items-center gap-1 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2 text-[9px] font-bold text-cyan-300 hover:bg-cyan-500/20"
         >
           <Plus className="h-3 w-3" />
           Add Current Page to Timeline
@@ -545,7 +545,7 @@ export const TimelinePanel: React.FC = () => {
           type="button"
           onClick={() => void applyTechnicalReel()}
           disabled={clips.length === 0 || applyingPreset}
-          className="flex items-center gap-1 rounded-lg border border-violet-500/30 bg-violet-500/10 px-2 py-1.5 text-[9px] font-bold text-violet-200 hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex h-8 items-center gap-1 rounded-lg border border-violet-500/30 bg-violet-500/10 px-2 text-[9px] font-bold text-violet-200 hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-40"
           title="Apply sequential object animations and 160ms reel transitions using the current FPS"
         >
           <Sparkles className="h-3 w-3" />
@@ -560,7 +560,7 @@ export const TimelinePanel: React.FC = () => {
               new CustomEvent('teckstudio:open-video-export', { detail: { format: 'mp4' } })
             )
           }
-          className="flex items-center gap-1 rounded-lg bg-violet-600 px-2 py-1.5 text-[9px] font-bold text-white hover:bg-violet-500"
+          className="flex h-8 items-center gap-1 rounded-lg bg-violet-600 px-2 text-[9px] font-bold text-white hover:bg-violet-500"
         >
           <Download className="h-3 w-3" />
           Export Video
@@ -607,7 +607,7 @@ export const TimelinePanel: React.FC = () => {
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <div
             ref={trackScrollRef}
-            className="relative min-h-0 flex-1 overflow-x-auto overflow-y-hidden"
+            className="teckstudio-scrollbar relative min-h-0 flex-1 overflow-x-auto overflow-y-hidden"
           >
             <div style={{ width: trackWidth }} className="relative flex min-h-full flex-col">
 

@@ -33,8 +33,8 @@ import type { VideoExportFormat } from '../../types/videoExport';
 import { removeStrayConnectorMarkers } from '../../utils/posterLayoutTools';
 import { calculateMainPreviewFit } from '../../utils/canvasPreviewFit';
 
-const toolbarGroupClass = 'flex h-10 shrink-0 items-center gap-1 rounded-xl border border-white/[0.08] bg-black/25 p-0.5 shadow-sm';
-const iconButtonClass = 'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:text-zinc-700 disabled:hover:bg-transparent';
+const toolbarGroupClass = 'flex h-9 shrink-0 items-center gap-1 rounded-xl border border-white/[0.08] bg-black/25 p-0.5 shadow-sm';
+const iconButtonClass = 'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:text-zinc-700 disabled:hover:bg-transparent';
 
 export const Toolbar: React.FC = () => {
   const navigate = useNavigate();
@@ -147,11 +147,11 @@ export const Toolbar: React.FC = () => {
   };
 
   return (
-    <header className="grid h-16 shrink-0 grid-cols-[minmax(220px,0.9fr)_minmax(0,1.2fr)_auto] items-center gap-3 border-b border-white/[0.08] bg-[#0f0f17] px-3 select-none shadow-[0_1px_0_rgba(255,255,255,0.02)] xl:grid-cols-[minmax(300px,0.9fr)_minmax(0,1.3fr)_auto] xl:px-5">
+    <header className="grid h-14 shrink-0 grid-cols-[minmax(220px,0.9fr)_minmax(0,1.2fr)_auto] items-center gap-3 border-b border-white/[0.08] bg-[#0f0f17] px-3 select-none shadow-[0_1px_0_rgba(255,255,255,0.02)] xl:grid-cols-[minmax(300px,0.9fr)_minmax(0,1.3fr)_auto] xl:px-5">
       <section className="flex min-w-0 items-center gap-2" aria-label="Project and save status">
         <button
           onClick={() => navigate('/')}
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-white"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-white"
           title="Back to Home"
           aria-label="Back to Home"
         >
@@ -167,7 +167,7 @@ export const Toolbar: React.FC = () => {
           value={projectName}
           placeholder="Name your design"
           onChange={(e) => setProjectName(e.target.value)}
-          className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1 text-sm font-semibold text-zinc-100 transition-colors hover:border-white/[0.08] focus:border-violet-500 focus:bg-[#12121B] focus:outline-none"
+          className="h-9 min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 text-sm font-semibold text-zinc-100 transition-colors hover:border-white/[0.08] focus:border-violet-500 focus:bg-[#12121B] focus:outline-none"
           title="Click to rename project"
           aria-label="Project name"
         />
@@ -222,7 +222,7 @@ export const Toolbar: React.FC = () => {
             )}
             <button
               onClick={clearCanvas}
-          className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-white"
+          className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-white"
               title="Clear Entire Canvas"
               aria-label="Clear entire canvas"
             >
@@ -299,7 +299,7 @@ export const Toolbar: React.FC = () => {
                 setZoom(targetZoom);
                 canvas.requestRenderAll();
               }}
-              className="h-8 bg-[#101018] text-[10px] font-bold text-zinc-200 border border-white/[0.08] rounded-lg px-1.5 outline-none cursor-pointer"
+              className="h-8 bg-[#101018] text-[10px] font-bold text-zinc-200 border border-white/[0.08] rounded-lg px-2 outline-none cursor-pointer"
               title="Preset Zoom Level"
             >
               <option value="fit">Fit</option>
@@ -331,17 +331,17 @@ export const Toolbar: React.FC = () => {
       <section className="flex shrink-0 items-center gap-2" aria-label="Main editor actions">
         <button
           onClick={() => setShowNotifications(!showNotifications)}
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-400 hover:bg-white/[0.06] hover:text-white transition-colors relative"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-zinc-400 hover:bg-white/[0.06] hover:text-white transition-colors relative"
           title="Notification Center"
           aria-label="Notification Center"
         >
           <Bell className="h-4 w-4 text-amber-400" />
         </button>
 
-        <div className="flex h-10 shrink-0 rounded-xl border border-white/[0.08] bg-zinc-950/80 p-0.5">
+        <div className="flex h-9 shrink-0 rounded-xl border border-white/[0.08] bg-zinc-950/80 p-0.5">
           <button
             onClick={() => setEditorMode('design')}
-            className={`flex h-9 items-center rounded-lg px-3 text-xs font-bold transition-all ${
+            className={`flex h-8 items-center rounded-lg px-3 text-xs font-bold transition-all ${
               editorMode === 'design'
                 ? 'bg-zinc-800 text-violet-400 shadow-sm'
                 : 'text-zinc-500 hover:bg-[#12121B] hover:text-zinc-300'
@@ -352,7 +352,7 @@ export const Toolbar: React.FC = () => {
           </button>
           <button
             onClick={() => setEditorMode('dev')}
-            className={`flex h-9 items-center gap-1 rounded-lg px-3 text-xs font-bold transition-all ${
+            className={`flex h-8 items-center gap-1 rounded-lg px-3 text-xs font-bold transition-all ${
               editorMode === 'dev'
                 ? 'bg-emerald-500/15 text-emerald-400 shadow-sm'
                 : 'text-zinc-500 hover:bg-[#12121B] hover:text-zinc-300'
@@ -368,7 +368,7 @@ export const Toolbar: React.FC = () => {
         <div className="relative shrink-0">
           <button
             onClick={() => setShowExportMenu(!showExportMenu)}
-            className="flex h-10 items-center gap-1.5 rounded-xl bg-violet-600 px-4 text-xs font-bold text-white shadow-lg shadow-violet-600/10 transition-colors hover:bg-violet-500 focus:outline-none"
+            className="flex h-9 items-center gap-1.5 rounded-xl bg-violet-600 px-4 text-xs font-bold text-white shadow-lg shadow-violet-600/10 transition-colors hover:bg-violet-500 focus:outline-none"
             aria-label="Export design"
           >
             <Download className="h-3.5 w-3.5" />
@@ -446,7 +446,7 @@ export const Toolbar: React.FC = () => {
 
         <button
           onClick={() => setShowShareModal(true)}
-          className="flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-800 px-3 text-xs font-bold text-white transition-colors hover:bg-zinc-700"
+          className="flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-white/[0.10] bg-zinc-900 px-3 text-xs font-bold text-white transition-colors hover:bg-zinc-800"
           title="Share Design"
           aria-label="Share Design"
         >
@@ -456,7 +456,7 @@ export const Toolbar: React.FC = () => {
 
         <button
           onClick={() => setShowShortcuts(true)}
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
           title="Keyboard Shortcuts (?)"
           aria-label="Keyboard shortcuts"
         >

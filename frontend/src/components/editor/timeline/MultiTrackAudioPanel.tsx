@@ -376,7 +376,7 @@ export const MultiTrackAudioPanel: React.FC<MultiTrackAudioPanelProps> = ({
     return (
       <div
         key={trackType}
-        className="relative flex h-10 border-t border-zinc-800/80 bg-zinc-950/40"
+        className="relative flex h-9 border-t border-zinc-800/80 bg-zinc-950/40"
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
       >
@@ -422,8 +422,8 @@ export const MultiTrackAudioPanel: React.FC<MultiTrackAudioPanelProps> = ({
                     setSelectedClipId(clip.id);
                   }}
                   onMouseDown={(e) => handleMouseDown(e, clip, 'move')}
-                  className={`absolute top-1 flex h-8 cursor-grab select-none items-center overflow-hidden rounded-md border ${config.border} ${config.bg} ${
-                    isSelected ? 'ring-2 ring-violet-400 ring-offset-1 ring-offset-black' : ''
+                  className={`absolute top-1 flex h-7 cursor-grab select-none items-center overflow-hidden rounded-md border ${config.border} ${config.bg} ${
+                    isSelected ? 'ring-1 ring-violet-300 ring-offset-1 ring-offset-black' : ''
                   }`}
                   style={{ left: leftPx, width: clipWidth }}
                 >
@@ -479,13 +479,13 @@ export const MultiTrackAudioPanel: React.FC<MultiTrackAudioPanelProps> = ({
       />
 
       {/* Audio Quick Bar Actions */}
-      <div className="flex items-center justify-between border-b border-zinc-800/60 bg-zinc-900/40 px-3 py-1.5 text-xs text-zinc-300">
-        <div className="flex items-center gap-2">
+      <div className="flex min-h-9 items-center justify-between gap-3 border-b border-zinc-800/60 bg-zinc-900/40 px-3 py-1.5 text-xs text-zinc-300">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">Audio Tracks</span>
           <button
             type="button"
             onClick={onOpenVoiceRecorder}
-            className="flex items-center gap-1 rounded-lg border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-[9px] font-semibold text-violet-300 hover:bg-violet-500/20"
+            className="flex h-7 items-center gap-1 rounded-lg border border-violet-500/30 bg-violet-500/10 px-2 text-[9px] font-semibold text-violet-300 hover:bg-violet-500/20"
           >
             <Mic className="h-3 w-3 text-violet-400" />
             Record Voice
@@ -493,7 +493,7 @@ export const MultiTrackAudioPanel: React.FC<MultiTrackAudioPanelProps> = ({
           <button
             type="button"
             onClick={() => handleUploadClick('bgmusic')}
-            className="flex items-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[9px] font-semibold text-emerald-300 hover:bg-emerald-500/20"
+            className="flex h-7 items-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2 text-[9px] font-semibold text-emerald-300 hover:bg-emerald-500/20"
           >
             <Music className="h-3 w-3 text-emerald-400" />
             Add Music
@@ -501,7 +501,7 @@ export const MultiTrackAudioPanel: React.FC<MultiTrackAudioPanelProps> = ({
           <button
             type="button"
             onClick={() => handleUploadClick('sfx')}
-            className="flex items-center gap-1 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[9px] font-semibold text-amber-300 hover:bg-amber-500/20"
+            className="flex h-7 items-center gap-1 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 text-[9px] font-semibold text-amber-300 hover:bg-amber-500/20"
           >
             <Zap className="h-3 w-3 text-amber-400" />
             Add Sound FX
@@ -513,7 +513,7 @@ export const MultiTrackAudioPanel: React.FC<MultiTrackAudioPanelProps> = ({
           <button
             type="button"
             onClick={() => setShowDuckingSettings(!showDuckingSettings)}
-            className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-[9px] font-semibold transition-colors ${
+            className={`flex h-7 items-center gap-1 rounded-lg border px-2 text-[9px] font-semibold transition-colors ${
               ducking.enabled
                 ? 'border-indigo-500/40 bg-indigo-500/15 text-indigo-300'
                 : 'border-zinc-800 bg-zinc-900 text-zinc-500'

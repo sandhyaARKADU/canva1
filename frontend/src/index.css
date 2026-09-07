@@ -30,6 +30,40 @@
   --color-text-disabled: rgba(168, 168, 184, 0.55);
 }
 
+:root {
+  --bg-primary: #080B12;
+  --bg-secondary: #0B0F17;
+  --surface: #101522;
+  --surface-raised: #141A28;
+  --surface-elevated: #171E2E;
+  --surface-hover: #1B2435;
+
+  --border: rgba(255, 255, 255, 0.08);
+  --border-hover: rgba(255, 255, 255, 0.14);
+  --border-selected: rgba(139, 92, 246, 0.72);
+
+  --text-primary: #F8FAFC;
+  --text-secondary: #AAB2C0;
+  --text-muted: #6B7280;
+
+  --accent-primary: #8B5CF6;
+  --accent-primary-strong: #7C3AED;
+  --accent-secondary: #22D3EE;
+  --accent-positive: #22C55E;
+
+  --space-2xs: 4px;
+  --space-xs: 8px;
+  --space-sm: 12px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+}
+
 html,
 body,
 #root {
@@ -52,16 +86,16 @@ body,
 }
 
 ::-webkit-scrollbar-track {
-  background: #0E0E16;
+  background: rgba(11, 15, 23, 0.72);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.22);
-  border-radius: 3px;
+  background: rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(139, 92, 246, 0.55);
+  background: rgba(139, 92, 246, 0.44);
 }
 
 /* ── Glass Panel Utility ── */
@@ -96,17 +130,87 @@ body,
 
 .teckstudio-editor-shell {
   background:
-    radial-gradient(circle at 18% 10%, rgba(139, 92, 246, 0.08), transparent 28%),
-    radial-gradient(circle at 80% 0%, rgba(34, 211, 238, 0.05), transparent 24%),
+    radial-gradient(circle at 18% 10%, rgba(139, 92, 246, 0.07), transparent 28%),
+    radial-gradient(circle at 80% 0%, rgba(34, 211, 238, 0.04), transparent 24%),
     #08080D;
 }
 
 .teckstudio-panel-surface {
-  background: linear-gradient(180deg, rgba(18, 18, 27, 0.98), rgba(13, 13, 19, 0.98));
-  border-color: rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(18, 18, 27, 0.98), rgba(12, 12, 19, 0.98));
+  border-color: var(--border);
 }
 
 .teckstudio-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: rgba(148, 163, 184, 0.25) transparent;
+}
+
+.teckstudio-editor-shell :is(input, select, textarea) {
+  border-color: var(--border);
+}
+
+.teckstudio-editor-shell :is(input, select, textarea):focus {
+  border-color: rgba(139, 92, 246, 0.64);
+}
+
+.teckstudio-dashboard-shell {
+  --dashboard-bg: #080B12;
+  --dashboard-bg-secondary: #0B0F17;
+  --dashboard-surface: #101522;
+  --dashboard-card: #141A28;
+  --dashboard-card-elevated: #171E2E;
+  --dashboard-border: rgba(255, 255, 255, 0.09);
+  --dashboard-border-hover: rgba(139, 92, 246, 0.42);
+  --dashboard-text: #F8FAFC;
+  --dashboard-text-secondary: #AAB2C0;
+  --dashboard-text-muted: #6B7280;
+  --dashboard-purple: #8B5CF6;
+  --dashboard-purple-strong: #7C3AED;
+  --dashboard-cyan: #22D3EE;
+  --dashboard-green: #22C55E;
+  background:
+    radial-gradient(circle at 20% 4%, rgba(124, 58, 237, 0.16), transparent 32%),
+    radial-gradient(circle at 84% 12%, rgba(34, 211, 238, 0.09), transparent 28%),
+    linear-gradient(180deg, var(--dashboard-bg), var(--dashboard-bg-secondary));
+  color: var(--dashboard-text);
+}
+
+.teckstudio-dashboard-shell > aside {
+  background:
+    linear-gradient(180deg, rgba(16, 21, 34, 0.98), rgba(11, 15, 23, 0.98));
+  border-color: var(--dashboard-border);
+}
+
+.teckstudio-dashboard-shell main > header {
+  background: rgba(8, 11, 18, 0.86);
+  border-color: var(--dashboard-border);
+}
+
+.teckstudio-dashboard-shell main > div {
+  background:
+    radial-gradient(circle at 70% 0%, rgba(34, 211, 238, 0.04), transparent 28%),
+    transparent;
+}
+
+.teckstudio-dashboard-shell :is(article, [role="dialog"]) {
+  border-color: var(--dashboard-border);
+}
+
+.teckstudio-dashboard-shell :is(input, textarea, select) {
+  background-color: var(--dashboard-surface);
+  border-color: var(--dashboard-border);
+  color: var(--dashboard-text);
+}
+
+.teckstudio-dashboard-shell :is(input, textarea, select)::placeholder {
+  color: var(--dashboard-text-muted);
+}
+
+.teckstudio-dashboard-shell :is(input, textarea, select):focus {
+  border-color: rgba(139, 92, 246, 0.56);
+}
+
+.teckstudio-dashboard-shell article:hover,
+.teckstudio-dashboard-shell button:hover {
+  border-color: var(--dashboard-border-hover);
 }

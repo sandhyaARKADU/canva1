@@ -28,8 +28,9 @@ import { isTemplateCompatible, getTemplateOrientation } from '../../utils/templa
 import { TEMPLATE_TYPE_OPTIONS } from '../templates/templateConstants';
 import { EDITORIAL_TECH_TEMPLATE_NAME, applyEditorialTechPoster } from '../../utils/editorialPoster';
 import { ArchitectureDiagramPanel } from './ArchitectureDiagramPanel';
-import { AI_ARCHITECTURE_TEMPLATE_NAME, DISTRIBUTED_SYSTEM_TEMPLATE_NAME } from '../../utils/architectureDiagramTypes';
+import { AI_ARCHITECTURE_TEMPLATE_NAME, DISTRIBUTED_SYSTEM_TEMPLATE_NAME, AI_APPLICATION_ARCHITECTURE_TEMPLATE_NAME } from '../../utils/architectureDiagramTypes';
 import { applyAIChatArchitectureTemplate, applyDistributedSystemArchitectureTemplate, fitArchitectureCanvasToWorkspace } from '../../utils/architectureDiagram';
+import { applyAIApplicationArchitectureTemplate, AI_APPLICATION_ARCHITECTURE_DURATION_MS } from '../../utils/aiApplicationArchitecture';
 import {
   TECHNICAL_INFOGRAPHIC_TEMPLATE_NAME,
   PROMPT_CONTEXT_HARNESS_TEMPLATE_NAME,
@@ -393,7 +394,7 @@ export const Sidebar: React.FC = () => {
     });
   };
 
-  const ensureActivePageTimelineClip = (durationMs: number) => {
+  const ensureActivePageTimelineClip = (durationMs: number, clipName?: string) => {
     const store = useEditorStore.getState();
     const pageId = store.activePageId || store.pages[0]?.id;
     if (!pageId) return;
@@ -409,7 +410,7 @@ export const Sidebar: React.FC = () => {
       id: clipId,
       sceneId: pageId,
       pageId,
-      name: activePage?.name || 'Prompt Context Harness Infographic',
+      name: clipName || activePage?.name || 'Prompt Context Harness Infographic',
       thumbnailUrl: activePage?.thumbnail,
       startMs: existingClip?.startMs || 0,
       durationMs: Math.max(existingClip?.durationMs || 0, durationMs),
@@ -516,6 +517,22 @@ export const Sidebar: React.FC = () => {
     } finally {
       setPromptHarnessLoading(false);
     }
+  };
+
+  const loadAIApplicationArchitectureTemplate = async () => {
+    if (!canvas) return;
+    masterTimelineManager.pause();
+    await applyAIApplicationArchitectureTemplate(canvas);
+    useEditorStore.getState().setCanvasDimensions(1080, 1920);
+    ensureActivePageTimelineClip(AI_APPLICATION_ARCHITECTURE_DURATION_MS, AI_APPLICATION_ARCHITECTURE_TEMPLATE_NAME);
+    const zoom = fitArchitectureCanvasToWorkspace(canvas);
+    useEditorStore.getState().setZoom(zoom);
+    masterTimelineManager.attachCanvas(canvas);
+    masterTimelineManager.seekMs(0);
+    useEditorStore.getState().setTimelineCurrentTime(0);
+    canvas.renderAll();
+    saveHistory();
+    refreshLayers();
   };
 
   const handleApplyTemplate = async (template: BackendTemplate) => {
@@ -732,14 +749,14 @@ export const Sidebar: React.FC = () => {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as Tab)}
-              className={`w-11 h-11 rounded-xl flex flex-col items-center justify-center gap-0.5 transition-all cursor-pointer ${
+              className={`w-12 h-12 rounded-xl flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
                 isActive 
                   ? 'bg-violet-500/15 text-violet-300 border border-violet-400/30 shadow-sm' 
                   : 'border border-transparent text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.05]'
               }`}
               title={tab.label}
             >
-              <Icon className="w-[18px] h-[18px]" />
+              <Icon className="w-[18px] h-[18px] shrink-0" />
               <span className="text-[8px] font-medium leading-none">{tab.label}</span>
             </button>
           );
@@ -896,6 +913,88 @@ export const Sidebar: React.FC = () => {
                 <div className="text-[10px] font-bold text-zinc-100">{DISTRIBUTED_SYSTEM_TEMPLATE_NAME}</div>
                 <div className="mt-1 text-[8px] text-sky-300">System Design · Editable Connectors</div>
                 <div className="mt-1 text-[8px] text-zinc-600">1440 × 1000</div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={loadAIApplicationArchitectureTemplate}
+              className="group overflow-hidden rounded-xl border border-emerald-500/30 bg-[#070A0F] text-left transition hover:border-emerald-400"
+            >
+              <div
+                className="relative aspect-[4/5] overflow-hidden border-b border-emerald-500/20"
+                style={{
+                  backgroundColor: '#070A0F',
+                  backgroundImage: 'linear-gradient(#15202A66 1px, transparent 1px), linear-gradient(90deg, #15202A66 1px, transparent 1px)',
+                  backgroundSize: '14px 14px',
+                }}
+              >
+                <div className="absolute inset-x-1 top-2 text-center text-[7px] font-black tracking-[0.1em] text-[#F1F3F5]">AI APPLICATION ARCHITECTURE</div>
+                <div className="absolute inset-x-2 top-6 flex gap-0.5">
+                  {['#43D68A', '#55A6FF', '#CF8CFF', '#43D68A'].map((color, index) => (
+                    <div key={`${color}-${index}`} className="h-0.5 flex-1 rounded-full" style={{ backgroundColor: color }} />
+                  ))}
+                </div>
+                <div className="absolute inset-x-2 top-9 flex items-center justify-between text-[4px] font-bold text-zinc-500">
+                  {['REQUEST', 'FRONT', 'ORCH', 'GROUND', 'CTX', 'DATA', 'EVAL', 'DEPLOY'].map((stage, index) => (
+                    <span key={stage} className="flex flex-col items-center gap-0.5">
+                      <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: ['#43D68A', '#55A6FF', '#CF8CFF', '#F2C94C', '#43D68A', '#F2C94C', '#FF795B', '#43D68A'][index] }} />
+                      {stage}
+                    </span>
+                  ))}
+                </div>
+                <div className="absolute left-2 top-[22%] w-[30%] rounded border border-[#43D68A] bg-[#11151D] p-1">
+                  <div className="text-[4px] font-bold text-zinc-200">USER REQUEST</div>
+                </div>
+                <div className="absolute right-2 top-[22%] w-[10%] rounded border border-[#61DAFB]/60 bg-[#0C1117] p-1" />
+                <div className="absolute right-[26%] top-[22%] w-[10%] rounded border border-[#61DAFB]/60 bg-[#0C1117] p-1" />
+                <div className="absolute right-[42%] top-[22%] w-[10%] rounded border border-[#61DAFB]/60 bg-[#0C1117] p-1" />
+                <div className="absolute left-2 right-2 top-[30%] rounded border border-dashed border-[#55A6FF66] p-1.5">
+                  <div className="absolute left-1 top-0.5 text-[3.5px] font-bold tracking-[0.1em] text-[#55A6FF]">FRONTEND</div>
+                  <div className="mt-2 rounded border border-[#43D68A] bg-[#11151D] px-1 py-0.5">
+                    <div className="text-[4px] font-black text-zinc-100">AGENT ORCHESTRATOR</div>
+                  </div>
+                </div>
+                <div className="absolute left-2 right-2 top-[45%] rounded border border-dashed border-[#CF8CFF66] p-1">
+                  <div className="absolute left-1 top-0 text-[3.5px] font-bold tracking-[0.1em] text-[#CF8CFF]">KNOWLEDGE · MODELS · TOOLS</div>
+                  <div className="mt-2.5 flex gap-1">
+                    {[
+                      ['KNOWLEDGE / RAG', '#CF8CFF'],
+                      ['MODELS / LLM', '#55A6FF'],
+                      ['TOOLS / MCP', '#F2C94C'],
+                    ].map(([title, color]) => (
+                      <div key={title} className="flex-1 rounded border bg-[#11151D] px-0.5 py-0.5" style={{ borderColor: color }}>
+                        <div className="text-[3.5px] font-black" style={{ color }}>{title}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="absolute inset-x-2 top-[59%] rounded border border-dashed border-[#43D68A66] p-1">
+                  <div className="absolute left-1 top-0 text-[3.5px] font-bold tracking-[0.1em] text-[#43D68A]">CONTEXT BUILDER</div>
+                  <div className="mt-2.5 rounded border border-[#43D68A] bg-[#11151D] px-1 py-0.5">
+                    <div className="text-[4px] font-black text-zinc-100">CONTEXT BUILDER</div>
+                  </div>
+                </div>
+                <div className="absolute left-2 right-2 top-[72%] rounded border border-dashed border-[#F2C94C66] p-1">
+                  <div className="absolute left-1 top-0 text-[3.5px] font-bold tracking-[0.1em] text-[#F2C94C]">DATA LAYER</div>
+                  <div className="mt-2.5 flex gap-1">
+                    <div className="flex-1 rounded border border-[#F2C94C] bg-[#11151D] px-0.5 py-0.5"><div className="text-[3.5px] font-black text-[#F2C94C]">REDIS CACHE</div></div>
+                    <div className="flex-1 rounded border border-[#55A6FF] bg-[#11151D] px-0.5 py-0.5"><div className="text-[3.5px] font-black text-[#55A6FF]">POSTGRES</div></div>
+                  </div>
+                </div>
+                <div className="absolute bottom-2 left-2 right-2 rounded border border-dashed border-[#55A6FF66] p-1">
+                  <div className="absolute left-1 top-0 text-[3.5px] font-bold tracking-[0.1em] text-[#55A6FF]">DEPLOYMENT</div>
+                  <div className="mt-2 flex items-end gap-0.5 pb-0.5">
+                    {([['#55A6FF', 4], ['#F0F6FC', 6], ['#F05032', 5], ['#2496ED', 7], ['#FF9900', 6]] as Array<[string, number]>).map(([color, height], index) => (
+                      <div key={index} className="flex-1 rounded-t-sm" style={{ height, backgroundColor: color, opacity: 0.9 }} />
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="p-2.5">
+                <div className="text-[10px] font-bold text-zinc-100">{AI_APPLICATION_ARCHITECTURE_TEMPLATE_NAME}</div>
+                <div className="mt-1 text-[8px] text-emerald-300">AI Stack · Editable · Reveal Timeline</div>
+                <div className="mt-1 text-[8px] text-zinc-600">1080 × 1920</div>
               </div>
             </button>
 

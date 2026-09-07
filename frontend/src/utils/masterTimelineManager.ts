@@ -184,7 +184,13 @@ class MasterTimelineManager {
   }
 
   attachCanvas(canvas: fabric.Canvas) {
-    if (this.canvas === canvas) return;
+    if (this.canvas === canvas) {
+      // Already attached, but the canvas contents may have been replaced by a
+      // template/apply action. Re-capture base states so animation deltas for
+      // the current objects do not compound on top of a previous frame's values.
+      this.captureBaseStates();
+      return;
+    }
     this.detachCanvas();
     this.canvas = canvas;
     canvas.on('object:removed', this.objectRemovedHandler);

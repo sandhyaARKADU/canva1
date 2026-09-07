@@ -19,6 +19,7 @@ import { useEditorStore } from '../../store/useEditorStore';
 import {
   AI_ARCHITECTURE_PALETTE,
   AI_ARCHITECTURE_TEMPLATE_NAME,
+  AI_APPLICATION_ARCHITECTURE_TEMPLATE_NAME,
   CONNECTOR_ANIMATION_PRESETS,
   getConnectorAnimationPreset,
   normalizeConnectorAnimation,
@@ -52,6 +53,12 @@ import {
   updateAllDiagramConnectors,
   updateDiagramConnectorConfig,
 } from '../../utils/diagramConnectors';
+import {
+  applyAIApplicationArchitectureTemplate,
+  AI_APPLICATION_ARCHITECTURE_DURATION_MS,
+} from '../../utils/aiApplicationArchitecture';
+import { masterTimelineManager } from '../../utils/masterTimelineManager';
+import { normalizeTimelineProject } from '../../types/timeline';
 import { getConnectorAnimationManager } from '../../utils/connectorAnimationManager';
 
 const ICON_OPTIONS: Array<{ value: ArchitectureIconName; label: string }> = [
@@ -361,6 +368,60 @@ export const ArchitectureDiagramPanel: React.FC = () => {
     notify('AI Chat System Architecture applied. All elements remain editable.');
   };
 
+  const applyApplicationArchitectureTemplate = async () => {
+    if (!canvas) return;
+    await applyAIApplicationArchitectureTemplate(canvas);
+    useEditorStore.getState().setCanvasDimensions(1080, 1920);
+    const store = useEditorStore.getState();
+    const pageId = store.activePageId || store.pages[0]?.id;
+    if (pageId) {
+      const pages = store.syncActivePage();
+      const activePage = pages.find((page) => page.id === pageId);
+      const timeline = store.timelineProject;
+      const posterTrack = timeline.tracks.find((track) => track.type === 'poster');
+      const existingClip = posterTrack?.clips.find((clip) => clip.pageId === pageId);
+      const clip = {
+        ...(existingClip || {}),
+        id: existingClip?.id || `ai-application-${pageId}-clip`,
+        sceneId: pageId,
+        pageId,
+        name: activePage?.name || 'AI Application Architecture',
+        thumbnailUrl: activePage?.thumbnail,
+        startMs: existingClip?.startMs || 0,
+        durationMs: Math.max(existingClip?.durationMs || 0, AI_APPLICATION_ARCHITECTURE_DURATION_MS),
+        visible: true,
+        locked: existingClip?.locked || false,
+      };
+      const tracks = posterTrack
+        ? timeline.tracks.map((track) => {
+          if (track.type !== 'poster') return track;
+          const hasClip = track.clips.some((candidate) => candidate.pageId === pageId);
+          return {
+            ...track,
+            clips: hasClip
+              ? track.clips.map((candidate) => (candidate.pageId === pageId ? clip : candidate))
+              : [...track.clips, clip],
+          };
+        })
+        : [{ id: 'poster-track', type: 'poster' as const, clips: [clip] }, ...timeline.tracks];
+      useEditorStore.setState({
+        timelineProject: normalizeTimelineProject({ ...timeline, currentTimeMs: 0, tracks }),
+        selectedTimelineClipId: clip.id,
+      });
+    }
+    masterTimelineManager.pause();
+    masterTimelineManager.attachCanvas(canvas);
+    masterTimelineManager.seekMs(0);
+    useEditorStore.getState().setTimelineCurrentTime(0);
+    const zoom = fitArchitectureCanvasToWorkspace(canvas);
+    useEditorStore.getState().setZoom(zoom);
+    getConnectorAnimationManager(canvas)?.restartAll();
+    canvas.renderAll();
+    saveHistory();
+    setNodeRefresh((value) => value + 1);
+    notify('AI Application Architecture applied with reveal timeline. Still fully editable.');
+  };
+
   const parsedChips = () => chipText
     .split(',')
     .map((text) => text.trim())
@@ -547,6 +608,21 @@ export const ArchitectureDiagramPanel: React.FC = () => {
           className="mt-3 w-full rounded-lg bg-cyan-500 px-3 py-2 text-[10px] font-black text-zinc-950 hover:bg-cyan-400"
         >
           Apply Editable Architecture Template
+        </button>
+      </div>
+
+      <div className="rounded-xl border border-emerald-500/30 bg-gradient-to-br from-emerald-500/10 via-zinc-950 to-cyan-500/10 p-3">
+        <div className="flex items-center gap-2 text-xs font-black text-zinc-100">
+          <Sparkles className="h-4 w-4 text-emerald-400" />
+          {AI_APPLICATION_ARCHITECTURE_TEMPLATE_NAME}
+        </div>
+        <p className="mt-1 text-[9px] text-zinc-500">Technology · Editable · Reveal Timeline · 1080 × 1920</p>
+        <button
+          type="button"
+          onClick={applyApplicationArchitectureTemplate}
+          className="mt-3 w-full rounded-lg bg-emerald-500 px-3 py-2 text-[10px] font-black text-zinc-950 hover:bg-emerald-400"
+        >
+          Apply Editable Reveal Template
         </button>
       </div>
 

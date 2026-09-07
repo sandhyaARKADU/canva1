@@ -32,6 +32,8 @@ import { createPosterSpecProjectData } from '../../utils/posterSpecRenderer';
 import { TemplatesPage } from '../templates/TemplatesPage';
 import type { TemplateProject } from '../templates/templateTypes';
 import { DESIGN_PRESETS } from '../../utils/designPresets';
+import FormatCard from './FormatCard';
+import { DESIGN_FORMATS } from './formatConstants';
 
 const createClientProjectId = () => window.crypto?.randomUUID?.() ?? `project_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
 
@@ -645,16 +647,26 @@ export const Dashboard: React.FC = () => {
       <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-8 lg:gap-10">
         <section className="relative overflow-hidden rounded-3xl border border-[rgba(139,92,246,0.20)] p-5 shadow-xl shadow-black/10 sm:p-6 lg:p-8" style={{ background: 'linear-gradient(135deg, rgba(18,18,27,0.98), rgba(12,12,20,0.98))' }}>
           <div className="pointer-events-none absolute right-0 top-0 h-48 w-48 rounded-full blur-3xl" style={{ background: 'radial-gradient(circle, rgba(139,92,246,0.15), transparent 70%)' }} />
-          <div className="relative grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-center xl:grid-cols-[minmax(0,1fr)_400px]">
+          <div className="relative flex flex-col gap-6">
             <div className="min-w-0">
               <p className="mb-3 text-xs font-semibold uppercase tracking-[0.24em] text-[#C4B5FD]">TechPoster Studio</p>
               <h1 className="max-w-3xl text-3xl font-bold tracking-tight text-[#F8FAFC] sm:text-4xl lg:text-5xl">Welcome back, {user.name || 'Sandhya'}</h1>
               <p className="mt-3 max-w-2xl text-sm leading-7 text-[#A8A8B8] sm:text-base">Create, edit, and manage professional posters with AI. Start from a preset, generate with a prompt, or continue an existing design.</p>
             </div>
-            <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
-              <button type="button" onClick={() => handleCreateDesign('New Poster', 800, 1132)} className="flex h-11 items-center justify-center rounded-xl px-4 text-sm font-semibold text-white transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-violet-400/50" style={{ background: 'linear-gradient(135deg, #7C3AED 0%, #9333EA 50%, #A855F7 100%)', boxShadow: '0 8px 24px rgba(124, 58, 237, 0.25)' }}>Create New Poster</button>
-              <button type="button" onClick={() => { activateHomeAiTool('poster'); focusHomeAiComposer(); }} className="flex h-11 items-center justify-center rounded-xl border border-[rgba(196,181,253,0.18)] bg-[#171720] px-4 text-sm font-semibold text-[#F8FAFC] transition-all hover:border-[rgba(168,85,247,0.60)] hover:bg-[#1C1C2A] focus:outline-none focus:ring-2 focus:ring-violet-400/40 cursor-pointer">Generate with AI</button>
-              <button type="button" onClick={() => setActivePage('templates')} className="flex h-11 items-center justify-center rounded-xl border border-white/[0.10] bg-[#0E0E16] px-4 text-sm font-semibold text-[#A8A8B8] transition-all hover:border-white/[0.18] hover:text-white focus:outline-none focus:ring-2 focus:ring-violet-400/40 cursor-pointer">Browse Templates</button>
+            <div className="flex flex-col gap-4 rounded-2xl border border-white/[0.08] bg-[#11111a] p-4 sm:p-5">
+              <div>
+                <p className="text-base font-semibold text-[#F8FAFC]">Create a New Design</p>
+                <p className="mt-1 text-sm text-[#71717F]">Pick a format to get started instantly</p>
+              </div>
+              <div className="flex flex-col gap-2">
+                {DESIGN_FORMATS.map((format) => (
+                  <FormatCard
+                    key={format.key}
+                    format={format}
+                    onClick={() => handleCreateDesign(format.name, format.width, format.height)}
+                  />
+                ))}
+              </div>
             </div>
           </div>
         </section>
@@ -1622,7 +1634,7 @@ export const Dashboard: React.FC = () => {
   };
 
   return (
-    <div className="h-screen w-screen bg-[#08080D] text-zinc-100 overflow-hidden font-sans lg:flex">
+    <div className="teckstudio-dashboard-shell h-screen w-screen bg-[#08080D] text-zinc-100 overflow-hidden font-sans lg:flex">
       {/* ─── Notification Toast ──────────────────────────────────────────────── */}
       {notification && (
         <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-2xl text-sm font-semibold transition-all ${
@@ -1850,7 +1862,7 @@ export const Dashboard: React.FC = () => {
         </header>
 
         {/* Page Content */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="teckstudio-scrollbar flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-[1440px] p-4 sm:p-6 lg:p-8">
             {renderPage()}
           </div>
